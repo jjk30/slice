@@ -1,103 +1,91 @@
 # slice
 
-A transparent AI cost gateway that sits in front of the Anthropic API. Point your
-client at slice instead of `api.anthropic.com` and it forwards every request
-unchanged, streams the response straight back, and adds cost controls on top:
-per-request logging, a classifier-based model **router**, a Redis response
-**cache**, and per-team **budget caps**.
+slice is a tool that sits between your apps and AI providers like Anthropic, and quietly makes your AI bill smaller.
 
-The client keeps sending its own Anthropic API key in the request header — slice
-never stores or requires a key of its own.
+You point your app at slice instead of straight at the AI. Everything still works exactly the same. The difference is that slice watches every request, sends the easy ones to cheaper AI models, remembers answers it has seen before so you don't pay twice, and stops the spending when you hit a limit you set.
 
-## Status
+Change one line in your app, and your AI bill drops.
 
-| Phase | Feature | What it does |
-|------:|---------|--------------|
-| 1 | Transparent proxy | Forwards all paths/methods to Anthropic, streams responses (SSE-safe), logs one line per request with model, status, latency, and token usage. |
-| 2 | Postgres logging | Persists every request to a `requests` table. Fire-and-forget — a DB outage never blocks the proxy. |
-| 3 | Classifier router | A cheap "judge" model rates each request EASY/HARD and rewrites `model` to the cheapest tier that fits. Verdicts are cached; a judge failure falls back to the client's original model. |
-| 4 | Cache + budget caps | Redis response cache (identical non-streaming requests served without calling the provider) and a source-agnostic budget engine that tracks per-team spend and blocks (429) over the cap. Both fail open if Redis is down. |
+## Why this exists
 
-## Architecture
+In 2026, teams at companies like Uber and Microsoft started using AI tools heavily. The tools were great, so people used them a lot. The problem was that AI is billed by usage with no ceiling, and nobody could see who was spending what or hit the brakes in time. The bills blew up.
 
-```
-client ──▶ slice gateway ──▶ api.anthropic.com
-                │
-   budget check ─▶ cache lookup ─▶ route ─▶ forward ─▶ store in cache ─▶ record spend ─▶ persist row
-                │                                                    │
-              Redis (cache + spend counters)              Postgres (requests, budget_events)
-```
+slice is the meter and the brake on that pipe. It never reads your code or your data. It only sees the AI traffic passing through it, and even that can stay entirely inside your own servers.
 
-All code lives in [`gateway/`](gateway/):
+## What it does
 
-```
-gateway/
-  src/
-    index.ts     # express app + bootstrap
-    proxy.ts     # forward + stream tee + order-of-operations
-    router.ts    # Phase 3 classifier router
-    cache.ts     # Phase 4 response cache
-    budget.ts    # Phase 4 source-agnostic budget engine
-    pricing.ts   # per-model price table
-    redis.ts     # fail-open Redis client
-    db.ts        # Postgres pool + migrations
-    logger.ts    # structured per-request logging
-  db/init/       # Postgres schema (runs on first container start)
-  docker-compose.yml
-  .env.example
-```
+slice does four things, each one a way to spend less or stay in control.
 
-## Quick start
+**Forwards your requests.** Your app talks to slice, slice talks to the AI, and the answer comes straight back. From your app's point of view nothing changed.
 
-```bash
-cd gateway
-cp .env.example .env          # fill in / keep dev defaults
-docker compose up -d          # Postgres + Redis
-npm install && npm start      # gateway on :8080
-```
+**Picks a cheaper model.** Before sending each request, slice quickly checks how hard the task is. Easy questions go to a cheap model, hard ones go to a strong model. You pay the high price only when you actually need it.
 
-Point a client at it:
+**Reuses old answers.** If the same request comes in twice, slice gives back the answer it already has instead of paying the AI again.
+
+**Caps the spending.** You set a budget per team. slice keeps a running total, warns you as you get close, and blocks new requests once the limit is reached. This is the brake the Uber and Microsoft teams wished they had.
+
+It also keeps a record of every request (which model, how long it took, how many tokens, how much it cost) so you can see exactly where the money goes.
+
+## How your app connects
+
+Point any AI tool at slice and keep using your own AI key. slice never stores or needs a key of its own. Your key stays yours.
 
 ```bash
 ANTHROPIC_BASE_URL=http://localhost:8080 claude
-# or:
+```
+
+That one line works in a terminal, in your editor, in production, anywhere.
+
+## How to run it
+
+You need Docker and Node installed. Then from the project folder:
+
+```bash
+cd gateway
+cp .env.example .env          # copy the settings file (dev defaults are fine)
+docker compose up -d          # starts the database and cache
+npm install && npm start      # starts slice on port 8080
+```
+
+slice is now running. Send it a test request with your own AI key in place of the placeholder.
+
+```bash
 curl http://localhost:8080/v1/messages \
   -H "content-type: application/json" \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "x-api-key: YOUR_KEY_HERE" \
   -H "anthropic-version: 2023-06-01" \
   -d '{"model":"claude-opus-4-8","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
-## Configuration
+You will get a normal AI reply back, and slice will have logged the request behind the scenes.
 
-All config is read from the environment — see [`gateway/.env.example`](gateway/.env.example).
-Highlights:
+## What's built so far
 
-- `PORT`, `ANTHROPIC_UPSTREAM`
-- `DATABASE_URL`, `REDIS_URL`
-- `ROUTER_ENABLED`, `JUDGE_MODEL`, `ROUTER_CHEAP_MODEL`, `ROUTER_STRONG_MODEL`
-- `CACHE_ENABLED`, `CACHE_TTL_SECONDS`
-- `BUDGET_ENABLED`, `BUDGET_LIMIT_USD`, `BUDGET_LIMIT_<TEAM>`, `BUDGET_WARN_RATIO`
+| Step | What it adds |
+|------|--------------|
+| 1 | Forwards every request to the AI and keeps a log of each one |
+| 2 | Saves those logs to a database so they survive restarts |
+| 3 | Picks the cheapest model that can handle each request |
+| 4 | Reuses old answers and caps spending per team |
 
-Per-request overrides: `x-slice-team` (budget account), `x-slice-cache: off`,
-`x-slice-route: off`.
+Still to come: a dashboard to see everything at a glance, smarter model recommendations that learn from your own usage, alerts by email and Slack, and a one-click deploy to the cloud.
 
-### Inspecting data
+## How it's put together
 
-```bash
-# recent requests (model, routing, cache, cost)
-docker compose exec db psql -U slice -d slice -c \
-  "select id, requested_model, routed_model, verdict, cache_hit, round(cost_usd::numeric,6) cost, status from requests order by id desc limit 10;"
-
-# a team's running spend / recent cap events
-docker compose exec redis redis-cli get "slice:spend:default"
-docker compose exec db psql -U slice -d slice -c "select * from budget_events order by id desc limit 10;"
+```
+your app  ──▶  slice  ──▶  the AI provider
+                 │
+        check budget ▶ check cache ▶ pick model ▶ send ▶ save answer ▶ record cost
+                 │                                            │
+              cache + running totals                     request history
 ```
 
-## Notes
+All the code lives in the `gateway` folder. Each file does one job: forwarding, model picking, caching, budgets, pricing, logging, and talking to the database and cache.
 
-- **Secrets**: the gateway needs no API key — clients pass their own. `.env` is
-  gitignored; only `.env.example` (placeholders) is committed.
-- **Safety properties**: Postgres, Redis cache, and budget caps all fail open —
-  a backing-store outage degrades gracefully and never takes down the proxy.
-- Requires Node 18+ (uses global `fetch` + Web Streams; tested on Node 24).
+## A few things worth knowing
+
+You never give slice an AI key. Your apps bring their own. The settings file you actually use (`.env`) is kept private and never shared; only the example file with fake values is public.
+
+slice is built to stay up. If the database or cache goes down, slice keeps serving your requests anyway and just notes the problem in its logs. A broken logging system can never take down your AI traffic.
+
+slice can run entirely on your own machines, so your data never has to leave your network.
