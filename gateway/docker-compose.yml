@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      # Simple dev credentials, read from the shell / .env (with sane defaults).
+      POSTGRES_USER: ${POSTGRES_USER:-slice}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-slice}
+      POSTGRES_DB: ${POSTGRES_DB:-slice}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Named volume so data survives `docker compose down` / restarts.
+      - slice_pgdata:/var/lib/postgresql/data
+      # Schema runs automatically on FIRST start (empty data dir only).
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-slice} -d ${POSTGRES_DB:-slice}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      # Named volume so the cache / spend counters survive restarts.
+      - slice_redisdata:/data
+    # Persist to disk so spend counters aren't lost on a container restart.
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  slice_pgdata:
+  slice_redisdata:

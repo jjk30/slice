@@ -1,0 +1,27 @@
+{
+  "name": "slice-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "slice — transparent AI cost gateway (Phase 1: pass-through proxy + logging)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsc && node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.21.0",
+    "pino": "^9.3.2",
+    "redis": "^4.7.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.10",
+    "@types/pg": "^8.20.0",
+    "pino-pretty": "^11.3.0",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3"
+  }
+}

@@ -1,0 +1,26 @@
+# --- Secrets / local env (NEVER commit) ---
+# Ignore all env files at any depth...
+.env
+.env.*
+# ...but keep the placeholder example tracked.
+!.env.example
+
+# --- Dependencies & build output ---
+node_modules/
+dist/
+
+# --- Logs & temp artifacts ---
+*.log
+tmp/
+*.tmp
+
+# --- Local agent / instruction files ---
+CLAUDE.md
+.claude/
+AGENTS.md
+
+# --- OS / editor cruft ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
