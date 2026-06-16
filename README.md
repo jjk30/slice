@@ -59,6 +59,24 @@ curl http://localhost:8080/v1/messages \
 
 You will get a normal AI reply back, and slice will have logged the request behind the scenes.
 
+## The dashboard
+
+slice comes with a live dashboard that reads straight from the database and shows where your money goes: spend this month, how much you've saved versus going direct, your budget, a daily spend chart, a breakdown by model, a feed of recent calls, and a "when to switch" panel of cheaper-way suggestions — every one of them derived from your real usage, never made up. It's a separate app in the `dashboard` folder, so it never sits in the path of your AI traffic. Its look matches the design mockup kept in `mockups/dashboard.html`.
+
+The dashboard reads from a small set of read-only endpoints the gateway serves under `/api` (`summary`, `spend-by-model`, `spend-daily`, `recent`, `budgets`, and `suggestions`). These only ever run read queries, so they can't slow down or interfere with the AI requests flowing through slice.
+
+To run it, first make sure the gateway is running (above), then in a second terminal:
+
+```bash
+cd dashboard
+cp .env.example .env          # optional; the default already points at localhost:8080
+npm install && npm run dev    # starts the dashboard on http://localhost:5173
+```
+
+Open http://localhost:5173 and you'll see your real numbers. If the database is empty it shows a friendly "no requests yet" screen until traffic starts flowing.
+
+Prefer one command? From the project root, `./dev.sh` starts the gateway and the dashboard together (it assumes the database and cache are already up).
+
 ## What's built so far
 
 | Step | What it adds |
@@ -67,8 +85,9 @@ You will get a normal AI reply back, and slice will have logged the request behi
 | 2 | Saves those logs to a database so they survive restarts |
 | 3 | Picks the cheapest model that can handle each request |
 | 4 | Reuses old answers and caps spending per team |
+| 5 | A live dashboard showing real spend, savings, and budgets |
 
-Still to come: a dashboard to see everything at a glance, smarter model recommendations that learn from your own usage, alerts by email and Slack, and a one-click deploy to the cloud.
+Still to come: smarter model recommendations that learn from your own usage, alerts by email and Slack, and a one-click deploy to the cloud.
 
 ## How it's put together
 
@@ -80,7 +99,14 @@ your app  ──▶  slice  ──▶  the AI provider
               cache + running totals                     request history
 ```
 
-All the code lives in the `gateway` folder. Each file does one job: forwarding, model picking, caching, budgets, pricing, logging, and talking to the database and cache.
+The project has two apps. The `gateway` folder holds the proxy itself — each file does one job: forwarding, model picking, caching, budgets, pricing, logging, the read-only stats API, and talking to the database and cache. The `dashboard` folder is a separate Vue app that reads those stats and draws the charts. Keeping them apart means the dashboard can never get in the way of your AI traffic.
+
+```
+slice/
+├── gateway/      the proxy + stats API (Node/Express, talks to Postgres + Redis)
+├── dashboard/    the live dashboard (Vue 3 + Vite, hand-built SVG chart, reads /api)
+└── mockups/      the design reference the dashboard is built to match
+```
 
 ## A few things worth knowing
 

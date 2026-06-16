@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>slice · dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1A1714; --paper:#FBF8F1; --surface:#F4EDE0; --card:#fff;
+    --cherry:#E2535F; --teal:#0F6E56; --amber:#C07C1E; --muted:#6E665C; --line:rgba(26,23,20,.12);
+    --display:'Bricolage Grotesque',sans-serif; --body:'Inter',sans-serif; --mono:'JetBrains Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:var(--body);line-height:1.5;-webkit-font-smoothing:antialiased;padding:28px 20px 60px}
+  ::selection{background:#EAC58C}
+  :focus-visible{outline:2.5px solid var(--amber);outline-offset:3px;border-radius:6px}
+  code{font-family:var(--mono)}
+  .wrap{max-width:1080px;margin:0 auto}
+
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+  .brand{display:flex;align-items:center;gap:9px}
+  .brand b{font-family:var(--display);font-weight:700;font-size:20px}
+  .brand .sep{color:var(--line)}
+  .brand span.t{font-family:var(--mono);font-size:13px;color:var(--muted);letter-spacing:.4px}
+  .period{font-family:var(--mono);font-size:13px;color:var(--muted);background:var(--card);border:1px solid var(--line);padding:8px 13px;border-radius:10px;display:inline-flex;gap:8px;align-items:center}
+  .period .d{width:7px;height:7px;border-radius:999px;background:var(--cherry);box-shadow:0 0 0 3px rgba(226,83,95,.18)}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-bottom:18px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px}
+  .kpi .l{font-size:13px;color:var(--muted);margin-bottom:8px}
+  .kpi .v{font-family:var(--display);font-weight:700;font-size:30px;letter-spacing:-1px}
+  .kpi .s{font-size:12.5px;color:var(--muted);margin-top:5px}
+  .kpi .v.pos{color:var(--teal)}
+  .bar{height:7px;background:var(--surface);border-radius:999px;margin-top:12px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--cherry);border-radius:999px}
+
+  .grid{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;align-items:start}
+  @media(max-width:840px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px 24px}
+  .ph{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .ph h2{font-family:var(--display);font-weight:700;font-size:19px;letter-spacing:-.4px}
+  .ph .meta{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .sub{font-size:13px;color:var(--muted);margin-bottom:18px}
+
+  .chart{width:100%;height:170px;display:block;margin-bottom:6px}
+  .clab{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:20px}
+
+  .models{display:flex;flex-direction:column;gap:13px;margin-top:4px}
+  .mrow{display:grid;grid-template-columns:108px 1fr 64px;align-items:center;gap:12px}
+  .mrow .nm{font-size:13.5px;display:flex;align-items:center;gap:8px}
+  .mrow .dot{width:9px;height:9px;border-radius:3px;flex:0 0 auto}
+  .track{height:9px;background:var(--surface);border-radius:999px;overflow:hidden}
+  .track i{display:block;height:100%;border-radius:999px}
+  .mrow .amt{font-family:var(--mono);font-size:13px;text-align:right;color:var(--ink)}
+  .mrow .amt.free{color:var(--teal)}
+
+  .feed{margin-top:22px;border-top:1px solid var(--line);padding-top:16px}
+  .feed .fh{font-size:13px;color:var(--muted);margin-bottom:12px}
+  .frow{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:7px 0;font-size:13px;border-bottom:1px solid rgba(26,23,20,.05)}
+  .frow:last-child{border-bottom:none}
+  .frow .task{color:var(--ink)}
+  .frow .mdl{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .frow .c{font-family:var(--mono);font-size:12.5px;color:var(--ink);text-align:right}
+
+  .switch{display:flex;flex-direction:column;gap:12px}
+  .sc{border:1px solid var(--line);border-left:3px solid var(--muted);border-radius:13px;padding:14px 15px}
+  .sc.down{border-left-color:var(--amber)}
+  .sc.tool{border-left-color:var(--cherry)}
+  .sc.local{border-left-color:var(--teal)}
+  .sc.route{border-left-color:var(--ink)}
+  .sc .sct{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}
+  .sc h4{font-size:14px;font-weight:500;line-height:1.35}
+  .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.3px;padding:3px 8px;border-radius:999px;white-space:nowrap;flex:0 0 auto}
+  .tag.down{background:#F6ECD9;color:#8A5A12}
+  .tag.tool{background:#FBEDED;color:#9B2F38}
+  .tag.local{background:#E4F0EA;color:#1C6B4E}
+  .tag.route{background:var(--surface);color:var(--muted)}
+  .sc p{font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:10px}
+  .sc .foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .save{font-family:var(--mono);font-size:12.5px;color:var(--teal)}
+  .act{font:inherit;font-size:12.5px;font-weight:500;border:1.5px solid var(--line);background:#fff;color:var(--ink);padding:6px 12px;border-radius:9px;cursor:pointer}
+  .act:hover{border-color:rgba(26,23,20,.3)}
+  .totsave{margin-top:14px;background:var(--ink);color:var(--paper);border-radius:13px;padding:14px 16px;font-size:13.5px;line-height:1.5}
+  .totsave b{font-family:var(--display);color:#F2A1BE;font-weight:500}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <div class="brand">
+      <svg viewBox="0 0 48 48" width="23" height="23" fill="none" aria-hidden="true">
+        <path d="M8 40 L41 40 L41 14 Z" fill="#EAC58C" stroke="#D9A155" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M40 15 L9.5 39" stroke="#F2A1BE" stroke-width="6" stroke-linecap="round"/>
+        <circle cx="35" cy="12" r="4.2" fill="#E2535F"/>
+      </svg>
+      <b>slice</b><span class="sep">/</span><span class="t">dashboard</span>
+    </div>
+    <span class="period"><span class="d"></span>June 2026 · live</span>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="l">AI spend this month</div><div class="v">$3,420</div><div class="s">counted live, through slice</div></div>
+    <div class="kpi"><div class="l">Saved so far</div><div class="v pos">$4,980</div><div class="s">59% less than going direct</div></div>
+    <div class="kpi"><div class="l">Budget</div><div class="v">$3,420<span style="font-size:.5em;font-weight:500;color:var(--muted)"> / $6,000</span></div><div class="bar"><i style="width:57%"></i></div></div>
+    <div class="kpi"><div class="l">Requests</div><div class="v">18,240</div><div class="s">across 9 engineers</div></div>
+  </div>
+
+  <div class="grid">
+
+    <div class="panel">
+      <div class="ph"><h2>AI usage</h2><span class="meta">daily spend, last 30 days</span></div>
+      <p class="sub">slice turned on day 10. Same work, the line dropped.</p>
+      <svg class="chart" id="chart" viewBox="0 0 600 170" preserveAspectRatio="none" aria-label="Daily AI spend over 30 days, dropping after slice turned on"></svg>
+      <div class="clab"><span>May 16</span><span>slice on</span><span>Jun 14</span></div>
+
+      <div class="models">
+        <div class="mrow"><span class="nm"><span class="dot" style="background:#E2535F"></span>Claude</span><span class="track"><i style="width:100%;background:#E2535F"></i></span><span class="amt">$1,540</span></div>
+        <div class="mrow"><span class="nm"><span class="dot" style="background:#0F6E56"></span>GPT</span><span class="track"><i style="width:53%;background:#0F6E56"></i></span><span class="amt">$820</span></div>
+        <div class="mrow"><span class="nm"><span class="dot" style="background:#C07C1E"></span>Gemini</span><span class="track"><i style="width:36%;background:#C07C1E"></i></span><span class="amt">$560</span></div>
+        <div class="mrow"><span class="nm"><span class="dot" style="background:#8C5A2B"></span>Grok</span><span class="track"><i style="width:12%;background:#8C5A2B"></i></span><span class="amt">$190</span></div>
+        <div class="mrow"><span class="nm"><span class="dot" style="background:#A7C77E"></span>Ollama</span><span class="track"><i style="width:7%;background:#A7C77E"></i></span><span class="amt free">$0</span></div>
+      </div>
+
+      <div class="feed">
+        <div class="fh">Recent calls</div>
+        <div class="frow"><span class="task">Refactor auth middleware</span><span class="mdl">Claude Sonnet</span><span class="c">$0.42</span></div>
+        <div class="frow"><span class="task">Fix lint errors, 14 files</span><span class="mdl">Claude Haiku</span><span class="c">$0.03</span></div>
+        <div class="frow"><span class="task">Generate unit tests</span><span class="mdl">Gemini</span><span class="c">$0.11</span></div>
+        <div class="frow"><span class="task">Nightly changelog summary</span><span class="mdl">Ollama, local</span><span class="c">$0.00</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><h2>When to switch</h2><span class="meta">4 ideas</span></div>
+      <p class="sub">slice's AI spotted cheaper ways to do the same work.</p>
+
+      <div class="switch">
+        <div class="sc down">
+          <div class="sct"><h4>Opus is doing simple edits</h4><span class="tag down">downgrade</span></div>
+          <p>About 40% of your Opus calls are small lint and formatting fixes. Sonnet handles those at a fraction of the cost.</p>
+          <div class="foot"><span class="save">save ~$420/mo</span><button class="act">Apply</button></div>
+        </div>
+
+        <div class="sc tool">
+          <div class="sct"><h4>3 engineers code all day</h4><span class="tag tool">switch tool</span></div>
+          <p>At their volume, a flat fee Cursor or GitHub Copilot seat beats paying per token.</p>
+          <div class="foot"><span class="save">save ~$610/mo</span><button class="act">Tell them</button></div>
+        </div>
+
+        <div class="sc local">
+          <div class="sct"><h4>Nightly bulk jobs on GPT</h4><span class="tag local">go local</span></div>
+          <p>Your changelog and summary jobs are simple and huge in volume. Run them on Ollama, local and free.</p>
+          <div class="foot"><span class="save">save ~$280/mo</span><button class="act">Apply</button></div>
+        </div>
+
+        <div class="sc route">
+          <div class="sct"><h4>Test generation on GPT</h4><span class="tag route">reroute</span></div>
+          <p>Gemini matches your test-gen quality here for less. slice can route it for you.</p>
+          <div class="foot"><span class="save">save ~$150/mo</span><button class="act">Auto-route</button></div>
+        </div>
+      </div>
+
+      <div class="totsave">Apply all four and slice trims about <b>$1,460 a month</b> more, on top of what it already saves you.</div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  (function(){
+    var data=[320,300,335,312,340,316,330,326,318,305,182,140,122,116,108,114,106,111,119,105,110,113,107,112,106,115,109,111,104,109];
+    var W=600,H=170,pad=10,n=data.length;
+    var max=Math.max.apply(null,data),min=0;
+    var x=function(i){return pad+(W-2*pad)*i/(n-1);};
+    var y=function(v){return H-12-(H-30)*(v-min)/(max-min);};
+    var line='',area='';
+    for(var i=0;i<n;i++){line+=(i?'L':'M')+x(i).toFixed(1)+' '+y(data[i]).toFixed(1)+' ';}
+    area=line+'L'+x(n-1).toFixed(1)+' '+(H-2)+' L'+x(0).toFixed(1)+' '+(H-2)+' Z';
+    var onX=x(9);
+    var svg=document.getElementById('chart');
+    svg.innerHTML=
+      '<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">'+
+      '<stop offset="0" stop-color="#0F6E56" stop-opacity="0.20"/>'+
+      '<stop offset="1" stop-color="#0F6E56" stop-opacity="0"/></linearGradient></defs>'+
+      '<line x1="'+onX+'" y1="6" x2="'+onX+'" y2="'+(H-2)+'" stroke="rgba(26,23,20,.28)" stroke-width="1" stroke-dasharray="3 3"/>'+
+      '<path d="'+area+'" fill="url(#g)"/>'+
+      '<path d="'+line+'" fill="none" stroke="#0F6E56" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>'+
+      '<circle cx="'+x(n-1).toFixed(1)+'" cy="'+y(data[n-1]).toFixed(1)+'" r="3.5" fill="#0F6E56"/>';
+  })();
+</script>
+</body>
+</html>

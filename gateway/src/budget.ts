@@ -1,5 +1,5 @@
 import { logger } from "./logger";
-import { redisGetFloat, redisIncrByFloat, redisLPushTrim } from "./redis";
+import { redisGetFloat, redisIncrByFloat, redisLPushTrim, redisScanKeys } from "./redis";
 import { persistBudgetEvent } from "./db";
 
 /**
@@ -109,7 +109,8 @@ export class BudgetEngine {
 }
 
 // --- Redis-backed store ------------------------------------------------------
-const SPEND_KEY = (account: string) => `slice:spend:${account}`;
+const SPEND_KEY_PREFIX = "slice:spend:";
+const SPEND_KEY = (account: string) => `${SPEND_KEY_PREFIX}${account}`;
 
 /** Live spend counter in Redis. Fail-open via the redis.ts primitives. */
 class RedisBudgetStore implements BudgetStore {
@@ -167,3 +168,28 @@ export const budget = new BudgetEngine(new RedisBudgetStore(), {
   warnRatio: warnRatio(),
   onEvent: recordCapEvent,
 });
+
+/**
+ * Discover the set of teams to show on the dashboard. The Redis spend-key format
+ * lives ONLY here, so the stats API never has to know it. We union three sources:
+ *   1. the always-present "default" team,
+ *   2. any team with a configured per-team cap (BUDGET_LIMIT_<TEAM>),
+ *   3. any team that currently has a live spend counter in Redis.
+ * `extra` lets the caller fold in teams seen in budget_events. Read-only.
+ */
+export async function discoverTeams(extra: Iterable<string> = []): Promise<string[]> {
+  const teams = new Set<string>(["default"]);
+  for (const t of extra) if (t) teams.add(t);
+
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("BUDGET_LIMIT_") && key !== "BUDGET_LIMIT_USD") {
+      teams.add(key.slice("BUDGET_LIMIT_".length).toLowerCase());
+    }
+  }
+
+  for (const key of await redisScanKeys(`${SPEND_KEY_PREFIX}*`)) {
+    teams.add(key.slice(SPEND_KEY_PREFIX.length));
+  }
+
+  return [...teams];
+}

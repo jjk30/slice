@@ -1,0 +1,437 @@
+/*
+ * slice dashboard — styling transcribed VERBATIM from mockups/dashboard.html so
+ * the app matches the agreed mockup pixel-for-pixel. The only additions are at
+ * the bottom (loading / error / empty states and a couple of real-data helpers
+ * the static mockup didn't need).
+ */
+:root {
+  --ink: #1a1714;
+  --paper: #fbf8f1;
+  --surface: #f4ede0;
+  --card: #fff;
+  --cherry: #e2535f;
+  --teal: #0f6e56;
+  --amber: #c07c1e;
+  --muted: #6e665c;
+  --line: rgba(26, 23, 20, 0.12);
+  --display: "Bricolage Grotesque", sans-serif;
+  --body: "Inter", sans-serif;
+  --mono: "JetBrains Mono", monospace;
+}
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  padding: 28px 20px 60px;
+}
+::selection {
+  background: #eac58c;
+}
+:focus-visible {
+  outline: 2.5px solid var(--amber);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+code {
+  font-family: var(--mono);
+}
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.brand b {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 20px;
+}
+.brand .sep {
+  color: var(--line);
+}
+.brand span.t {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.4px;
+}
+.period {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--line);
+  padding: 8px 13px;
+  border-radius: 10px;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+.period .d {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--cherry);
+  box-shadow: 0 0 0 3px rgba(226, 83, 95, 0.18);
+}
+
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.kpi {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 20px;
+}
+.kpi .l {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.kpi .v {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 30px;
+  letter-spacing: -1px;
+}
+.kpi .s {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.kpi .v.pos {
+  color: var(--teal);
+}
+.kpi .v .vsub {
+  font-size: 0.5em;
+  font-weight: 500;
+  color: var(--muted);
+}
+.bar {
+  height: 7px;
+  background: var(--surface);
+  border-radius: 999px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+.bar i {
+  display: block;
+  height: 100%;
+  background: var(--cherry);
+  border-radius: 999px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1.55fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 840px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+.panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 22px 24px;
+}
+.ph {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.ph h2 {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: -0.4px;
+}
+.ph .meta {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 18px;
+}
+
+.chart {
+  width: 100%;
+  height: 170px;
+  display: block;
+  margin-bottom: 6px;
+}
+.clab {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+
+.models {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  margin-top: 4px;
+}
+.mrow {
+  display: grid;
+  grid-template-columns: 108px 1fr 64px;
+  align-items: center;
+  gap: 12px;
+}
+.mrow .nm {
+  font-size: 13.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mrow .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.track {
+  height: 9px;
+  background: var(--surface);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.track i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+.mrow .amt {
+  font-family: var(--mono);
+  font-size: 13px;
+  text-align: right;
+  color: var(--ink);
+}
+.mrow .amt.free {
+  color: var(--teal);
+}
+
+.feed {
+  margin-top: 22px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.feed .fh {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.frow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(26, 23, 20, 0.05);
+}
+.frow:last-child {
+  border-bottom: none;
+}
+.frow .task {
+  color: var(--ink);
+}
+.frow .mdl {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.frow .c {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  text-align: right;
+}
+
+.switch {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sc {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 13px;
+  padding: 14px 15px;
+}
+.sc.down {
+  border-left-color: var(--amber);
+}
+.sc.tool {
+  border-left-color: var(--cherry);
+}
+.sc.local {
+  border-left-color: var(--teal);
+}
+.sc.route {
+  border-left-color: var(--ink);
+}
+.sc .sct {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.sc h4 {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+.tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.3px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.tag.down {
+  background: #f6ecd9;
+  color: #8a5a12;
+}
+.tag.tool {
+  background: #fbeded;
+  color: #9b2f38;
+}
+.tag.local {
+  background: #e4f0ea;
+  color: #1c6b4e;
+}
+.tag.route {
+  background: var(--surface);
+  color: var(--muted);
+}
+.sc p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.sc .foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.save {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--teal);
+}
+.act {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  border: 1.5px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  padding: 6px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.act:hover {
+  border-color: rgba(26, 23, 20, 0.3);
+}
+.totsave {
+  margin-top: 14px;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 13px;
+  padding: 14px 16px;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.totsave b {
+  font-family: var(--display);
+  color: #f2a1be;
+  font-weight: 500;
+}
+
+/* --- additions: real-data states (not in the static mockup) --------------- */
+/* foot note (replaces the mockup's non-functional "Apply" button — this build
+   has no auto-apply action, so we show the real derivation note instead). */
+.sc .note {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
+.empty-mini {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 6px 0;
+}
+.state {
+  text-align: center;
+  padding: 70px 20px;
+  color: var(--muted);
+}
+.state h2 {
+  font-family: var(--display);
+  color: var(--ink);
+  font-size: 21px;
+  margin-bottom: 8px;
+}
+.state code {
+  display: inline-block;
+  margin-top: 10px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 11px;
+  font-size: 12.5px;
+}
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--line);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  margin: 0 auto 16px;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

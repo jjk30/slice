@@ -106,3 +106,21 @@ export function redisLPushTrim(key: string, value: string, max: number): Promise
 export function redisLRange(key: string, start: number, stop: number): Promise<string[]> {
   return safe((c) => c.lRange(key, start, stop), []);
 }
+
+/**
+ * Enumerate keys matching a glob pattern via a non-blocking SCAN cursor (never
+ * KEYS, which would stall Redis). Read-only; used by the stats API to discover
+ * which teams have a running spend counter. Fail-open -> [] if Redis is down.
+ */
+export function redisScanKeys(pattern: string): Promise<string[]> {
+  return safe(async (c) => {
+    const found: string[] = [];
+    let cursor = 0;
+    do {
+      const reply = await c.scan(cursor, { MATCH: pattern, COUNT: 100 });
+      cursor = Number(reply.cursor);
+      found.push(...reply.keys);
+    } while (cursor !== 0);
+    return found;
+  }, []);
+}

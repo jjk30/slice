@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import { proxyHandler } from "./proxy";
+import { statsRouter } from "./stats";
 import { logger } from "./logger";
 import { closeDb, runMigrations } from "./db";
 import { connectRedis, closeRedis } from "./redis";
@@ -16,6 +17,11 @@ app.use(express.raw({ type: () => true, limit: "50mb" }));
 app.get("/healthz", (_req, res) => {
   res.json({ ok: true, service: "slice-gateway", phase: 1 });
 });
+
+// Phase 5 — read-only stats API for the dashboard. Mounted BEFORE the catch-all
+// proxy so /api/* is served locally and never forwarded upstream. These routes
+// only ever run SELECT queries; they cannot affect AI traffic.
+app.use("/api", statsRouter);
 
 // Everything else is forwarded to the Anthropic upstream.
 app.all(/.*/, proxyHandler);

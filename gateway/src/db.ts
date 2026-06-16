@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type QueryResultRow } from "pg";
 import { logger, type RequestLog } from "./logger";
 import type { CapEvent } from "./budget";
 
@@ -121,6 +121,23 @@ export function persistBudgetEvent(event: CapEvent): void {
       const detail = err?.message || err?.code || String(err);
       logger.warn({ err: detail }, "failed to persist budget event to postgres");
     });
+}
+
+/**
+ * Read-only query helper for the stats API (src/stats.ts).
+ *
+ * Shares the SAME pool as the proxy's writes, but is only ever handed SELECT
+ * statements (the dashboard is read-only). Unlike persistRequest, this DOES
+ * reject on error so the stats endpoints can return a clean 5xx — the dashboard
+ * is a separate, non-critical surface, so letting its queries fail loudly is
+ * fine and never touches the proxy path.
+ */
+export async function query<T extends QueryResultRow>(
+  text: string,
+  params: ReadonlyArray<unknown> = [],
+): Promise<T[]> {
+  const result = await pool.query<T>(text, params as unknown[]);
+  return result.rows;
 }
 
 /** Close the pool on shutdown. Best-effort; never throws. */
