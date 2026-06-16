@@ -61,7 +61,7 @@ You will get a normal AI reply back, and slice will have logged the request behi
 
 ## The dashboard
 
-slice comes with a live dashboard that reads straight from the database and shows where your money goes: spend this month, how much you've saved versus going direct, your budget, a daily spend chart, a breakdown by model, a feed of recent calls, and a "when to switch" panel of cheaper-way suggestions — every one of them derived from your real usage, never made up. It's a separate app in the `dashboard` folder, so it never sits in the path of your AI traffic. Its look matches the design mockup kept in `mockups/dashboard.html`.
+slice comes with a live dashboard that reads straight from the database and shows where your money goes: spend this month, how much you've saved versus going direct, your budget, a daily spend chart, a breakdown by model, a feed of recent calls, and a "when to switch" panel of cheaper-way suggestions, every one of them derived from your real usage, never made up. It's a separate app in the `dashboard` folder, so it never sits in the path of your AI traffic. Its look matches the design mockup kept in `mockups/dashboard.html`.
 
 The dashboard reads from a small set of read-only endpoints the gateway serves under `/api` (`summary`, `spend-by-model`, `spend-daily`, `recent`, `budgets`, and `suggestions`). These only ever run read queries, so they can't slow down or interfere with the AI requests flowing through slice.
 
@@ -77,17 +77,65 @@ Open http://localhost:5173 and you'll see your real numbers. If the database is 
 
 Prefer one command? From the project root, `./dev.sh` starts the gateway and the dashboard together (it assumes the database and cache are already up).
 
-## What's built so far
+## Build plan
 
-| Step | What it adds |
-|------|--------------|
-| 1 | Forwards every request to the AI and keeps a log of each one |
-| 2 | Saves those logs to a database so they survive restarts |
-| 3 | Picks the cheapest model that can handle each request |
-| 4 | Reuses old answers and caps spending per team |
-| 5 | A live dashboard showing real spend, savings, and budgets |
+5 of 13 phases are built and tested against real Anthropic traffic. slice works and demos now. The rest are planned.
 
-Still to come: smarter model recommendations that learn from your own usage, alerts by email and Slack, and a one-click deploy to the cloud.
+### Built
+
+Each one is verified on real traffic.
+
+1. **Proxy.** Forwards every request to Anthropic and streams the response back. Logs the model, status, latency, and tokens for each call.
+2. **Postgres logging.** Every request is saved to a table. If the database goes down the proxy keeps working.
+3. **Router.** A cheap Haiku model reads each request and rates it easy or hard, then sends it to the cheapest model that fits. Verdicts are cached so it does not re-rate the same thing.
+4. **Cache and caps.** Redis caches repeated answers so they are not paid for twice. A budget engine tracks spend per team, warns at a threshold, and blocks calls over the cap. Both keep working even if Redis is down.
+5. **Dashboard.** A Vue 3 dashboard that reads real spend data from the gateway and shows live spend, savings, and budgets.
+
+### Planned
+
+**Make it smarter**
+
+6. **Recommendation engine.** An offline Kedro pipeline reads the logs and ranks the models, then feeds the rankings back to the router so it gets better over time.
+7. **Agent loop in the gateway.** A small hand-written TypeScript loop. Try a cheap model, check the result, step up one tier only if needed, and stop at a budget ceiling.
+8. **More providers.** Adapters for GPT, Gemini, and Grok. This is where the big savings come from.
+9. **Alerts.** Email, Slack, SMS, and WhatsApp when a budget is close or hit.
+
+**Ship it**
+
+10. **Docker and CI/CD.** Containerize the app and push images with GitHub Actions to AWS ECR.
+11. **AWS networking.** VPC, subnets, security groups, and a load balancer.
+12. **Run in production.** AWS ECS Fargate, all defined in Terraform.
+13. **Kubernetes.** Optional, for scale or learning. Fargate already gives a real deploy, so this is not required.
+
+**Separate companion project (not part of the proxy)**
+
+A LangGraph cost-advisor agent, written in Python, that points at slice as its gateway. This lives in its own project on purpose. slice stays a clean proxy. The advisor is a layer above it.
+
+## Tech stack
+
+**Gateway (built)**
+- TypeScript and Node with Express. Holds the proxy, router, cache, budget engine, and stats API.
+- Postgres. Stores one row per request.
+- Redis. Caches answers and tracks spend per team.
+
+**Dashboard (built)**
+- Vue 3 with Vite. Reads the stats API and shows live spend, savings, and budgets.
+- Hand-built SVG chart. No chart library.
+
+**Make it smarter (planned)**
+- Kedro. Offline Python pipeline that ranks models from the logs and feeds the router.
+- Agent loop in the gateway. A hand-written TypeScript circuit breaker. Tries a cheap model, checks the result, steps up one tier if needed, and stops at a budget ceiling. Lives inside the gateway.
+- Provider adapters. GPT, Gemini, and Grok.
+- Alerts. Email, Slack, SMS, and WhatsApp.
+
+**Ship it (planned)**
+- Docker and GitHub Actions. Build images and push to AWS ECR.
+- AWS networking. VPC, subnets, security groups, and a load balancer.
+- AWS ECS Fargate with Terraform. Runs slice in production.
+- Kubernetes. Optional, for scale or learning. Not required.
+
+**Companion project, separate from the gateway (planned)**
+- LangGraph cost-advisor agent. Written in Python. Points at slice as its gateway. Not part of the proxy. A layer above it.
 
 ## How it's put together
 
@@ -99,7 +147,7 @@ your app  ──▶  slice  ──▶  the AI provider
               cache + running totals                     request history
 ```
 
-The project has two apps. The `gateway` folder holds the proxy itself — each file does one job: forwarding, model picking, caching, budgets, pricing, logging, the read-only stats API, and talking to the database and cache. The `dashboard` folder is a separate Vue app that reads those stats and draws the charts. Keeping them apart means the dashboard can never get in the way of your AI traffic.
+The project has two apps. The `gateway` folder holds the proxy itself. Each file does one job: forwarding, model picking, caching, budgets, pricing, logging, the read-only stats API, and talking to the database and cache. The `dashboard` folder is a separate Vue app that reads those stats and draws the charts. Keeping them apart means the dashboard can never get in the way of your AI traffic.
 
 ```
 slice/
