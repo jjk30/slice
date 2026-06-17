@@ -42,6 +42,8 @@ export interface RequestLog {
   agent_attempt?: number | null; // 1-based ladder rung (0 = fail-open passthrough)
   agent_check?: "pass" | "escalate" | null; // checker verdict for this attempt
   agent_escalated?: boolean | null; // true when this attempt stepped up a rung
+  // Phase 8 — which provider served this request (e.g. "anthropic" | "openai").
+  provider?: string | null;
 }
 
 /**
@@ -60,6 +62,8 @@ export function logRequest(rec: RequestLog): void {
     rec.agent_attempt == null
       ? ""
       : ` [agent #${rec.agent_attempt} ${rec.agent_check}${rec.agent_escalated ? " ->escalate" : ""}]`;
+  // Phase 8: tag non-Anthropic rows with their provider (Anthropic stays quiet).
+  const prov = rec.provider && rec.provider !== "anthropic" ? ` [${rec.provider}]` : "";
   // Always show the per-request cost so accumulated spend is never a mystery.
-  logger.info(rec, `${route} [${cache}]${agent} $${rec.cost_usd.toFixed(6)}`);
+  logger.info(rec, `${route} [${cache}]${agent}${prov} $${rec.cost_usd.toFixed(6)}`);
 }

@@ -14,6 +14,7 @@ import { budget, budgetEnabled, recordCapEvent } from "./budget";
 import { estimateCostUsd } from "./pricing";
 import { logger } from "./logger";
 import { agentEnabled, handleAgentRequest } from "./agentHandler";
+import { getAdapter, providerForModel } from "./providers/registry";
 
 /**
  * Headers we must NOT forward verbatim to the upstream. `host` would point at
@@ -213,7 +214,35 @@ export async function proxyHandler(req: Request, res: Response): Promise<void> {
     judgeInputTokens = routed.decision.judgeInputTokens;
     judgeOutputTokens = routed.decision.judgeOutputTokens;
 
-    // ---- 4. FORWARD to the upstream -----------------------------------------
+    // ---- 4. FORWARD: dispatch on the resolved model's provider --------------
+    // Phase 8: a non-Anthropic provider is served by its ProviderAdapter, which
+    // returns an Anthropic-shaped response. Anthropic stays on the EXACT original
+    // path in the `else` below (streaming + header mirroring unchanged). Unknown
+    // models resolve to "anthropic", so default behavior is untouched.
+    const provider = providerForModel(routedModel);
+    const adapter = provider === "anthropic" ? null : getAdapter(provider);
+    if (adapter) {
+      // Non-streaming only this phase: the adapter downgrades stream:true itself.
+      const result = await adapter.complete({ body, headers: req.headers, stream: streaming });
+      status = result.status;
+      usage.input_tokens = result.usage.input_tokens;
+      usage.output_tokens = result.usage.output_tokens;
+      res.status(status);
+      res.setHeader("content-type", result.contentType);
+      res.setHeader("x-slice-cache", allowCache ? "MISS" : "OFF");
+      if (result.streamDowngraded) res.setHeader("x-slice-stream", "downgraded");
+      res.send(result.body);
+
+      // ---- 5. STORE IN CACHE: same rules as the Anthropic path --------------
+      if (allowCache && status >= 200 && status < 300) {
+        await setCachedResponse(cacheKey, {
+          status,
+          contentType: result.contentType,
+          body: result.body.toString("utf8"),
+          routedModel,
+        });
+      }
+    } else {
     const url = upstreamBase.replace(/\/$/, "") + req.originalUrl;
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(req.headers)) {
@@ -271,6 +300,7 @@ export async function proxyHandler(req: Request, res: Response): Promise<void> {
         });
       }
     }
+    } // end provider dispatch (Anthropic inline branch)
 
     // ---- 6. RECORD SPEND: price tokens (main call + judge) ------------------
     // Price the request unconditionally so cost_usd is always logged/persisted
@@ -320,6 +350,8 @@ export async function proxyHandler(req: Request, res: Response): Promise<void> {
       judge_output_tokens: judgeOutputTokens,
       cache_hit: cacheHit,
       cost_usd: costUsd,
+      // Phase 8: which provider served this row (anthropic for every default path).
+      provider: providerForModel(routedModel),
     };
 
     logRequest(record); // console, as in Phase 1

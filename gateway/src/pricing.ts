@@ -12,10 +12,31 @@ export interface ModelPrice {
   outputPerMTok: number;
 }
 
-const DEFAULT_PRICES: Record<string, ModelPrice> = {
+// Anthropic — unchanged from earlier phases.
+const ANTHROPIC_PRICES: Record<string, ModelPrice> = {
   "claude-opus-4-8": { inputPerMTok: 15, outputPerMTok: 75 },
   "claude-sonnet-4-6": { inputPerMTok: 3, outputPerMTok: 15 },
   "claude-haiku-4-5-20251001": { inputPerMTok: 1, outputPerMTok: 5 },
+};
+
+// Phase 8 — OpenAI. Safe defaults (USD per 1M tokens); override the whole table
+// via the MODEL_PRICES env var. Gemini/Grok tables drop in below the same way.
+const OPENAI_PRICES: Record<string, ModelPrice> = {
+  "gpt-4o": { inputPerMTok: 2.5, outputPerMTok: 10 },
+  "gpt-4o-mini": { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+  "gpt-4.1": { inputPerMTok: 2, outputPerMTok: 8 },
+  "gpt-4.1-mini": { inputPerMTok: 0.4, outputPerMTok: 1.6 },
+  "gpt-4.1-nano": { inputPerMTok: 0.1, outputPerMTok: 0.4 },
+  o1: { inputPerMTok: 15, outputPerMTok: 60 },
+  "o3-mini": { inputPerMTok: 1.1, outputPerMTok: 4.4 },
+  "o4-mini": { inputPerMTok: 1.1, outputPerMTok: 4.4 },
+};
+
+// One merged table — the single lookup the budget + ranking already read. Adding
+// a provider is just another spread here; no caller changes.
+const DEFAULT_PRICES: Record<string, ModelPrice> = {
+  ...ANTHROPIC_PRICES,
+  ...OPENAI_PRICES,
 };
 
 // Fallback for any model not in the table — priced as a mid-tier model.
