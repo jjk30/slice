@@ -3,7 +3,7 @@ import type { IncomingHttpHeaders } from "node:http";
 /**
  * Phase 8 — multi-provider adapters.
  *
- * One shared shape so every provider (Anthropic today, OpenAI now, Gemini/Grok
+ * One shared shape so every provider (Anthropic, OpenAI, Google Gemini now, Grok
  * later) plugs into the same dispatch. An adapter takes an ANTHROPIC-format
  * request and returns an ANTHROPIC-format response, so the client always speaks
  * one dialect regardless of which provider actually ran the model.
@@ -13,7 +13,7 @@ import type { IncomingHttpHeaders } from "node:http";
  * (see `streamDowngraded`); SSE translation is intentionally out of scope.
  */
 
-export type ProviderName = "anthropic" | "openai";
+export type ProviderName = "anthropic" | "openai" | "google";
 
 /** Token usage recovered from a provider response (nullable when absent). */
 export interface ProviderUsage {

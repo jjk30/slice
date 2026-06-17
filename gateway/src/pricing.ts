@@ -32,11 +32,24 @@ const OPENAI_PRICES: Record<string, ModelPrice> = {
   "o4-mini": { inputPerMTok: 1.1, outputPerMTok: 4.4 },
 };
 
+// Phase 8 — Google Gemini (developer API). Safe defaults (USD per 1M tokens);
+// override the whole table via MODEL_PRICES. Same per-provider spread pattern.
+const GOOGLE_PRICES: Record<string, ModelPrice> = {
+  "gemini-2.5-pro": { inputPerMTok: 1.25, outputPerMTok: 10 },
+  "gemini-2.5-flash": { inputPerMTok: 0.3, outputPerMTok: 2.5 },
+  "gemini-2.5-flash-lite": { inputPerMTok: 0.1, outputPerMTok: 0.4 },
+  "gemini-2.0-flash": { inputPerMTok: 0.1, outputPerMTok: 0.4 },
+  "gemini-2.0-flash-lite": { inputPerMTok: 0.075, outputPerMTok: 0.3 },
+  "gemini-1.5-flash": { inputPerMTok: 0.075, outputPerMTok: 0.3 },
+  "gemini-1.5-pro": { inputPerMTok: 1.25, outputPerMTok: 5 },
+};
+
 // One merged table — the single lookup the budget + ranking already read. Adding
 // a provider is just another spread here; no caller changes.
 const DEFAULT_PRICES: Record<string, ModelPrice> = {
   ...ANTHROPIC_PRICES,
   ...OPENAI_PRICES,
+  ...GOOGLE_PRICES,
 };
 
 // Fallback for any model not in the table — priced as a mid-tier model.
