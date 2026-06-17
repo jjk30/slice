@@ -1,0 +1,28 @@
+# Phase 6 — Kedro recommendation pipeline.
+# This file guards everything under pipeline/. The Kedro project itself
+# (slice-pipeline/) also ships its own .gitignore; the rules here cover the
+# venv that lives one level up and double-cover local config / credentials.
+
+# Python virtual environment. NEVER commit this.
+.venv/
+venv/
+env/
+ENV/
+
+# Python build / cache cruft
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+*.egg-info/
+
+# Kedro local config + credentials (belt-and-suspenders).
+**/conf/local/**
+!**/conf/local/.gitkeep
+**/conf/**/*credentials*
+**/.telemetry
+
+# Kedro data + logs (keep folder structure, drop contents).
+**/data/**
+!**/data/**/
+*.log

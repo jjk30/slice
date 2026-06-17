@@ -1,0 +1,19 @@
+# Data catalog.
+#
+# requests_raw: a READ-ONLY load of the gateway's `requests` table into a pandas
+# DataFrame via a plain SQL SELECT. Connection details are NOT here — they come
+# from the `db_credentials` entry in conf/local/credentials.yml (gitignored).
+# This dataset only reads; nothing in this pipeline writes back to Postgres.
+requests_raw:
+  type: pandas.SQLQueryDataset
+  sql: "SELECT * FROM requests"
+  credentials: db_credentials
+
+# model_cost_ranking: the Phase 6 ranking artifact, written to the Kedro data
+# layer as a CSV file (NOT back to Postgres). Persists so the router could read
+# it later. data/** is gitignored, so this artifact never gets committed.
+model_cost_ranking:
+  type: pandas.CSVDataset
+  filepath: data/08_reporting/model_cost_ranking.csv
+  save_args:
+    index: false

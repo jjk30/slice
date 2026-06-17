@@ -1,0 +1,8 @@
+# Phase 6 recommendation pipeline — direct runtime dependencies, pinned to the
+# versions installed in the venv. Not a full pip freeze, just what this pipeline
+# imports and runs.
+kedro==1.4.0
+pandas==3.0.3
+kedro-datasets==9.4.0          # pandas.SQLQueryDataset (read) + pandas.CSVDataset (write)
+SQLAlchemy==2.0.51             # SQL engine used by SQLQueryDataset
+psycopg2-binary==2.9.12        # Postgres driver for the gateway's requests DB
