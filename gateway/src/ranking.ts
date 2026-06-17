@@ -103,3 +103,13 @@ export function cheapestInTier(tierModels: ReadonlyArray<string>): string | null
   }
   return best?.model ?? null;
 }
+
+/**
+ * Ranked average cost of a single model, or null when the ranking has no data
+ * for it. Used by the Phase 7 agent loop to order the model ladder cheapest ->
+ * strongest. Pure read of in-memory state — never touches disk.
+ */
+export function costOf(model: string): number | null {
+  for (const r of ranking) if (r.model === model) return r.avgCostUsd;
+  return null;
+}

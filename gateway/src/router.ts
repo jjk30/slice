@@ -64,6 +64,16 @@ const cfg = () => ({
 /** Per-request override header to skip routing entirely (e.g. `x-slice-route: off`). */
 const OVERRIDE_HEADER = "x-slice-route";
 
+/**
+ * The configured tiers, exposed for the Phase 7 agent loop to build its model
+ * ladder from. Same parsing as routing uses — single source of truth for the
+ * tier env vars, so the ladder and the router can never drift apart.
+ */
+export function ladderTiers(): { cheapTier: string[]; strongTier: string[] } {
+  const c = cfg();
+  return { cheapTier: c.cheapTier, strongTier: c.strongTier };
+}
+
 // --- Typed minimal shape of an Anthropic messages request --------------------
 interface TextBlock {
   type: string;

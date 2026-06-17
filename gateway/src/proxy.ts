@@ -13,6 +13,7 @@ import {
 import { budget, budgetEnabled, recordCapEvent } from "./budget";
 import { estimateCostUsd } from "./pricing";
 import { logger } from "./logger";
+import { agentEnabled, handleAgentRequest } from "./agentHandler";
 
 /**
  * Headers we must NOT forward verbatim to the upstream. `host` would point at
@@ -126,6 +127,14 @@ const JUDGE_MODEL = () => process.env.JUDGE_MODEL ?? "claude-haiku-4-5-20251001"
  * redis.ts. A logging-store outage never blocks traffic either (db.ts).
  */
 export async function proxyHandler(req: Request, res: Response): Promise<void> {
+  // ---- 0. AGENT MODE (Phase 7): opt-in only. With `x-slice-agent: on` we run
+  // the bounded ladder loop instead of a single passthrough. Absent the header
+  // this is a no-op, so default proxy behavior is byte-for-byte unchanged.
+  if (agentEnabled(req.headers)) {
+    await handleAgentRequest(req, res);
+    return;
+  }
+
   const upstreamBase = process.env.ANTHROPIC_UPSTREAM ?? "https://api.anthropic.com";
   const start = Date.now();
 

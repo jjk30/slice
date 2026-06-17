@@ -41,6 +41,10 @@ const REQUEST_COLUMNS: ReadonlyArray<[string, string]> = [
   ["cache_hit", "BOOLEAN"],
   // Phase 4 — estimated USD cost per request (main + judge); feeds spend counter.
   ["cost_usd", "NUMERIC"],
+  // Phase 7 — agent loop, one row per attempt (null for non-agent requests).
+  ["agent_attempt", "INTEGER"],
+  ["agent_check", "TEXT"],
+  ["agent_escalated", "BOOLEAN"],
 ];
 
 /** Phase 4 — recent cap (warn/block) events, for "prove the kill switch fired". */
@@ -68,8 +72,8 @@ const INSERT_SQL = `
   INSERT INTO requests
     (method, path, model, status, latency_ms, input_tokens, output_tokens,
      requested_model, routed_model, verdict, judge_input_tokens, judge_output_tokens,
-     cache_hit, cost_usd)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     cache_hit, cost_usd, agent_attempt, agent_check, agent_escalated)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 `;
 
 /**
@@ -97,6 +101,9 @@ export function persistRequest(rec: RequestLog): void {
       rec.judge_output_tokens,
       rec.cache_hit,
       rec.cost_usd,
+      rec.agent_attempt ?? null,
+      rec.agent_check ?? null,
+      rec.agent_escalated ?? null,
     ])
     .catch((err) => {
       // pg surfaces some failures (e.g. connection timeout) with an empty

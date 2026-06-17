@@ -37,6 +37,11 @@ export interface RequestLog {
   // Phase 4 — estimated USD cost of this request (main call + judge). 0 for
   // cache hits and budget-blocked requests. This is what feeds the spend counter.
   cost_usd: number;
+  // Phase 7 — agent loop, one row per attempt. All null for non-agent requests,
+  // so default behavior and existing rows are unchanged.
+  agent_attempt?: number | null; // 1-based ladder rung (0 = fail-open passthrough)
+  agent_check?: "pass" | "escalate" | null; // checker verdict for this attempt
+  agent_escalated?: boolean | null; // true when this attempt stepped up a rung
 }
 
 /**
@@ -50,6 +55,11 @@ export function logRequest(rec: RequestLog): void {
       ? `${rec.requested_model ?? "?"} (passthrough)`
       : `${rec.requested_model ?? "?"} -> ${rec.routed_model ?? "?"} (${rec.verdict})`;
   const cache = rec.cache_hit ? "cache HIT" : "cache MISS";
+  // Phase 7: when this row is an agent-loop attempt, show the rung + verdict.
+  const agent =
+    rec.agent_attempt == null
+      ? ""
+      : ` [agent #${rec.agent_attempt} ${rec.agent_check}${rec.agent_escalated ? " ->escalate" : ""}]`;
   // Always show the per-request cost so accumulated spend is never a mystery.
-  logger.info(rec, `${route} [${cache}] $${rec.cost_usd.toFixed(6)}`);
+  logger.info(rec, `${route} [${cache}]${agent} $${rec.cost_usd.toFixed(6)}`);
 }
