@@ -5,6 +5,7 @@ import { statsRouter } from "./stats";
 import { logger } from "./logger";
 import { closeDb, runMigrations } from "./db";
 import { connectRedis, closeRedis } from "./redis";
+import { startRanking } from "./ranking";
 
 const app = express();
 
@@ -46,6 +47,11 @@ const server = app.listen(port, () => {
   // Connect Redis in the background. Best-effort: the cache/caps fail open until
   // it's ready, so a Redis outage never stops the gateway from serving.
   void connectRedis();
+
+  // Phase 6: load the cost ranking and refresh it on an interval. Best-effort
+  // and fail-open — if the ranking file is missing the router just uses its
+  // configured tier defaults.
+  startRanking();
 });
 
 // Graceful shutdown: stop accepting connections, then close the DB pool.

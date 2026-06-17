@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import { logger } from "./logger";
+import { cheapestInTier } from "./ranking";
 
 /**
  * Phase 3 — classifier-based router.
@@ -35,11 +36,26 @@ const DEFAULT_JUDGE_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_CHEAP_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_STRONG_MODEL = "claude-opus-4-8";
 
+/**
+ * Tier membership is a comma-separated list (Phase 6). A single value keeps the
+ * Phase 3 behavior exactly (a one-member tier); multiple values let the cost
+ * ranking pick the cheapest model WITHIN the tier the judge chose. The first
+ * entry is the configured default — the fallback used when the ranking has no
+ * opinion.
+ */
+const parseTier = (raw: string | undefined, fallback: string): string[] => {
+  const list = (raw ?? fallback)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list : [fallback];
+};
+
 const cfg = () => ({
   enabled: process.env.ROUTER_ENABLED === "true",
   judgeModel: process.env.JUDGE_MODEL ?? DEFAULT_JUDGE_MODEL,
-  cheapModel: process.env.ROUTER_CHEAP_MODEL ?? DEFAULT_CHEAP_MODEL,
-  strongModel: process.env.ROUTER_STRONG_MODEL ?? DEFAULT_STRONG_MODEL,
+  cheapTier: parseTier(process.env.ROUTER_CHEAP_MODEL, DEFAULT_CHEAP_MODEL),
+  strongTier: parseTier(process.env.ROUTER_STRONG_MODEL, DEFAULT_STRONG_MODEL),
   timeoutMs: Number(process.env.JUDGE_TIMEOUT_MS ?? 4000),
   cacheMax: Number(process.env.ROUTER_CACHE_MAX ?? 1000),
   upstream: (process.env.ANTHROPIC_UPSTREAM ?? "https://api.anthropic.com").replace(/\/$/, ""),
@@ -223,7 +239,7 @@ export async function routeRequest(
   body: Buffer,
   clientHeaders: IncomingHttpHeaders,
 ): Promise<RouteResult> {
-  const { enabled, cheapModel, strongModel } = cfg();
+  const { enabled, cheapTier, strongTier } = cfg();
 
   // Parse once; if it isn't a JSON Anthropic request we can't route it.
   let parsed: AnthropicRequestBody | null = null;
@@ -284,8 +300,22 @@ export async function routeRequest(
     }
   }
 
-  // Map verdict -> tier and rewrite the body's `model` field in place.
-  const routedModel = verdict === "easy" ? cheapModel : strongModel;
+  // Map verdict -> tier (the JUDGE governs this; unchanged from Phase 3).
+  const tier = verdict === "easy" ? cheapTier : strongTier;
+
+  // Phase 6: within that tier, let the cost ranking pick the cheapest model it
+  // knows about. cheapestInTier returns null when the ranking is missing/empty,
+  // so we fall back to the configured default (tier[0]) — exactly the Phase 3
+  // hardcoded choice. The ranking only refines the pick; it never decides tier.
+  const ranked = cheapestInTier(tier);
+  const routedModel = ranked ?? tier[0];
+  if (ranked && ranked !== tier[0]) {
+    logger.info(
+      { verdict, tier, picked: ranked, default: tier[0] },
+      "router used cost ranking to pick the cheapest model in tier",
+    );
+  }
+
   parsed.model = routedModel;
   const rewritten = Buffer.from(JSON.stringify(parsed), "utf8");
 
