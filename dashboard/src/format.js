@@ -32,13 +32,46 @@ export function shortModel(model) {
     .replace(/-\d{8}$/, "");
 }
 
-// opus-4-8 -> "Opus 4.8" ; haiku-4-5 -> "Haiku 4.5"
+// Explicit display names for the known models — reliable across providers. A
+// generic prettifier can't tell a version number ("2.5") from a word suffix
+// ("flash-lite"), which is what produced the stray-dot bug ("Gemini 2.5.flash.lite").
+const MODEL_NAMES = {
+  // Anthropic
+  "claude-opus-4-8": "Opus 4.8",
+  "claude-sonnet-4-6": "Sonnet 4.6",
+  "claude-haiku-4-5-20251001": "Haiku 4.5",
+  // OpenAI
+  "gpt-4o": "GPT-4o",
+  "gpt-4o-mini": "GPT-4o mini",
+  "gpt-4.1": "GPT-4.1",
+  "gpt-4.1-mini": "GPT-4.1 mini",
+  "gpt-4.1-nano": "GPT-4.1 nano",
+  o1: "o1",
+  "o3-mini": "o3-mini",
+  "o4-mini": "o4-mini",
+  // Google
+  "gemini-2.5-pro": "Gemini 2.5 Pro",
+  "gemini-2.5-flash": "Gemini 2.5 Flash",
+  "gemini-2.5-flash-lite": "Gemini 2.5 Flash-Lite",
+  "gemini-2.0-flash": "Gemini 2.0 Flash",
+  "gemini-2.0-flash-lite": "Gemini 2.0 Flash-Lite",
+  "gemini-1.5-flash": "Gemini 1.5 Flash",
+  "gemini-1.5-pro": "Gemini 1.5 Pro",
+};
+
+// claude-opus-4-8 -> "Opus 4.8" ; gemini-2.5-flash-lite -> "Gemini 2.5 Flash-Lite".
+// Known models use the explicit table above; anything else falls back to a clean,
+// dot-free rendering (title-cased family + space-joined remainder).
 export function prettyModel(model) {
-  const s = shortModel(model);
+  if (!model) return "(unknown)";
+  const key = String(model);
+  if (MODEL_NAMES[key]) return MODEL_NAMES[key];
+
+  const s = shortModel(key); // strips claude- and any trailing 8-digit date
   if (s === "(unknown)") return s;
-  const [name, ...rest] = s.split("-");
-  const label = name.charAt(0).toUpperCase() + name.slice(1);
-  return rest.length ? `${label} ${rest.join(".")}` : label;
+  const [head, ...rest] = s.split("-");
+  const label = head.charAt(0).toUpperCase() + head.slice(1);
+  return rest.length ? `${label} ${rest.join(" ")}` : label;
 }
 
 // "2026-05-17" -> "May 17" (parsed as UTC midnight so the day never shifts).
