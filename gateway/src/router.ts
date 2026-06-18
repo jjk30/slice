@@ -33,8 +33,13 @@ export interface RouteResult {
 
 // --- Config (env-driven, never hardcoded secrets; sensible defaults) ---------
 const DEFAULT_JUDGE_MODEL = "claude-haiku-4-5-20251001";
-const DEFAULT_CHEAP_MODEL = "claude-haiku-4-5-20251001";
-const DEFAULT_STRONG_MODEL = "claude-opus-4-8";
+// Cross-provider tiers (comma-separated, parsed by parseTier). Every id here must
+// exist in pricing.ts so cost lookup + the ranking keep working, and must map to
+// the right provider in providers/registry.ts. The judge still picks the TIER;
+// the ranking still picks the cheapest model WITHIN the chosen tier. The first
+// entry stays the configured default used when the ranking has no opinion.
+const DEFAULT_CHEAP_TIER = "claude-haiku-4-5-20251001,gpt-4o-mini,gemini-2.5-flash-lite";
+const DEFAULT_STRONG_TIER = "claude-opus-4-8,gpt-4o";
 
 /**
  * Tier membership is a comma-separated list (Phase 6). A single value keeps the
@@ -54,8 +59,8 @@ const parseTier = (raw: string | undefined, fallback: string): string[] => {
 const cfg = () => ({
   enabled: process.env.ROUTER_ENABLED === "true",
   judgeModel: process.env.JUDGE_MODEL ?? DEFAULT_JUDGE_MODEL,
-  cheapTier: parseTier(process.env.ROUTER_CHEAP_MODEL, DEFAULT_CHEAP_MODEL),
-  strongTier: parseTier(process.env.ROUTER_STRONG_MODEL, DEFAULT_STRONG_MODEL),
+  cheapTier: parseTier(process.env.ROUTER_CHEAP_MODEL, DEFAULT_CHEAP_TIER),
+  strongTier: parseTier(process.env.ROUTER_STRONG_MODEL, DEFAULT_STRONG_TIER),
   timeoutMs: Number(process.env.JUDGE_TIMEOUT_MS ?? 4000),
   cacheMax: Number(process.env.ROUTER_CACHE_MAX ?? 1000),
   upstream: (process.env.ANTHROPIC_UPSTREAM ?? "https://api.anthropic.com").replace(/\/$/, ""),
