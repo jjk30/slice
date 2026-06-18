@@ -1,6 +1,7 @@
 # slice
 
-slice is a tool that sits between your apps and AI providers like Anthropic, and quietly makes your AI bill smaller.
+
+slice is a tool that sits between your apps and AI providers like Anthropic, and quietly makes your AI bill smaller. PS, I actually thought about this idea when I was craving a slice of cake
 
 You point your app at slice instead of straight at the AI. Everything still works exactly the same. The difference is that slice watches every request, sends the easy ones to cheaper AI models, remembers answers it has seen before so you don't pay twice, and stops the spending when you hit a limit you set.
 
