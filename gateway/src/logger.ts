@@ -29,7 +29,8 @@ export interface RequestLog {
   // Phase 3 — routing observability (all nullable; null when routing is off).
   requested_model: string | null;
   routed_model: string | null;
-  verdict: "easy" | "hard" | null;
+  // "easy"/"hard" = judge auto-route; "rule" = per-team switch-rule override.
+  verdict: "easy" | "hard" | "rule" | null;
   judge_input_tokens: number | null;
   judge_output_tokens: number | null;
   // Phase 4 — true when this request was served from the response cache.

@@ -72,6 +72,20 @@ export function priceFor(model: string | null): ModelPrice {
   return (model && PRICES[model]) || FALLBACK_PRICE;
 }
 
+/**
+ * True only when `model` is a KNOWN, explicitly-priced model in the merged table
+ * (exact match — not the FALLBACK price `priceFor` returns for unknowns). The
+ * rules write API uses this to reject a switch-rule whose target isn't priced, so
+ * cost lookup and the ranking keep working.
+ */
+export function isPricedModel(model: string | null | undefined): boolean {
+  return (
+    typeof model === "string" &&
+    model.length > 0 &&
+    Object.prototype.hasOwnProperty.call(PRICES, model)
+  );
+}
+
 /** Dollar cost of one call given its token usage (nulls treated as 0). */
 export function estimateCostUsd(
   model: string | null,

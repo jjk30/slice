@@ -62,12 +62,29 @@ const BUDGET_EVENTS_TABLE = `
   )
 `;
 
+/**
+ * Per-team switch-rules (user choice): "for team T, when the client asks for
+ * from_model, use to_model instead." Source of truth for the in-memory rules map
+ * the router reads on the hot path. PRIMARY KEY (team, from_model) makes each
+ * (team, from_model) map to exactly one to_model.
+ */
+const TEAM_RULES_TABLE = `
+  CREATE TABLE IF NOT EXISTS team_rules (
+    team       TEXT        NOT NULL,
+    from_model TEXT        NOT NULL,
+    to_model   TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (team, from_model)
+  )
+`;
+
 export async function runMigrations(): Promise<void> {
   for (const [name, type] of REQUEST_COLUMNS) {
     await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS ${name} ${type}`);
   }
   await pool.query(BUDGET_EVENTS_TABLE);
-  logger.info("db migrations applied (routing + cache columns, budget_events table)");
+  await pool.query(TEAM_RULES_TABLE);
+  logger.info("db migrations applied (routing + cache columns, budget_events + team_rules tables)");
 }
 
 const INSERT_SQL = `
@@ -148,6 +165,53 @@ export async function query<T extends QueryResultRow>(
 ): Promise<T[]> {
   const result = await pool.query<T>(text, params as unknown[]);
   return result.rows;
+}
+
+/** One row of the team switch-rules table. */
+export interface TeamRuleRow {
+  team: string;
+  from_model: string;
+  to_model: string;
+}
+
+/**
+ * Read every team switch-rule. Like `query`, this REJECTS on error; the router's
+ * loader catches that and fails open to an empty rules map (normal routing).
+ */
+export async function fetchTeamRules(): Promise<TeamRuleRow[]> {
+  return query<TeamRuleRow>("SELECT team, from_model, to_model FROM team_rules");
+}
+
+/** Read one team's switch-rules (for the rules write API's GET). Rejects on error. */
+export async function fetchTeamRulesForTeam(team: string): Promise<TeamRuleRow[]> {
+  return query<TeamRuleRow>(
+    "SELECT team, from_model, to_model FROM team_rules WHERE team = $1 ORDER BY from_model",
+    [team],
+  );
+}
+
+/**
+ * Upsert one rule: a (team, from_model) maps to exactly one to_model, so a repeat
+ * save overwrites the target. These are USER ACTIONS, so this rejects on error
+ * (the caller awaits and returns a clear status) — unlike the fire-and-forget
+ * proxy writes.
+ */
+export async function upsertTeamRule(team: string, fromModel: string, toModel: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO team_rules (team, from_model, to_model)
+       VALUES ($1, $2, $3)
+     ON CONFLICT (team, from_model) DO UPDATE SET to_model = EXCLUDED.to_model`,
+    [team, fromModel, toModel],
+  );
+}
+
+/** Delete one rule; returns how many rows were removed (0 if none matched). */
+export async function deleteTeamRule(team: string, fromModel: string): Promise<number> {
+  const result = await pool.query(
+    "DELETE FROM team_rules WHERE team = $1 AND from_model = $2",
+    [team, fromModel],
+  );
+  return result.rowCount ?? 0;
 }
 
 /** Close the pool on shutdown. Best-effort; never throws. */

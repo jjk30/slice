@@ -20,19 +20,25 @@ const recent = ref([]);
 const budgets = ref([]);
 const suggestions = ref([]);
 const totalPotentialUsd = ref(null);
+const rules = ref([]);
+
+// Switch-rules write state, owned here and passed down to the rules panel.
+const rulesBusy = ref(false);
+const rulesError = ref("");
 
 let timer = null;
 
 async function load(initial = false) {
   if (initial) loading.value = true;
   try {
-    const [s, d, m, r, b, sug] = await Promise.all([
+    const [s, d, m, r, b, sug, rl] = await Promise.all([
       api.summary(DAYS),
       api.spendDaily(DAYS),
       api.spendByModel(DAYS),
       api.recent(8),
       api.budgets(),
       api.suggestions(DAYS),
+      api.rules(),
     ]);
     summary.value = s;
     daily.value = d.series;
@@ -41,11 +47,66 @@ async function load(initial = false) {
     budgets.value = b.teams;
     suggestions.value = sug.suggestions;
     totalPotentialUsd.value = sug.totalPotentialUsd;
+    rules.value = rl;
     error.value = "";
   } catch (e) {
     error.value = e?.message || "Could not reach the gateway.";
   } finally {
     loading.value = false;
+  }
+}
+
+// Save a rule, then re-fetch so the list reflects the source of truth. Returns
+// true on success so the form can clear; on failure surfaces the gateway's
+// message (e.g. a 400 for an unknown to_model) without crashing the dashboard.
+async function saveRule(fromModel, toModel) {
+  rulesBusy.value = true;
+  rulesError.value = "";
+  try {
+    await api.saveRule(fromModel, toModel);
+    rules.value = await api.rules();
+    return true;
+  } catch (e) {
+    rulesError.value = e?.message || "Could not save the rule.";
+    return false;
+  } finally {
+    rulesBusy.value = false;
+  }
+}
+
+// Apply a recommendation: save its rule, then re-fetch BOTH the rules and the
+// suggestions so the new rule appears in Current rules and the card updates.
+async function applyRule(fromModel, toModel) {
+  rulesBusy.value = true;
+  rulesError.value = "";
+  try {
+    await api.saveRule(fromModel, toModel);
+    const [rl, sug] = await Promise.all([api.rules(), api.suggestions(DAYS)]);
+    rules.value = rl;
+    suggestions.value = sug.suggestions;
+    totalPotentialUsd.value = sug.totalPotentialUsd;
+    return true;
+  } catch (e) {
+    rulesError.value = e?.message || "Could not apply the suggestion.";
+    return false;
+  } finally {
+    rulesBusy.value = false;
+  }
+}
+
+// Remove a rule, then re-fetch the list.
+async function removeRule(fromModel) {
+  rulesBusy.value = true;
+  rulesError.value = "";
+  try {
+    await api.deleteRule(fromModel);
+    rules.value = await api.rules();
+    return true;
+  } catch (e) {
+    rulesError.value = e?.message || "Could not remove the rule.";
+    return false;
+  } finally {
+    rulesBusy.value = false;
   }
 }
 
@@ -110,7 +171,16 @@ onBeforeUnmount(() => clearInterval(timer));
           <RecentCalls :requests="recent" />
         </div>
 
-        <WhenToSwitch :suggestions="suggestions" :total-potential-usd="totalPotentialUsd" />
+        <WhenToSwitch
+          :suggestions="suggestions"
+          :total-potential-usd="totalPotentialUsd"
+          :rules="rules"
+          :rules-busy="rulesBusy"
+          :rules-error="rulesError"
+          :on-save="saveRule"
+          :on-remove="removeRule"
+          :on-apply="applyRule"
+        />
       </div>
     </template>
   </div>

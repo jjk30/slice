@@ -15,6 +15,7 @@ import { estimateCostUsd } from "./pricing";
 import { logger } from "./logger";
 import { agentEnabled, handleAgentRequest } from "./agentHandler";
 import { getAdapter, providerForModel } from "./providers/registry";
+import { teamFrom } from "./team";
 
 /**
  * Headers we must NOT forward verbatim to the upstream. `host` would point at
@@ -101,12 +102,6 @@ function extractUsageFromBuffer(bytes: Buffer, usage: Usage): void {
   } catch {
     /* error body or non-JSON — no usage to report */
   }
-}
-
-/** Which "team" a request belongs to (Phase 4 budget caps). Real auth comes later. */
-function teamFrom(req: Request): string {
-  const header = req.headers["x-slice-team"];
-  return typeof header === "string" && header.trim() ? header.trim() : "default";
 }
 
 /** Default judge model, used only to price the judge call's token cost. */
@@ -206,8 +201,9 @@ export async function proxyHandler(req: Request, res: Response): Promise<void> {
 
     // ---- 3. ROUTE (Phase 3): classify + maybe rewrite the model -------------
     // routeRequest NEVER throws — feature off / override / judge failure all
-    // return the original body unchanged.
-    const routed = await routeRequest(originalBody, req.headers);
+    // return the original body unchanged. `team` (from teamFrom, the single team
+    // resolver) lets the router apply this team's switch-rules before the judge.
+    const routed = await routeRequest(originalBody, req.headers, team);
     const body = routed.body;
     routedModel = routed.decision.routedModel ?? requestedModel;
     verdict = routed.decision.verdict;

@@ -2,10 +2,12 @@ import "dotenv/config";
 import express from "express";
 import { proxyHandler } from "./proxy";
 import { statsRouter } from "./stats";
+import { rulesRouter } from "./rules";
 import { logger } from "./logger";
 import { closeDb, runMigrations } from "./db";
 import { connectRedis, closeRedis } from "./redis";
 import { startRanking } from "./ranking";
+import { loadTeamRules } from "./router";
 
 const app = express();
 
@@ -24,6 +26,10 @@ app.get("/healthz", (_req, res) => {
 // only ever run SELECT queries; they cannot affect AI traffic.
 app.use("/api", statsRouter);
 
+// Per-team switch-rules write API (GET/POST/DELETE /api/rules). Also under /api,
+// ahead of the catch-all proxy, so it is served locally and never forwarded.
+app.use("/api", rulesRouter);
+
 // Everything else is forwarded to the Anthropic upstream.
 app.all(/.*/, proxyHandler);
 
@@ -38,11 +44,15 @@ const server = app.listen(port, () => {
     "slice gateway listening",
   );
 
-  // Ensure migrations (routing + cache columns, budget_events). Best-effort: a
-  // DB outage at startup must not stop the gateway from serving traffic.
-  runMigrations().catch((err) => {
-    logger.warn({ err: (err as Error).message }, "startup db migration failed (continuing)");
-  });
+  // Ensure migrations (routing + cache columns, budget_events, team_rules), then
+  // load the per-team switch-rules into memory. Best-effort: a DB outage at
+  // startup must not stop the gateway from serving traffic, and loadTeamRules
+  // fails open to an empty map (normal routing) if the read errors.
+  runMigrations()
+    .then(() => loadTeamRules())
+    .catch((err) => {
+      logger.warn({ err: (err as Error).message }, "startup db migration failed (continuing)");
+    });
 
   // Connect Redis in the background. Best-effort: the cache/caps fail open until
   // it's ready, so a Redis outage never stops the gateway from serving.

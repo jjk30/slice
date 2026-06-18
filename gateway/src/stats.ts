@@ -402,6 +402,10 @@ interface Suggestion {
   body: string;
   saveUsd: number | null; // headline figure; null for pure info cards
   footer: string;
+  // Set ONLY on the actionable downgrade card: the concrete rule Apply creates.
+  // Other suggestion kinds stay informational (these stay undefined).
+  from_model?: string;
+  to_model?: string;
 }
 
 statsRouter.get(
@@ -498,7 +502,7 @@ statsRouter.get(
       const ifCheap = costAt(cheap, easyStrong.input_tokens, easyStrong.output_tokens);
       const potential = easyStrong.cost_usd - ifCheap;
       if (potential > 0) {
-        suggestions.push({
+        const suggestion: Suggestion = {
           id: "easy-on-strong",
           kind: "opportunity",
           accent: "cherry",
@@ -507,7 +511,30 @@ statsRouter.get(
           body: `${easyStrong.n} call(s) the judge rated EASY ran on a pricier model (costing $${easyStrong.cost_usd.toFixed(6)}). Routing them to ${cheap.replace(/^claude-/, "")} would cover the same work.`,
           saveUsd: potential,
           footer: "potential further savings",
-        });
+        };
+
+        // Make the card APPLICABLE: pick the single highest-spend pricier model
+        // running easy work as the rule's from_model, with the cheap tier as the
+        // target. One concrete rule (from -> to) the Apply button can create.
+        const [topEasySource] = await query<{ routed_model: string | null; spend: number }>(
+          `SELECT routed_model,
+                  COALESCE(SUM(cost_usd), 0)::float8 AS spend
+             FROM requests
+            WHERE created_at >= $1
+              AND verdict = 'easy'
+              AND routed_model IS DISTINCT FROM $2
+            GROUP BY routed_model
+            ORDER BY spend DESC NULLS LAST
+            LIMIT 1`,
+          [since, cheap],
+        );
+        const fromModel = topEasySource?.routed_model;
+        if (typeof fromModel === "string" && fromModel && fromModel !== cheap) {
+          suggestion.from_model = fromModel;
+          suggestion.to_model = cheap;
+        }
+
+        suggestions.push(suggestion);
       }
     }
 

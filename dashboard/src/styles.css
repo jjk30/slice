@@ -372,6 +372,20 @@ code {
 .act:hover {
   border-color: rgba(26, 23, 20, 0.3);
 }
+/* Apply (create a switch-rule from a recommendation) — green accent. */
+.act.apply {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+.act.apply:hover:not(:disabled) {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+}
+.act:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .totsave {
   margin-top: 14px;
   background: var(--ink);
@@ -434,4 +448,145 @@ code {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* --- switch-rules panel (Current rules, in the "When to switch" panel) ----- */
+.rules {
+  margin-top: 22px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.rules-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.rules-head .rh-title {
+  font-size: 13px;
+  color: var(--muted);
+}
+.rules-head .rh-meta {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.rule-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.rule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--teal);
+  border-radius: 11px;
+}
+.rule-map {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.rule-map code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  word-break: break-all;
+}
+.rule-map code.to {
+  color: var(--teal);
+}
+.rule-map .arr {
+  color: var(--muted);
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+.rule-x {
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.rule-x:hover:not(:disabled) {
+  color: var(--cherry);
+  background: #fff;
+  border-color: var(--line);
+}
+.rule-x:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.rule-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.rule-in {
+  flex: 1 1 150px;
+  min-width: 0;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  background: #fff;
+  border: 1.5px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 10px;
+}
+.rule-in::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+.rule-in:focus {
+  outline: none;
+  border-color: var(--teal);
+}
+.rule-in:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.rule-save {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--teal);
+  border: 1.5px solid var(--teal);
+  border-radius: 9px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+.rule-save:hover:not(:disabled) {
+  background: #0c5e49;
+  border-color: #0c5e49;
+}
+.rule-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rule-err {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--cherry);
 }

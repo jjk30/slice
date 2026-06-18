@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import { logger } from "./logger";
 import { cheapestInTier } from "./ranking";
+import { fetchTeamRules, type TeamRuleRow } from "./db";
 
 /**
  * Phase 3 — classifier-based router.
@@ -12,14 +13,21 @@ import { cheapestInTier } from "./ranking";
  * can be turned off instantly (then the proxy behaves exactly like Phase 2).
  */
 
-/** Strict, typed verdict — never a loose string. */
+/** Strict, typed judge verdict — never a loose string. */
 export type Verdict = "easy" | "hard";
+
+/**
+ * What governed the routed model. The judge yields "easy"/"hard"; a team
+ * switch-rule yields "rule" (so a user override is distinguishable from an
+ * auto-route in logs/stats); null means routing was off or skipped.
+ */
+export type RouteLabel = Verdict | "rule";
 
 /** Everything we want to observe/persist about one routing decision. */
 export interface RouteDecision {
   requestedModel: string | null; // what the client asked for
   routedModel: string | null; // what slice actually forwards
-  verdict: Verdict | null; // null when routing is off / skipped
+  verdict: RouteLabel | null; // null when routing is off / skipped
   judgeInputTokens: number | null; // the judge call's own cost
   judgeOutputTokens: number | null;
   cacheHit: boolean; // true when the verdict came from the in-memory cache
@@ -77,6 +85,63 @@ const OVERRIDE_HEADER = "x-slice-route";
 export function ladderTiers(): { cheapTier: string[]; strongTier: string[] } {
   const c = cfg();
   return { cheapTier: c.cheapTier, strongTier: c.strongTier };
+}
+
+// --- Per-team switch-rules (user choice) -------------------------------------
+/**
+ * In-memory rules map: team -> (from_model -> to_model). Postgres `team_rules` is
+ * the source of truth; the hot path reads ONLY this map, never the database. It
+ * is rebuilt by {@link loadTeamRules} at startup and {@link refreshTeamRules}
+ * after a write (the write endpoint lands in a later step).
+ */
+let teamRules: Map<string, Map<string, string>> = new Map();
+
+/** Pluggable fetcher so unit tests can seed rules without a database. */
+export type TeamRulesFetcher = () => Promise<TeamRuleRow[]>;
+
+/**
+ * (Re)build the rules map from a fetcher. FAIL OPEN: on any error we log it and
+ * install an EMPTY map, so routing simply falls back to its normal path — a bad
+ * rules load can never break or alter request routing.
+ */
+async function reloadTeamRules(fetcher: TeamRulesFetcher): Promise<void> {
+  try {
+    const rows = await fetcher();
+    const next = new Map<string, Map<string, string>>();
+    for (const r of rows) {
+      if (!r.team || !r.from_model || !r.to_model) continue;
+      let byModel = next.get(r.team);
+      if (!byModel) {
+        byModel = new Map<string, string>();
+        next.set(r.team, byModel);
+      }
+      byModel.set(r.from_model, r.to_model);
+    }
+    teamRules = next;
+    logger.info({ teams: next.size, rules: rows.length }, "loaded team switch-rules");
+  } catch (err) {
+    teamRules = new Map();
+    logger.warn(
+      { err: (err as Error).message },
+      "team switch-rules load failed; using empty rules (routing falls back to normal)",
+    );
+  }
+}
+
+/** Load the rules map once at gateway startup. */
+export function loadTeamRules(fetcher: TeamRulesFetcher = fetchTeamRules): Promise<void> {
+  return reloadTeamRules(fetcher);
+}
+
+/** Reload the rules map after a write (called by the write endpoint, later step). */
+export function refreshTeamRules(fetcher: TeamRulesFetcher = fetchTeamRules): Promise<void> {
+  return reloadTeamRules(fetcher);
+}
+
+/** Look up a team's mapped model for a requested model (undefined when none). */
+function ruleFor(team: string, requestedModel: string | null): string | undefined {
+  if (!requestedModel) return undefined;
+  return teamRules.get(team)?.get(requestedModel);
 }
 
 // --- Typed minimal shape of an Anthropic messages request --------------------
@@ -253,6 +318,7 @@ async function callJudge(
 export async function routeRequest(
   body: Buffer,
   clientHeaders: IncomingHttpHeaders,
+  team: string,
 ): Promise<RouteResult> {
   const { enabled, cheapTier, strongTier } = cfg();
 
@@ -279,15 +345,44 @@ export async function routeRequest(
     },
   };
 
-  // Cost-safety: feature flag off -> exact Phase 2 behavior, no judge call.
-  if (!enabled) return passthrough;
-
-  // Per-request opt-out header.
+  // Per-request opt-out header — the TOP winner. Sits above the ROUTER_ENABLED
+  // gate (harmless: with routing off this returns passthrough either way).
   const override = clientHeaders[OVERRIDE_HEADER];
   if (typeof override === "string" && override.toLowerCase() === "off") return passthrough;
 
-  // Need a JSON body with a prompt to classify.
+  // Need a JSON body to do anything model-related.
   if (!parsed) return passthrough;
+
+  // TEAM SWITCH-RULE (user choice): loses only to the route-off pin above, and
+  // applies WHETHER OR NOT auto-routing is enabled (the gate below governs slice
+  // picking on its own, not user-set rules). If this team mapped the requested
+  // model, honor it and return early — skipping the judge AND the ranking.
+  const mappedModel = ruleFor(team, requestedModel);
+  if (mappedModel) {
+    parsed.model = mappedModel;
+    const rewritten = Buffer.from(JSON.stringify(parsed), "utf8");
+    logger.info(
+      { team, from: requestedModel, to: mappedModel },
+      "router applied team switch-rule (skipped judge + ranking)",
+    );
+    return {
+      body: rewritten,
+      decision: {
+        requestedModel,
+        routedModel: mappedModel,
+        verdict: "rule", // distinguishes a user override from an auto-route
+        judgeInputTokens: null,
+        judgeOutputTokens: null,
+        cacheHit: false,
+      },
+    };
+  }
+
+  // ROUTER_ENABLED gate — controls only slice AUTO-ROUTING (judge + ranking), not
+  // the team rules above. Off -> exact Phase 2 behavior, no judge call.
+  if (!enabled) return passthrough;
+
+  // Otherwise fall through to auto-routing: need a prompt to classify.
   const promptText = extractPromptText(parsed);
   if (!promptText) return passthrough;
 
