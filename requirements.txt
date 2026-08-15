@@ -2,7 +2,9 @@ fastapi
 uvicorn
 httpx
 asyncpg
+redis
 pytest
 pytest-asyncio
 respx
+fakeredis
 python-dotenv

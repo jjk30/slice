@@ -2,10 +2,16 @@ import json
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
 import asyncpg
 
 logger = logging.getLogger("slice.gateway")
+
+# Idempotent .sql files applied after the base table on every connect. Keeping
+# them as files (rather than inline strings) makes each schema change a small,
+# reviewable, ordered artifact.
+MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -22,8 +28,9 @@ CREATE TABLE IF NOT EXISTS requests (
 """
 
 INSERT = """
-INSERT INTO requests (model, status, latency_ms, input_tokens, output_tokens, cost_usd, stream)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO requests
+    (model, status, latency_ms, input_tokens, output_tokens, cost_usd, stream, cached)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 """
 
 
@@ -36,6 +43,8 @@ class RequestRecord:
     output_tokens: int | None
     cost_usd: Decimal | None
     stream: bool
+    # True for a row that was served from the Redis cache (phase 4).
+    cached: bool = False
 
 
 class Database:
@@ -67,6 +76,7 @@ class Database:
             )
             async with self._pool.acquire() as connection:
                 await connection.execute(SCHEMA)
+                await self._run_migrations(connection)
         except Exception as exc:
             await self.close()
             logger.warning(
@@ -75,6 +85,14 @@ class Database:
             return False
 
         return True
+
+    @staticmethod
+    async def _run_migrations(connection) -> None:
+        """Apply every migration file in order. Each is idempotent on its own."""
+        if not MIGRATIONS_DIR.is_dir():
+            return
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            await connection.execute(path.read_text())
 
     async def close(self) -> None:
         pool, self._pool = self._pool, None
@@ -100,6 +118,7 @@ class Database:
                     record.output_tokens,
                     record.cost_usd,
                     record.stream,
+                    record.cached,
                 )
         except Exception as exc:
             # The response is already out the door; note it and drop the row.

@@ -2,16 +2,18 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
+from decimal import Decimal
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
-from app import config, pricing
+from app import config, pricing, redis_layer
 from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import STREAM_DOWNGRADED_HEADER
 from app.db import Database, RequestRecord
+from app.redis_layer import CACHE_HEADER
 from app.openai_inbound import (
     AnthropicEventReader,
     AnthropicToOpenAIStream,
@@ -48,6 +50,10 @@ async def lifespan(app: FastAPI):
             json.dumps({"event": "logging_disabled", "reason": "DATABASE_URL is not set"})
         )
 
+    # Created unconditionally: the client connects lazily and every Redis call
+    # fails open, so a down server costs nothing until it comes back.
+    app.state.redis = redis_layer.make_redis()
+
     yield
 
     client = getattr(app.state, "client", None)
@@ -57,6 +63,10 @@ async def lifespan(app: FastAPI):
     database = getattr(app.state, "db", None)
     if database is not None:
         await database.close()
+
+    redis = getattr(app.state, "redis", None)
+    if redis is not None:
+        await redis.aclose()
 
 
 app = FastAPI(title="slice gateway", lifespan=lifespan)
@@ -69,6 +79,12 @@ def get_client(app: FastAPI) -> httpx.AsyncClient:
         client = httpx.AsyncClient(timeout=TIMEOUT)
         app.state.client = client
     return client
+
+
+def get_redis(app: FastAPI):
+    # None means the layer is off (never started, e.g. in a unit test that does
+    # not run lifespan); every redis_layer call treats None as fail-open.
+    return getattr(app.state, "redis", None)
 
 
 def anthropic_error(status_code: int, error_type: str, message: str) -> JSONResponse:
@@ -131,6 +147,53 @@ def record_task(
     return BackgroundTask(database.record, record)
 
 
+def after_response(
+    model: str | None,
+    status: int,
+    started: float,
+    stream: bool,
+    team: str,
+    *,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cached: bool = False,
+    cache_key: str | None = None,
+    cache_body: bytes | None = None,
+) -> BackgroundTask:
+    """Post-response work for a gated /v1/messages request, in one background task.
+
+    Three things happen once the bytes are on their way to the client: the
+    Postgres row is written (if logging is on), the request's cost is added to
+    the team's monthly budget counter, and — on a cacheable 200 — the body is
+    stored. A cache hit logs a row with cost 0 and never touches the budget.
+    """
+    cost = Decimal(0) if cached else pricing.cost_usd(model, input_tokens, output_tokens)
+    database = getattr(app.state, "db", None)
+    redis = get_redis(app)
+
+    async def run() -> None:
+        if database is not None:
+            await database.record(
+                RequestRecord(
+                    model=model,
+                    status=status,
+                    latency_ms=elapsed_ms(started),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost,
+                    stream=stream,
+                    cached=cached,
+                )
+            )
+        # A cache hit cost nothing to serve, so it never moves the budget.
+        if not cached:
+            await redis_layer.add_cost(redis, team, cost)
+        if cache_key is not None and cache_body is not None and status == 200:
+            await redis_layer.cache_set(redis, cache_key, cache_body)
+
+    return BackgroundTask(run)
+
+
 def _clean_headers(headers: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in EXCLUDE_RESPONSE_HEADERS}
 
@@ -155,6 +218,32 @@ async def messages(request: Request):
     wants_stream = isinstance(payload, dict) and payload.get("stream") is True
     path = request.url.path
 
+    team = redis_layer.team_from_headers(request.headers)
+    redis = get_redis(app)
+
+    # The phase-4 checks, in order: rate limit, then budget cap, then cache.
+    # Each fails open on any Redis trouble (redis_layer swallows it), so a down
+    # Redis just skips the check and the request forwards as before.
+    if not await redis_layer.check_rate_limit(redis, team):
+        return _anthropic_gate_reject(
+            "Rate limit exceeded: too many requests this minute.",
+            request, model, started, wants_stream, team,
+        )
+
+    if (await redis_layer.check_budget(redis, team)).blocked:
+        # Blocked here never reaches the provider.
+        return _anthropic_gate_reject(
+            "Monthly budget exceeded for this team.",
+            request, model, started, wants_stream, team,
+        )
+
+    cache_key = None
+    if not wants_stream and isinstance(payload, dict):
+        cache_key = redis_layer.cache_key(team, payload)
+        cached_body = await redis_layer.cache_get(redis, cache_key)
+        if cached_body is not None:
+            return _anthropic_cache_hit(cached_body, request, model, started, team)
+
     try:
         adapter = select_adapter(model)
     except AdapterError as exc:
@@ -177,7 +266,34 @@ async def messages(request: Request):
             502, "Could not reach the AI provider.", request, model, started, wants_stream
         )
 
-    return _finalize_anthropic(result, request.method, path, model, started, wants_stream)
+    return _finalize_anthropic(
+        result, request.method, path, model, started, wants_stream, team, cache_key
+    )
+
+
+def _anthropic_gate_reject(message, request, model, started, wants_stream, team):
+    """A clean Anthropic-shaped 429 from a rate-limit or budget block."""
+    status = 429
+    log_request(request.method, request.url.path, model, status, started)
+    response = anthropic_error(status, "rate_limit_error", message)
+    response.background = after_response(model, status, started, wants_stream, team)
+    return response
+
+
+def _anthropic_cache_hit(body, request, model, started, team):
+    """Serve a stored 200 body, flagged as a cache hit and logged at cost 0."""
+    status = 200
+    log_request(request.method, request.url.path, model, status, started)
+    input_tokens, output_tokens = usage_from_body(body)
+    return Response(
+        content=body,
+        status_code=status,
+        headers={"content-type": "application/json", CACHE_HEADER: "hit"},
+        background=after_response(
+            model, status, started, False, team,
+            input_tokens=input_tokens, output_tokens=output_tokens, cached=True,
+        ),
+    )
 
 
 def _anthropic_error_response(exc, method, path, model, started, wants_stream):
@@ -194,7 +310,9 @@ def _anthropic_upstream_error(status, message, request, model, started, wants_st
     return response
 
 
-def _finalize_anthropic(result: AdapterResult, method, path, model, started, wants_stream):
+def _finalize_anthropic(
+    result: AdapterResult, method, path, model, started, wants_stream, team, cache_key
+):
     headers = _clean_headers(result.headers)
     log_request(method, path, model, result.status_code, started)
 
@@ -215,16 +333,17 @@ def _finalize_anthropic(result: AdapterResult, method, path, model, started, wan
                     await result.aclose()
 
         async def record_stream():
-            task = record_task(
+            # Streams never populate the cache (cache_key is None here), but
+            # their cost still lands on the budget once the tokens are known.
+            await after_response(
                 model,
                 result.status_code,
                 started,
-                stream=wants_stream,
+                wants_stream,
+                team,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
-            )
-            if task is not None:
-                await task()
+            )()
 
         return StreamingResponse(
             relay(),
@@ -233,18 +352,22 @@ def _finalize_anthropic(result: AdapterResult, method, path, model, started, wan
             background=BackgroundTask(record_stream),
         )
 
-    input_tokens, output_tokens = usage_from_body(result.content or b"")
+    content = result.content or b""
+    input_tokens, output_tokens = usage_from_body(content)
     return Response(
         content=result.content,
         status_code=result.status_code,
         headers=headers,
-        background=record_task(
+        background=after_response(
             model,
             result.status_code,
             started,
-            stream=wants_stream,
+            wants_stream,
+            team,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_key=cache_key,
+            cache_body=content,
         ),
     )
 
@@ -291,6 +414,31 @@ async def chat_completions(request: Request):
     model = payload.get("model")
     wants_stream = payload.get("stream") is True
 
+    team = redis_layer.team_from_headers(request.headers)
+    redis = get_redis(app)
+
+    # Same three checks, same order, same Redis counters as /v1/messages — one
+    # team's budget and rate limit span both endpoints. Only the blocked-response
+    # shape differs: OpenAI-shaped here.
+    if not await redis_layer.check_rate_limit(redis, team):
+        return _openai_gate_reject(
+            "Rate limit exceeded: too many requests this minute.",
+            request, model, started, wants_stream, team,
+        )
+
+    if (await redis_layer.check_budget(redis, team)).blocked:
+        return _openai_gate_reject(
+            "Monthly budget exceeded for this team.",
+            request, model, started, wants_stream, team,
+        )
+
+    cache_key = None
+    if not wants_stream:
+        cache_key = redis_layer.openai_cache_key(team, inbound)
+        cached_body = await redis_layer.cache_get(redis, cache_key)
+        if cached_body is not None:
+            return _openai_cache_hit(cached_body, request, model, started, team)
+
     try:
         adapter = select_adapter(model)
     except AdapterError as exc:
@@ -315,7 +463,30 @@ async def chat_completions(request: Request):
             502, "Could not reach the AI provider.", request, model, started, wants_stream
         )
 
-    return _finalize_openai(result, request.method, path, model, started, wants_stream)
+    return _finalize_openai(
+        result, request.method, path, model, started, wants_stream, team, cache_key
+    )
+
+
+def _openai_gate_reject(message, request, model, started, wants_stream, team):
+    """A clean OpenAI-shaped 429 from a rate-limit or budget block."""
+    status = 429
+    log_request(request.method, request.url.path, model, status, started)
+    response = openai_error(status, "rate_limit_error", message)
+    response.background = after_response(model, status, started, wants_stream, team)
+    return response
+
+
+def _openai_cache_hit(body, request, model, started, team):
+    """Serve a stored OpenAI-shaped 200 body, flagged and logged at cost 0."""
+    status = 200
+    log_request(request.method, request.url.path, model, status, started)
+    return Response(
+        content=body,
+        status_code=status,
+        headers={"content-type": "application/json", CACHE_HEADER: "hit"},
+        background=after_response(model, status, started, False, team, cached=True),
+    )
 
 
 def _openai_error_response(exc, method, path, model, started, wants_stream):
@@ -332,7 +503,9 @@ def _openai_upstream_error(status, message, request, model, started, wants_strea
     return response
 
 
-def _finalize_openai(result: AdapterResult, method, path, model, started, wants_stream):
+def _finalize_openai(
+    result: AdapterResult, method, path, model, started, wants_stream, team, cache_key
+):
     log_request(method, path, model, result.status_code, started)
     created = int(time.time())
 
@@ -358,16 +531,17 @@ def _finalize_openai(result: AdapterResult, method, path, model, started, wants_
             yield b"data: [DONE]\n\n"
 
         async def record_stream():
-            task = record_task(
+            # Streams never cache (cache_key is None here); the cost still counts
+            # against the shared budget once the tokens are known.
+            await after_response(
                 model,
                 result.status_code,
                 started,
-                stream=wants_stream,
+                wants_stream,
+                team,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
-            )
-            if task is not None:
-                await task()
+            )()
 
         headers = {"content-type": "text/event-stream"}
         # A downgrade upstream is still a downgrade to the OpenAI client.
@@ -397,13 +571,18 @@ def _finalize_openai(result: AdapterResult, method, path, model, started, wants_
         content=out,
         status_code=result.status_code,
         headers={"content-type": "application/json"},
-        background=record_task(
+        background=after_response(
             model,
             result.status_code,
             started,
-            stream=wants_stream,
+            wants_stream,
+            team,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_key=cache_key,
+            # Store the OpenAI-shaped body a client would get back, not the
+            # provider's Anthropic body.
+            cache_body=out,
         ),
     )
 
