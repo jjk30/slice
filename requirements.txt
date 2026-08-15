@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 httpx
+asyncpg
 pytest
 pytest-asyncio
 respx
