@@ -3,6 +3,8 @@ uvicorn
 httpx
 asyncpg
 redis
+langgraph
+langchain-core
 pytest
 pytest-asyncio
 respx

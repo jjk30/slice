@@ -39,3 +39,30 @@ GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googl
 # NVIDIA NIM is OpenAI-compatible; only the base URL and key differ.
 NIM_API_KEY = os.getenv("NIM_API_KEY") or None
 NIM_BASE_URL = os.getenv("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+
+
+def _bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# --- Router (phase 5): pin ▸ rule ▸ auto, all fail open. ---
+# Auto-routing is the only stage a flag can turn off; pins and per-team switch
+# rules always apply. With auto off, requests forward as asked unless a rule fires.
+AUTO_ROUTE_ENABLED = _bool("AUTO_ROUTE_ENABLED", True)
+
+# Where an "easy" verdict routes to. "hard" always keeps the client's model.
+ROUTE_EASY_MODEL = os.getenv("ROUTE_EASY_MODEL", "claude-haiku-4-5-20251001")
+
+# The classifier model, and the ceiling on how long slice waits for its verdict.
+# Any failure, timeout, or unexpected output counts as "hard" — never an error to
+# the client. The judge only ever sees the last user message, truncated.
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "claude-haiku-4-5-20251001")
+JUDGE_TIMEOUT_SECONDS = float(os.getenv("JUDGE_TIMEOUT_SECONDS", "3"))
+JUDGE_MAX_INPUT_CHARS = int(os.getenv("JUDGE_MAX_INPUT_CHARS", "2000"))
+
+# How often the in-memory switch-rules cache reloads from Postgres. Writes refresh
+# it immediately; this is just the background staleness bound.
+RULES_REFRESH_SECONDS = float(os.getenv("RULES_REFRESH_SECONDS", "30"))

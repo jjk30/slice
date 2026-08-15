@@ -1,3 +1,4 @@
+import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import NamedTuple
 
@@ -25,6 +26,7 @@ PRICES: dict[str, Price] = {
     # We bill the standard rate so the table stays date-independent.
     "claude-sonnet-5": _price("3.00", "15.00"),
     "claude-sonnet-4-6": _price("3.00", "15.00"),
+    "claude-sonnet-4-5": _price("3.00", "15.00"),
     "claude-haiku-4-5": _price("1.00", "5.00"),
     "claude-haiku-4-5-20251001": _price("1.00", "5.00"),
     # --- Other providers, priced by the model name the client sends. ---
@@ -51,12 +53,30 @@ PER_MILLION = Decimal(1_000_000)
 # Six decimals: a single cheap request can cost well under a cent.
 RESOLUTION = Decimal("0.000001")
 
+# A dated snapshot suffix like "-20250929" on an otherwise-known family name.
+# Providers ship these alongside the undated alias at the same list price, so we
+# strip the date and price the family. Truly unknown names still resolve to None.
+_DATE_SUFFIX = re.compile(r"-\d{8}$")
+
+
+def _lookup(model: str | None) -> Price | None:
+    """Price for a model name, resolving a dated snapshot to its family price."""
+    if not model:
+        return None
+    price = PRICES.get(model)
+    if price is not None:
+        return price
+    # e.g. claude-sonnet-4-5-20250929 -> claude-sonnet-4-5. Only one strip, and
+    # only a trailing 8-digit date; anything else is left untouched.
+    base = _DATE_SUFFIX.sub("", model)
+    return PRICES.get(base) if base != model else None
+
 
 def cost_usd(
     model: str | None, input_tokens: int | None, output_tokens: int | None
 ) -> Decimal | None:
     """Dollar cost of one request, or None when the model or the usage is unknown."""
-    price = PRICES.get(model) if model else None
+    price = _lookup(model)
     if price is None:
         return None
     if input_tokens is None and output_tokens is None:

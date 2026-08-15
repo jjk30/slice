@@ -129,6 +129,36 @@ async def test_unreachable_database_starts_disabled():
 
 
 @respx.mock
+async def test_sonnet_4_5_logs_a_real_cost(client, writer):
+    respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=RESPONSE))
+
+    # claude-sonnet-4-5 is in the price table, so a Sonnet-served request must log a
+    # non-null cost (which is what then lands on the budget counter).
+    r = await client.post("/v1/messages", json={**REQUEST, "model": "claude-sonnet-4-5"})
+
+    assert r.status_code == 200
+    saved = writer.records[0]
+    assert saved.model == "claude-sonnet-4-5"
+    # 1000 in at $3/M plus 500 out at $15/M.
+    assert saved.cost_usd == Decimal("0.010500")
+
+
+@respx.mock
+async def test_dated_sonnet_snapshot_logs_a_real_cost(client, writer):
+    respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=RESPONSE))
+
+    # A dated snapshot name resolves to the same family price, not null.
+    r = await client.post(
+        "/v1/messages", json={**REQUEST, "model": "claude-sonnet-4-5-20250929"}
+    )
+
+    assert r.status_code == 200
+    saved = writer.records[0]
+    assert saved.model == "claude-sonnet-4-5-20250929"
+    assert saved.cost_usd == Decimal("0.010500")
+
+
+@respx.mock
 async def test_unknown_model_saves_null_cost_with_tokens(client, writer):
     respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=RESPONSE))
 

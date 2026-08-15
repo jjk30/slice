@@ -65,6 +65,22 @@ export ANTHROPIC_BASE_URL=http://localhost:8080
 
 slice speaks Anthropic format natively and also serves an OpenAI-compatible endpoint, so tools like Codex can point at it too.
 
+## Switch rules API (local only, no auth yet)
+
+The router applies per-team switch rules ahead of the auto judge. Manage them over a small admin API:
+
+```bash
+curl localhost:8080/admin/rules
+curl -X POST localhost:8080/admin/rules \
+  -H 'content-type: application/json' \
+  -d '{"team":"acme","from_model":"claude-opus-5","to_model":"claude-haiku-4-5-20251001"}'
+curl -X DELETE localhost:8080/admin/rules/1
+```
+
+> **Warning — these endpoints are unauthenticated.** Auth lands in a later phase (12). Until then, `/admin/*` is intended for local use only; do not expose it on a public interface. Writes persist to Postgres and refresh the in-memory rules cache immediately.
+
+Routing is applied on the native `/v1/messages` endpoint only. The OpenAI-compatible `/v1/chat/completions` endpoint is still a straight pass-through — it is not wired to the router yet.
+
 ## Tech stack
 
 **Backend.** Python, FastAPI, httpx. LangGraph for the router and agent loop. LangChain for the RAG pieces.

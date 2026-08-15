@@ -2,8 +2,21 @@ import fakeredis.aioredis
 import httpx
 import pytest
 
-from app import redis_layer
+from app import config, redis_layer
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def routing_off_by_default(monkeypatch):
+    """Phase-5 auto-routing is opt-in per test.
+
+    Production defaults ``AUTO_ROUTE_ENABLED`` to true, but with it on every
+    non-cached native request would fire a judge call — which would change the
+    upstream call counts the phases 1-4 suites assert. Default it off here so those
+    suites see pre-router behavior; the router tests turn it back on explicitly.
+    Pins and switch rules are unaffected (they don't depend on this flag).
+    """
+    monkeypatch.setattr(config, "AUTO_ROUTE_ENABLED", False)
 
 
 @pytest.fixture(autouse=True)

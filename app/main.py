@@ -12,8 +12,11 @@ from starlette.background import BackgroundTask
 from app import config, pricing, redis_layer
 from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import STREAM_DOWNGRADED_HEADER
+from app.admin import router as admin_router
 from app.db import Database, RequestRecord
 from app.redis_layer import CACHE_HEADER
+from app.router import ROUTED_HEADER, route
+from app.rules import RulesCache
 from app.openai_inbound import (
     AnthropicEventReader,
     AnthropicToOpenAIStream,
@@ -54,6 +57,11 @@ async def lifespan(app: FastAPI):
     # fails open, so a down server costs nothing until it comes back.
     app.state.redis = redis_layer.make_redis()
 
+    # Phase 5: the switch-rules cache reads from the same database (None when
+    # logging is off, which just means no rules). It reloads on a timer and after
+    # every admin write, and keeps last-known rules if a reload ever fails.
+    app.state.rules = RulesCache(app.state.db)
+
     yield
 
     client = getattr(app.state, "client", None)
@@ -70,6 +78,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="slice gateway", lifespan=lifespan)
+app.include_router(admin_router)
 
 
 def get_client(app: FastAPI) -> httpx.AsyncClient:
@@ -87,6 +96,16 @@ def get_redis(app: FastAPI):
     return getattr(app.state, "redis", None)
 
 
+def get_rules(app: FastAPI) -> RulesCache:
+    # Created lazily for code paths that skip lifespan (unit tests). Bound to
+    # whatever db is on app.state at first use; a None db just means no rules.
+    rules = getattr(app.state, "rules", None)
+    if rules is None:
+        rules = RulesCache(getattr(app.state, "db", None))
+        app.state.rules = rules
+    return rules
+
+
 def anthropic_error(status_code: int, error_type: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -101,18 +120,29 @@ def openai_error(status_code: int, error_type: str, message: str) -> JSONRespons
     )
 
 
-def log_request(method: str, path: str, model: str | None, status: int, started: float) -> None:
-    logger.info(
-        json.dumps(
-            {
-                "method": method,
-                "path": path,
-                "model": model,
-                "status": status,
-                "latency_ms": round((time.perf_counter() - started) * 1000, 1),
-            }
-        )
-    )
+def log_request(
+    method: str,
+    path: str,
+    model: str | None,
+    status: int,
+    started: float,
+    routed_from: str | None = None,
+    verdict: str | None = None,
+) -> None:
+    entry = {
+        "method": method,
+        "path": path,
+        "model": model,
+        "status": status,
+        "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+    # Phase 5: present only on the native endpoint once the router has run, so
+    # the phase 1-4 log shape is untouched everywhere else.
+    if routed_from is not None:
+        entry["routed_from"] = routed_from
+    if verdict is not None:
+        entry["verdict"] = verdict
+    logger.info(json.dumps(entry))
 
 
 def elapsed_ms(started: float) -> float:
@@ -126,6 +156,7 @@ def record_task(
     stream: bool,
     input_tokens: int | None = None,
     output_tokens: int | None = None,
+    routed_from: str | None = None,
 ) -> BackgroundTask | None:
     """Build the row and hand it to a background task, so the write lands after the response.
 
@@ -143,6 +174,7 @@ def record_task(
         output_tokens=output_tokens,
         cost_usd=pricing.cost_usd(model, input_tokens, output_tokens),
         stream=stream,
+        routed_from=routed_from,
     )
     return BackgroundTask(database.record, record)
 
@@ -159,6 +191,7 @@ def after_response(
     cached: bool = False,
     cache_key: str | None = None,
     cache_body: bytes | None = None,
+    routed_from: str | None = None,
 ) -> BackgroundTask:
     """Post-response work for a gated /v1/messages request, in one background task.
 
@@ -183,6 +216,7 @@ def after_response(
                     cost_usd=cost,
                     stream=stream,
                     cached=cached,
+                    routed_from=routed_from,
                 )
             )
         # A cache hit cost nothing to serve, so it never moves the budget.
@@ -244,30 +278,52 @@ async def messages(request: Request):
         if cached_body is not None:
             return _anthropic_cache_hit(cached_body, request, model, started, team)
 
-    try:
-        adapter = select_adapter(model)
-    except AdapterError as exc:
-        return _anthropic_error_response(exc, request.method, path, model, started, wants_stream)
-
+    # --- Phase 5 routing: pin ▸ rule ▸ auto. After the cache check (a hit above
+    # already returned, so a cache hit never routes or judges), before the forward.
+    # route() never raises and fails open to the client's model, so a routing
+    # problem can't become a client-facing error. The judge's own cost, if it ran,
+    # is billed to the team inside route().
     client = get_client(app)
+    decision = await route(payload, request.headers, team, redis, client, get_rules(app))
+    served_model = decision.served_model
+    routed_from = decision.routed_from
+    verdict = decision.verdict
+    if decision.routed:
+        # Swap the model in both the parsed payload (adapters that rebuild the
+        # request read it) and the raw bytes (the Anthropic adapter forwards them).
+        payload = {**payload, "model": served_model}
+        body = json.dumps(payload).encode()
+
+    try:
+        adapter = select_adapter(served_model)
+    except AdapterError as exc:
+        return _anthropic_error_response(
+            exc, request.method, path, served_model, started, wants_stream, routed_from, verdict
+        )
+
     try:
         result = await adapter.send(
             payload, body, request.headers, stream=wants_stream, client=client
         )
     except AdapterError as exc:
         # Missing server key and the like: never touched the network (rule 9).
-        return _anthropic_error_response(exc, request.method, path, model, started, wants_stream)
+        return _anthropic_error_response(
+            exc, request.method, path, served_model, started, wants_stream, routed_from, verdict
+        )
     except httpx.TimeoutException:
         return _anthropic_upstream_error(
-            502, "The request to the AI provider timed out.", request, model, started, wants_stream
+            502, "The request to the AI provider timed out.",
+            request, served_model, started, wants_stream, routed_from, verdict,
         )
     except httpx.RequestError:
         return _anthropic_upstream_error(
-            502, "Could not reach the AI provider.", request, model, started, wants_stream
+            502, "Could not reach the AI provider.",
+            request, served_model, started, wants_stream, routed_from, verdict,
         )
 
     return _finalize_anthropic(
-        result, request.method, path, model, started, wants_stream, team, cache_key
+        result, request.method, path, served_model, started, wants_stream, team, cache_key,
+        routed_from=routed_from, verdict=verdict, routed_header=decision.routed_header,
     )
 
 
@@ -296,25 +352,37 @@ def _anthropic_cache_hit(body, request, model, started, team):
     )
 
 
-def _anthropic_error_response(exc, method, path, model, started, wants_stream):
-    log_request(method, path, model, exc.status_code, started)
+def _anthropic_error_response(
+    exc, method, path, model, started, wants_stream, routed_from=None, verdict=None
+):
+    log_request(method, path, model, exc.status_code, started, routed_from, verdict)
     response = anthropic_error(exc.status_code, exc.error_type, exc.message)
-    response.background = record_task(model, exc.status_code, started, stream=wants_stream)
+    response.background = record_task(
+        model, exc.status_code, started, stream=wants_stream, routed_from=routed_from
+    )
     return response
 
 
-def _anthropic_upstream_error(status, message, request, model, started, wants_stream):
-    log_request(request.method, request.url.path, model, status, started)
+def _anthropic_upstream_error(
+    status, message, request, model, started, wants_stream, routed_from=None, verdict=None
+):
+    log_request(request.method, request.url.path, model, status, started, routed_from, verdict)
     response = anthropic_error(status, "api_error", message)
-    response.background = record_task(model, status, started, stream=wants_stream)
+    response.background = record_task(
+        model, status, started, stream=wants_stream, routed_from=routed_from
+    )
     return response
 
 
 def _finalize_anthropic(
-    result: AdapterResult, method, path, model, started, wants_stream, team, cache_key
+    result: AdapterResult, method, path, model, started, wants_stream, team, cache_key,
+    *, routed_from=None, verdict=None, routed_header=None,
 ):
     headers = _clean_headers(result.headers)
-    log_request(method, path, model, result.status_code, started)
+    # When the served model differs from the requested one, tell the client.
+    if routed_header is not None:
+        headers[ROUTED_HEADER] = routed_header
+    log_request(method, path, model, result.status_code, started, routed_from, verdict)
 
     if result.is_stream:
         usage = StreamUsage()
@@ -343,6 +411,7 @@ def _finalize_anthropic(
                 team,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
+                routed_from=routed_from,
             )()
 
         return StreamingResponse(
@@ -368,6 +437,7 @@ def _finalize_anthropic(
             output_tokens=output_tokens,
             cache_key=cache_key,
             cache_body=content,
+            routed_from=routed_from,
         ),
     )
 

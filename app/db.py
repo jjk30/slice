@@ -29,9 +29,19 @@ CREATE TABLE IF NOT EXISTS requests (
 
 INSERT = """
 INSERT INTO requests
-    (model, status, latency_ms, input_tokens, output_tokens, cost_usd, stream, cached)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    (model, status, latency_ms, input_tokens, output_tokens, cost_usd, stream, cached,
+     routed_from)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 """
+
+# --- Switch rules (phase 5) -------------------------------------------------
+SELECT_RULES = "SELECT id, team, from_model, to_model FROM switch_rules ORDER BY id"
+INSERT_RULE = """
+INSERT INTO switch_rules (team, from_model, to_model)
+VALUES ($1, $2, $3)
+RETURNING id, team, from_model, to_model
+"""
+DELETE_RULE = "DELETE FROM switch_rules WHERE id = $1 RETURNING id"
 
 
 @dataclass(frozen=True)
@@ -45,6 +55,9 @@ class RequestRecord:
     stream: bool
     # True for a row that was served from the Redis cache (phase 4).
     cached: bool = False
+    # The client's original model when the router swapped it (phase 5); None when
+    # the request was served with the model the client asked for.
+    routed_from: str | None = None
 
 
 class Database:
@@ -119,9 +132,39 @@ class Database:
                     record.cost_usd,
                     record.stream,
                     record.cached,
+                    record.routed_from,
                 )
         except Exception as exc:
             # The response is already out the door; note it and drop the row.
             logger.warning(
                 json.dumps({"event": "db_unavailable", "stage": "write", "error": str(exc)})
             )
+
+    # --- Switch rules (phase 5) --------------------------------------------
+    # Unlike record(), these return values the caller needs, so they raise on
+    # failure rather than swallowing it. The rules cache and the admin API each
+    # decide how to fail open (keep last-known rules; return a 503) around them.
+
+    async def load_rules(self) -> list[dict]:
+        """Every switch rule, oldest first. Raises if the pool is unavailable."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(SELECT_RULES)
+        return [dict(row) for row in rows]
+
+    async def add_rule(self, team: str, from_model: str, to_model: str) -> dict:
+        """Insert one rule and return the stored row (with its new id)."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(INSERT_RULE, team, from_model, to_model)
+        return dict(row)
+
+    async def delete_rule(self, rule_id: int) -> bool:
+        """Delete one rule by id. True when a row was removed, False otherwise."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(DELETE_RULE, rule_id)
+        return row is not None
