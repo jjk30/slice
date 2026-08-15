@@ -132,11 +132,14 @@ async def test_unreachable_database_starts_disabled():
 async def test_unknown_model_saves_null_cost_with_tokens(client, writer):
     respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=RESPONSE))
 
-    r = await client.post("/v1/messages", json={**REQUEST, "model": "some-other-model-v9"})
+    # A model that still routes (claude- prefix -> Anthropic) but is absent from
+    # the price table: tokens are saved, cost stays null. A name that matches no
+    # provider is a routing 400 now (phase 3) and is covered in the adapter tests.
+    r = await client.post("/v1/messages", json={**REQUEST, "model": "claude-nonexistent-v9"})
 
     assert r.status_code == 200
     saved = writer.records[0]
-    assert saved.model == "some-other-model-v9"
+    assert saved.model == "claude-nonexistent-v9"
     assert saved.cost_usd is None
     assert saved.input_tokens == 1000
     assert saved.output_tokens == 500

@@ -27,6 +27,24 @@ PRICES: dict[str, Price] = {
     "claude-sonnet-4-6": _price("3.00", "15.00"),
     "claude-haiku-4-5": _price("1.00", "5.00"),
     "claude-haiku-4-5-20251001": _price("1.00", "5.00"),
+    # --- Other providers, priced by the model name the client sends. ---
+    # Approximate public list rates as of this code's knowledge; a model missing
+    # here still logs its tokens and simply carries a null cost. Update freely.
+    # OpenAI (current gpt-5.2 family).
+    "gpt-5.2": _price("1.25", "10.00"),
+    "gpt-5.2-mini": _price("0.25", "2.00"),
+    "gpt-5-mini": _price("0.25", "2.00"),
+    "gpt-5.1": _price("1.25", "10.00"),
+    "gpt-5.1-mini": _price("0.25", "2.00"),
+    # Google Gemini flash models.
+    # gemini-3.6-flash has an intro rate through 2026-12; we bill the higher
+    # standard rate so cost estimates stay upper bounds and date-independent.
+    "gemini-3.6-flash": _price("1.50", "7.50"),
+    "gemini-2.5-flash": _price("0.30", "2.50"),
+    "gemini-2.5-flash-lite": _price("0.10", "0.40"),
+    "gemini-2.0-flash": _price("0.10", "0.40"),
+    # NIM models have no public per-token list price, so they are intentionally
+    # absent: their tokens are logged and cost_usd stays null.
 }
 
 PER_MILLION = Decimal(1_000_000)

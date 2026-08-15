@@ -9,20 +9,20 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
 from app import config, pricing
+from app.adapters import AdapterError, AdapterResult, select_adapter
+from app.adapters.base import STREAM_DOWNGRADED_HEADER
 from app.db import Database, RequestRecord
+from app.openai_inbound import (
+    AnthropicEventReader,
+    AnthropicToOpenAIStream,
+    anthropic_error_to_openai,
+    anthropic_to_openai_response,
+    openai_to_anthropic_request,
+)
 from app.usage import StreamUsage, usage_from_body
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("slice.gateway")
-
-# Only these client headers reach the provider; the server never adds a key of its own.
-FORWARD_REQUEST_HEADERS = {
-    "x-api-key",
-    "anthropic-version",
-    "anthropic-beta",
-    "content-type",
-    "accept",
-}
 
 # Recomputed by the framework, or invalid after httpx decodes the body.
 EXCLUDE_RESPONSE_HEADERS = {
@@ -63,9 +63,10 @@ app = FastAPI(title="slice gateway", lifespan=lifespan)
 
 
 def get_client(app: FastAPI) -> httpx.AsyncClient:
+    # No base_url: adapters address each provider by its own absolute URL.
     client = getattr(app.state, "client", None)
     if client is None or client.is_closed:
-        client = httpx.AsyncClient(base_url=config.ANTHROPIC_BASE_URL, timeout=TIMEOUT)
+        client = httpx.AsyncClient(timeout=TIMEOUT)
         app.state.client = client
     return client
 
@@ -74,6 +75,13 @@ def anthropic_error(status_code: int, error_type: str, message: str) -> JSONResp
     return JSONResponse(
         status_code=status_code,
         content={"type": "error", "error": {"type": error_type, "message": message}},
+    )
+
+
+def openai_error(status_code: int, error_type: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"message": message, "type": error_type, "code": None}},
     )
 
 
@@ -123,6 +131,13 @@ def record_task(
     return BackgroundTask(database.record, record)
 
 
+def _clean_headers(headers: dict[str, str]) -> dict[str, str]:
+    return {k: v for k, v in headers.items() if k.lower() not in EXCLUDE_RESPONSE_HEADERS}
+
+
+# --- /v1/messages: native Anthropic in, Anthropic out -----------------------
+
+
 @app.post("/v1/messages")
 async def messages(request: Request):
     started = time.perf_counter()
@@ -138,61 +153,73 @@ async def messages(request: Request):
 
     model = payload.get("model") if isinstance(payload, dict) else None
     wants_stream = isinstance(payload, dict) and payload.get("stream") is True
-
-    headers = {
-        name: value
-        for name, value in request.headers.items()
-        if name.lower() in FORWARD_REQUEST_HEADERS
-    }
-
-    client = get_client(app)
-    upstream_request = client.build_request("POST", "/v1/messages", content=body, headers=headers)
+    path = request.url.path
 
     try:
-        upstream = await client.send(upstream_request, stream=wants_stream)
+        adapter = select_adapter(model)
+    except AdapterError as exc:
+        return _anthropic_error_response(exc, request.method, path, model, started, wants_stream)
+
+    client = get_client(app)
+    try:
+        result = await adapter.send(
+            payload, body, request.headers, stream=wants_stream, client=client
+        )
+    except AdapterError as exc:
+        # Missing server key and the like: never touched the network (rule 9).
+        return _anthropic_error_response(exc, request.method, path, model, started, wants_stream)
     except httpx.TimeoutException:
-        log_request(request.method, request.url.path, model, 502, started)
-        response = anthropic_error(502, "api_error", "The request to the AI provider timed out.")
-        response.background = record_task(model, 502, started, stream=wants_stream)
-        return response
+        return _anthropic_upstream_error(
+            502, "The request to the AI provider timed out.", request, model, started, wants_stream
+        )
     except httpx.RequestError:
-        log_request(request.method, request.url.path, model, 502, started)
-        response = anthropic_error(502, "api_error", "Could not reach the AI provider.")
-        response.background = record_task(model, 502, started, stream=wants_stream)
-        return response
+        return _anthropic_upstream_error(
+            502, "Could not reach the AI provider.", request, model, started, wants_stream
+        )
 
-    response_headers = {
-        name: value
-        for name, value in upstream.headers.items()
-        if name.lower() not in EXCLUDE_RESPONSE_HEADERS
-    }
+    return _finalize_anthropic(result, request.method, path, model, started, wants_stream)
 
-    log_request(request.method, request.url.path, model, upstream.status_code, started)
 
-    if wants_stream:
+def _anthropic_error_response(exc, method, path, model, started, wants_stream):
+    log_request(method, path, model, exc.status_code, started)
+    response = anthropic_error(exc.status_code, exc.error_type, exc.message)
+    response.background = record_task(model, exc.status_code, started, stream=wants_stream)
+    return response
+
+
+def _anthropic_upstream_error(status, message, request, model, started, wants_stream):
+    log_request(request.method, request.url.path, model, status, started)
+    response = anthropic_error(status, "api_error", message)
+    response.background = record_task(model, status, started, stream=wants_stream)
+    return response
+
+
+def _finalize_anthropic(result: AdapterResult, method, path, model, started, wants_stream):
+    headers = _clean_headers(result.headers)
+    log_request(method, path, model, result.status_code, started)
+
+    if result.is_stream:
         usage = StreamUsage()
 
         async def relay():
             try:
-                async for chunk in upstream.aiter_bytes():
+                async for chunk in result.stream:
                     usage.feed(chunk)
                     yield chunk
             except httpx.HTTPError:
-                # Status is already sent; all we can do is stop the stream and record it.
                 logger.warning(
-                    json.dumps({"path": request.url.path, "model": model, "event": "stream_interrupted"})
+                    json.dumps({"path": path, "model": model, "event": "stream_interrupted"})
                 )
             finally:
-                await upstream.aclose()
+                if result.aclose is not None:
+                    await result.aclose()
 
         async def record_stream():
-            # Built here rather than up front so latency covers the whole stream
-            # and the usage counters are the ones the stream actually carried.
             task = record_task(
                 model,
-                upstream.status_code,
+                result.status_code,
                 started,
-                stream=True,
+                stream=wants_stream,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
             )
@@ -201,22 +228,180 @@ async def messages(request: Request):
 
         return StreamingResponse(
             relay(),
-            status_code=upstream.status_code,
-            headers=response_headers,
+            status_code=result.status_code,
+            headers=headers,
             background=BackgroundTask(record_stream),
         )
 
-    input_tokens, output_tokens = usage_from_body(upstream.content)
-
+    input_tokens, output_tokens = usage_from_body(result.content or b"")
     return Response(
-        content=upstream.content,
-        status_code=upstream.status_code,
-        headers=response_headers,
+        content=result.content,
+        status_code=result.status_code,
+        headers=headers,
         background=record_task(
             model,
-            upstream.status_code,
+            result.status_code,
             started,
-            stream=False,
+            stream=wants_stream,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        ),
+    )
+
+
+# --- /v1/chat/completions: OpenAI in, OpenAI out (rule 10) ------------------
+
+
+def _inbound_provider_headers(headers) -> dict[str, str]:
+    """Headers for the downstream adapter.
+
+    Only the Anthropic adapter reads these; it needs the caller's key, which a
+    Codex-style client sends as a bearer token. The other providers ignore this
+    and use their own server key.
+    """
+    out = {
+        "content-type": "application/json",
+        "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
+    }
+    auth = headers.get("authorization")
+    if auth and auth.lower().startswith("bearer "):
+        out["x-api-key"] = auth[len("bearer ") :].strip()
+    elif headers.get("x-api-key"):
+        out["x-api-key"] = headers["x-api-key"]
+    return out
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    started = time.perf_counter()
+    body = await request.body()
+    path = request.url.path
+
+    try:
+        inbound = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        inbound = None
+    if not isinstance(inbound, dict):
+        log_request(request.method, path, None, 400, started)
+        response = openai_error(400, "invalid_request_error", "Request body is not valid JSON.")
+        response.background = record_task(None, 400, started, stream=False)
+        return response
+
+    payload = openai_to_anthropic_request(inbound)
+    model = payload.get("model")
+    wants_stream = payload.get("stream") is True
+
+    try:
+        adapter = select_adapter(model)
+    except AdapterError as exc:
+        return _openai_error_response(exc, request.method, path, model, started, wants_stream)
+
+    provider_headers = _inbound_provider_headers(request.headers)
+    anthropic_raw = json.dumps(payload).encode()
+
+    client = get_client(app)
+    try:
+        result = await adapter.send(
+            payload, anthropic_raw, provider_headers, stream=wants_stream, client=client
+        )
+    except AdapterError as exc:
+        return _openai_error_response(exc, request.method, path, model, started, wants_stream)
+    except httpx.TimeoutException:
+        return _openai_upstream_error(
+            502, "The request to the AI provider timed out.", request, model, started, wants_stream
+        )
+    except httpx.RequestError:
+        return _openai_upstream_error(
+            502, "Could not reach the AI provider.", request, model, started, wants_stream
+        )
+
+    return _finalize_openai(result, request.method, path, model, started, wants_stream)
+
+
+def _openai_error_response(exc, method, path, model, started, wants_stream):
+    log_request(method, path, model, exc.status_code, started)
+    response = openai_error(exc.status_code, exc.error_type, exc.message)
+    response.background = record_task(model, exc.status_code, started, stream=wants_stream)
+    return response
+
+
+def _openai_upstream_error(status, message, request, model, started, wants_stream):
+    log_request(request.method, request.url.path, model, status, started)
+    response = openai_error(status, "api_error", message)
+    response.background = record_task(model, status, started, stream=wants_stream)
+    return response
+
+
+def _finalize_openai(result: AdapterResult, method, path, model, started, wants_stream):
+    log_request(method, path, model, result.status_code, started)
+    created = int(time.time())
+
+    if result.is_stream:
+        usage = StreamUsage()
+
+        async def relay():
+            reader = AnthropicEventReader()
+            translator = AnthropicToOpenAIStream("chatcmpl-slice", created, model)
+            try:
+                async for chunk in result.stream:
+                    usage.feed(chunk)
+                    for event in reader.feed(chunk):
+                        for out in translator.translate(event):
+                            yield out
+            except httpx.HTTPError:
+                logger.warning(
+                    json.dumps({"path": path, "model": model, "event": "stream_interrupted"})
+                )
+            finally:
+                if result.aclose is not None:
+                    await result.aclose()
+            yield b"data: [DONE]\n\n"
+
+        async def record_stream():
+            task = record_task(
+                model,
+                result.status_code,
+                started,
+                stream=wants_stream,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+            )
+            if task is not None:
+                await task()
+
+        headers = {"content-type": "text/event-stream"}
+        # A downgrade upstream is still a downgrade to the OpenAI client.
+        if result.headers.get(STREAM_DOWNGRADED_HEADER):
+            headers[STREAM_DOWNGRADED_HEADER] = "true"
+
+        return StreamingResponse(
+            relay(),
+            status_code=result.status_code,
+            headers=headers,
+            background=BackgroundTask(record_stream),
+        )
+
+    content = result.content or b""
+    input_tokens, output_tokens = usage_from_body(content)
+
+    if result.status_code >= 400:
+        out = anthropic_error_to_openai(content)
+    else:
+        try:
+            message = json.loads(content)
+            out = json.dumps(anthropic_to_openai_response(message, created=created)).encode()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            out = content
+
+    return Response(
+        content=out,
+        status_code=result.status_code,
+        headers={"content-type": "application/json"},
+        background=record_task(
+            model,
+            result.status_code,
+            started,
+            stream=wants_stream,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         ),
