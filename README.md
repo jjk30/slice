@@ -121,7 +121,7 @@ slice speaks Anthropic format natively and also serves an OpenAI-compatible endp
 16. **AWS deploy.** Networking and ECS Fargate in Terraform, real domain and HTTPS.
 17. **Ops monitoring.** Prometheus and Grafana on the live deploy.
 18. **AWS scanner.** Read-only role, mistake flags, the AWS bill on the dashboard.
-19. **Kubernetes.** Kept, not skipped.
+19. **Kubernetes.** 
 
 ## The demo that sells it
 
