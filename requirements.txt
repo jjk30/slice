@@ -5,6 +5,9 @@ asyncpg
 redis
 langgraph
 langchain-core
+sentence-transformers
+faiss-cpu
+numpy
 pytest
 pytest-asyncio
 respx

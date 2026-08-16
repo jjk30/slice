@@ -14,8 +14,10 @@ from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import STREAM_DOWNGRADED_HEADER
 from app.admin import router as admin_router
 from app.db import Database, RequestRecord
+from app.rag import retriever as rag_retriever
+from app.rag.prompt import extract_prompt_text
 from app.redis_layer import CACHE_HEADER
-from app.router import ROUTED_HEADER, route
+from app.router import RAG_HEADER, ROUTED_HEADER, route
 from app.rules import RulesCache
 from app.openai_inbound import (
     AnthropicEventReader,
@@ -62,6 +64,10 @@ async def lifespan(app: FastAPI):
     # every admin write, and keeps last-known rules if a reload ever fails.
     app.state.rules = RulesCache(app.state.db)
 
+    # Phase 6: load the RAG index once at startup. A missing or broken index leaves
+    # an empty retriever (retrieval returns nothing), and RAG off skips it entirely.
+    app.state.retriever = rag_retriever.load_default() if config.RAG_ENABLED else None
+
     yield
 
     client = getattr(app.state, "client", None)
@@ -106,6 +112,12 @@ def get_rules(app: FastAPI) -> RulesCache:
     return rules
 
 
+def get_retriever(app: FastAPI):
+    # None means no RAG index is wired (lifespan not run, e.g. a unit test, or RAG
+    # disabled). route() treats None as "skip retrieval", so this fails open.
+    return getattr(app.state, "retriever", None)
+
+
 def anthropic_error(status_code: int, error_type: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -128,6 +140,7 @@ def log_request(
     started: float,
     routed_from: str | None = None,
     verdict: str | None = None,
+    rag: str | None = None,
 ) -> None:
     entry = {
         "method": method,
@@ -142,6 +155,9 @@ def log_request(
         entry["routed_from"] = routed_from
     if verdict is not None:
         entry["verdict"] = verdict
+    # Phase 6: the retrieval outcome, present only when RAG actually ran.
+    if rag is not None:
+        entry["rag"] = rag
     logger.info(json.dumps(entry))
 
 
@@ -157,6 +173,8 @@ def record_task(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     routed_from: str | None = None,
+    prompt_text: str | None = None,
+    team: str = "default",
 ) -> BackgroundTask | None:
     """Build the row and hand it to a background task, so the write lands after the response.
 
@@ -175,6 +193,8 @@ def record_task(
         cost_usd=pricing.cost_usd(model, input_tokens, output_tokens),
         stream=stream,
         routed_from=routed_from,
+        prompt_text=prompt_text,
+        team=team,
     )
     return BackgroundTask(database.record, record)
 
@@ -192,6 +212,7 @@ def after_response(
     cache_key: str | None = None,
     cache_body: bytes | None = None,
     routed_from: str | None = None,
+    prompt_text: str | None = None,
 ) -> BackgroundTask:
     """Post-response work for a gated /v1/messages request, in one background task.
 
@@ -217,6 +238,8 @@ def after_response(
                     stream=stream,
                     cached=cached,
                     routed_from=routed_from,
+                    prompt_text=prompt_text,
+                    team=team,
                 )
             )
         # A cache hit cost nothing to serve, so it never moves the budget.
@@ -252,6 +275,11 @@ async def messages(request: Request):
     wants_stream = isinstance(payload, dict) and payload.get("stream") is True
     path = request.url.path
 
+    # Phase 6: the incoming prompt, logged so the per-team RAG index can be rebuilt
+    # offline — but only when RAG_STORE_PROMPTS is on. Off means we never store it.
+    # Extraction never raises; a null just means no prompt stored.
+    prompt_text = extract_prompt_text(payload) if config.RAG_STORE_PROMPTS else None
+
     team = redis_layer.team_from_headers(request.headers)
     redis = get_redis(app)
 
@@ -261,14 +289,14 @@ async def messages(request: Request):
     if not await redis_layer.check_rate_limit(redis, team):
         return _anthropic_gate_reject(
             "Rate limit exceeded: too many requests this minute.",
-            request, model, started, wants_stream, team,
+            request, model, started, wants_stream, team, prompt_text,
         )
 
     if (await redis_layer.check_budget(redis, team)).blocked:
         # Blocked here never reaches the provider.
         return _anthropic_gate_reject(
             "Monthly budget exceeded for this team.",
-            request, model, started, wants_stream, team,
+            request, model, started, wants_stream, team, prompt_text,
         )
 
     cache_key = None
@@ -276,7 +304,9 @@ async def messages(request: Request):
         cache_key = redis_layer.cache_key(team, payload)
         cached_body = await redis_layer.cache_get(redis, cache_key)
         if cached_body is not None:
-            return _anthropic_cache_hit(cached_body, request, model, started, team)
+            return _anthropic_cache_hit(
+                cached_body, request, model, started, team, prompt_text
+            )
 
     # --- Phase 5 routing: pin ▸ rule ▸ auto. After the cache check (a hit above
     # already returned, so a cache hit never routes or judges), before the forward.
@@ -284,10 +314,14 @@ async def messages(request: Request):
     # problem can't become a client-facing error. The judge's own cost, if it ran,
     # is billed to the team inside route().
     client = get_client(app)
-    decision = await route(payload, request.headers, team, redis, client, get_rules(app))
+    decision = await route(
+        payload, request.headers, team, redis, client, get_rules(app),
+        retriever=get_retriever(app),
+    )
     served_model = decision.served_model
     routed_from = decision.routed_from
     verdict = decision.verdict
+    rag = decision.rag
     if decision.routed:
         # Swap the model in both the parsed payload (adapters that rebuild the
         # request read it) and the raw bytes (the Anthropic adapter forwards them).
@@ -298,7 +332,8 @@ async def messages(request: Request):
         adapter = select_adapter(served_model)
     except AdapterError as exc:
         return _anthropic_error_response(
-            exc, request.method, path, served_model, started, wants_stream, routed_from, verdict
+            exc, request.method, path, served_model, started, wants_stream, routed_from,
+            verdict, rag, prompt_text, team,
         )
 
     try:
@@ -308,35 +343,41 @@ async def messages(request: Request):
     except AdapterError as exc:
         # Missing server key and the like: never touched the network (rule 9).
         return _anthropic_error_response(
-            exc, request.method, path, served_model, started, wants_stream, routed_from, verdict
+            exc, request.method, path, served_model, started, wants_stream, routed_from,
+            verdict, rag, prompt_text, team,
         )
     except httpx.TimeoutException:
         return _anthropic_upstream_error(
             502, "The request to the AI provider timed out.",
-            request, served_model, started, wants_stream, routed_from, verdict,
+            request, served_model, started, wants_stream, routed_from, verdict, rag,
+            prompt_text, team,
         )
     except httpx.RequestError:
         return _anthropic_upstream_error(
             502, "Could not reach the AI provider.",
-            request, served_model, started, wants_stream, routed_from, verdict,
+            request, served_model, started, wants_stream, routed_from, verdict, rag,
+            prompt_text, team,
         )
 
     return _finalize_anthropic(
         result, request.method, path, served_model, started, wants_stream, team, cache_key,
         routed_from=routed_from, verdict=verdict, routed_header=decision.routed_header,
+        rag=rag, prompt_text=prompt_text,
     )
 
 
-def _anthropic_gate_reject(message, request, model, started, wants_stream, team):
+def _anthropic_gate_reject(message, request, model, started, wants_stream, team, prompt_text=None):
     """A clean Anthropic-shaped 429 from a rate-limit or budget block."""
     status = 429
     log_request(request.method, request.url.path, model, status, started)
     response = anthropic_error(status, "rate_limit_error", message)
-    response.background = after_response(model, status, started, wants_stream, team)
+    response.background = after_response(
+        model, status, started, wants_stream, team, prompt_text=prompt_text
+    )
     return response
 
 
-def _anthropic_cache_hit(body, request, model, started, team):
+def _anthropic_cache_hit(body, request, model, started, team, prompt_text=None):
     """Serve a stored 200 body, flagged as a cache hit and logged at cost 0."""
     status = 200
     log_request(request.method, request.url.path, model, status, started)
@@ -348,41 +389,51 @@ def _anthropic_cache_hit(body, request, model, started, team):
         background=after_response(
             model, status, started, False, team,
             input_tokens=input_tokens, output_tokens=output_tokens, cached=True,
+            prompt_text=prompt_text,
         ),
     )
 
 
 def _anthropic_error_response(
-    exc, method, path, model, started, wants_stream, routed_from=None, verdict=None
+    exc, method, path, model, started, wants_stream, routed_from=None, verdict=None,
+    rag=None, prompt_text=None, team="default",
 ):
-    log_request(method, path, model, exc.status_code, started, routed_from, verdict)
+    log_request(method, path, model, exc.status_code, started, routed_from, verdict, rag)
     response = anthropic_error(exc.status_code, exc.error_type, exc.message)
     response.background = record_task(
-        model, exc.status_code, started, stream=wants_stream, routed_from=routed_from
+        model, exc.status_code, started, stream=wants_stream, routed_from=routed_from,
+        prompt_text=prompt_text, team=team,
     )
     return response
 
 
 def _anthropic_upstream_error(
-    status, message, request, model, started, wants_stream, routed_from=None, verdict=None
+    status, message, request, model, started, wants_stream, routed_from=None, verdict=None,
+    rag=None, prompt_text=None, team="default",
 ):
-    log_request(request.method, request.url.path, model, status, started, routed_from, verdict)
+    log_request(
+        request.method, request.url.path, model, status, started, routed_from, verdict, rag
+    )
     response = anthropic_error(status, "api_error", message)
     response.background = record_task(
-        model, status, started, stream=wants_stream, routed_from=routed_from
+        model, status, started, stream=wants_stream, routed_from=routed_from,
+        prompt_text=prompt_text, team=team,
     )
     return response
 
 
 def _finalize_anthropic(
     result: AdapterResult, method, path, model, started, wants_stream, team, cache_key,
-    *, routed_from=None, verdict=None, routed_header=None,
+    *, routed_from=None, verdict=None, routed_header=None, rag=None, prompt_text=None,
 ):
     headers = _clean_headers(result.headers)
     # When the served model differs from the requested one, tell the client.
     if routed_header is not None:
         headers[ROUTED_HEADER] = routed_header
-    log_request(method, path, model, result.status_code, started, routed_from, verdict)
+    # Phase 6: surface the retrieval outcome ("hit:N" / "empty") when RAG ran.
+    if rag is not None:
+        headers[RAG_HEADER] = rag
+    log_request(method, path, model, result.status_code, started, routed_from, verdict, rag)
 
     if result.is_stream:
         usage = StreamUsage()
@@ -412,6 +463,7 @@ def _finalize_anthropic(
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
                 routed_from=routed_from,
+                prompt_text=prompt_text,
             )()
 
         return StreamingResponse(
@@ -438,6 +490,7 @@ def _finalize_anthropic(
             cache_key=cache_key,
             cache_body=content,
             routed_from=routed_from,
+            prompt_text=prompt_text,
         ),
     )
 
@@ -484,6 +537,10 @@ async def chat_completions(request: Request):
     model = payload.get("model")
     wants_stream = payload.get("stream") is True
 
+    # Phase 6: log the prompt on this endpoint too (from the converted body), gated
+    # on RAG_STORE_PROMPTS just like the native path.
+    prompt_text = extract_prompt_text(payload) if config.RAG_STORE_PROMPTS else None
+
     team = redis_layer.team_from_headers(request.headers)
     redis = get_redis(app)
 
@@ -493,13 +550,13 @@ async def chat_completions(request: Request):
     if not await redis_layer.check_rate_limit(redis, team):
         return _openai_gate_reject(
             "Rate limit exceeded: too many requests this minute.",
-            request, model, started, wants_stream, team,
+            request, model, started, wants_stream, team, prompt_text,
         )
 
     if (await redis_layer.check_budget(redis, team)).blocked:
         return _openai_gate_reject(
             "Monthly budget exceeded for this team.",
-            request, model, started, wants_stream, team,
+            request, model, started, wants_stream, team, prompt_text,
         )
 
     cache_key = None
@@ -507,12 +564,14 @@ async def chat_completions(request: Request):
         cache_key = redis_layer.openai_cache_key(team, inbound)
         cached_body = await redis_layer.cache_get(redis, cache_key)
         if cached_body is not None:
-            return _openai_cache_hit(cached_body, request, model, started, team)
+            return _openai_cache_hit(cached_body, request, model, started, team, prompt_text)
 
     try:
         adapter = select_adapter(model)
     except AdapterError as exc:
-        return _openai_error_response(exc, request.method, path, model, started, wants_stream)
+        return _openai_error_response(
+            exc, request.method, path, model, started, wants_stream, prompt_text, team
+        )
 
     provider_headers = _inbound_provider_headers(request.headers)
     anthropic_raw = json.dumps(payload).encode()
@@ -523,31 +582,38 @@ async def chat_completions(request: Request):
             payload, anthropic_raw, provider_headers, stream=wants_stream, client=client
         )
     except AdapterError as exc:
-        return _openai_error_response(exc, request.method, path, model, started, wants_stream)
+        return _openai_error_response(
+            exc, request.method, path, model, started, wants_stream, prompt_text, team
+        )
     except httpx.TimeoutException:
         return _openai_upstream_error(
-            502, "The request to the AI provider timed out.", request, model, started, wants_stream
+            502, "The request to the AI provider timed out.", request, model, started,
+            wants_stream, prompt_text, team,
         )
     except httpx.RequestError:
         return _openai_upstream_error(
-            502, "Could not reach the AI provider.", request, model, started, wants_stream
+            502, "Could not reach the AI provider.", request, model, started,
+            wants_stream, prompt_text, team,
         )
 
     return _finalize_openai(
-        result, request.method, path, model, started, wants_stream, team, cache_key
+        result, request.method, path, model, started, wants_stream, team, cache_key,
+        prompt_text=prompt_text,
     )
 
 
-def _openai_gate_reject(message, request, model, started, wants_stream, team):
+def _openai_gate_reject(message, request, model, started, wants_stream, team, prompt_text=None):
     """A clean OpenAI-shaped 429 from a rate-limit or budget block."""
     status = 429
     log_request(request.method, request.url.path, model, status, started)
     response = openai_error(status, "rate_limit_error", message)
-    response.background = after_response(model, status, started, wants_stream, team)
+    response.background = after_response(
+        model, status, started, wants_stream, team, prompt_text=prompt_text
+    )
     return response
 
 
-def _openai_cache_hit(body, request, model, started, team):
+def _openai_cache_hit(body, request, model, started, team, prompt_text=None):
     """Serve a stored OpenAI-shaped 200 body, flagged and logged at cost 0."""
     status = 200
     log_request(request.method, request.url.path, model, status, started)
@@ -555,26 +621,37 @@ def _openai_cache_hit(body, request, model, started, team):
         content=body,
         status_code=status,
         headers={"content-type": "application/json", CACHE_HEADER: "hit"},
-        background=after_response(model, status, started, False, team, cached=True),
+        background=after_response(
+            model, status, started, False, team, cached=True, prompt_text=prompt_text
+        ),
     )
 
 
-def _openai_error_response(exc, method, path, model, started, wants_stream):
+def _openai_error_response(
+    exc, method, path, model, started, wants_stream, prompt_text=None, team="default"
+):
     log_request(method, path, model, exc.status_code, started)
     response = openai_error(exc.status_code, exc.error_type, exc.message)
-    response.background = record_task(model, exc.status_code, started, stream=wants_stream)
+    response.background = record_task(
+        model, exc.status_code, started, stream=wants_stream, prompt_text=prompt_text, team=team
+    )
     return response
 
 
-def _openai_upstream_error(status, message, request, model, started, wants_stream):
+def _openai_upstream_error(
+    status, message, request, model, started, wants_stream, prompt_text=None, team="default"
+):
     log_request(request.method, request.url.path, model, status, started)
     response = openai_error(status, "api_error", message)
-    response.background = record_task(model, status, started, stream=wants_stream)
+    response.background = record_task(
+        model, status, started, stream=wants_stream, prompt_text=prompt_text, team=team
+    )
     return response
 
 
 def _finalize_openai(
-    result: AdapterResult, method, path, model, started, wants_stream, team, cache_key
+    result: AdapterResult, method, path, model, started, wants_stream, team, cache_key,
+    *, prompt_text=None,
 ):
     log_request(method, path, model, result.status_code, started)
     created = int(time.time())
@@ -611,6 +688,7 @@ def _finalize_openai(
                 team,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
+                prompt_text=prompt_text,
             )()
 
         headers = {"content-type": "text/event-stream"}
@@ -653,6 +731,7 @@ def _finalize_openai(
             # Store the OpenAI-shaped body a client would get back, not the
             # provider's Anthropic body.
             cache_body=out,
+            prompt_text=prompt_text,
         ),
     )
 

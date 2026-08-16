@@ -48,14 +48,16 @@ PROVIDER_RESPONSE = {
 
 
 class SpyClassify:
-    """A fake judge. Records every call and returns a fixed verdict."""
+    """A fake judge. Records every call (and the RAG hint) and returns a fixed verdict."""
 
     def __init__(self, verdict="easy", input_tokens=None, output_tokens=None):
         self.result = JudgeResult(verdict, input_tokens, output_tokens)
         self.calls: list[tuple[str, str]] = []
+        self.hints: list[str | None] = []
 
-    async def __call__(self, text, model, headers, client):
+    async def __call__(self, text, model, headers, client, *, hint=None):
         self.calls.append((text, model))
+        self.hints.append(hint)
         return self.result
 
 
@@ -65,7 +67,7 @@ class ExplodingClassify:
     def __init__(self):
         self.calls = 0
 
-    async def __call__(self, text, model, headers, client):
+    async def __call__(self, text, model, headers, client, *, hint=None):
         self.calls += 1
         raise AssertionError("the judge must not be called here")
 
@@ -270,7 +272,7 @@ async def test_judge_failure_falls_back_to_client_model(monkeypatch):
 
     # A judge that fails resolves to "hard"; the real classify guarantees this, so
     # here we assert the router honours a hard verdict by keeping the client's model.
-    async def failing_classify(text, model, headers, client):
+    async def failing_classify(text, model, headers, client, *, hint=None):
         return JudgeResult("hard")  # what classify returns on any error/timeout
 
     decision = await _route(REQUEST, classify=failing_classify)

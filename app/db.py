@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS requests (
 INSERT = """
 INSERT INTO requests
     (model, status, latency_ms, input_tokens, output_tokens, cost_usd, stream, cached,
-     routed_from)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     routed_from, prompt_text, team)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 """
 
 # --- Switch rules (phase 5) -------------------------------------------------
@@ -58,6 +58,12 @@ class RequestRecord:
     # The client's original model when the router swapped it (phase 5); None when
     # the request was served with the model the client asked for.
     routed_from: str | None = None
+    # The incoming user prompt text (phase 6), for building the RAG index offline.
+    # None when no prompt could be extracted; never blocks the write.
+    prompt_text: str | None = None
+    # The calling team (phase 6 follow-up), so the RAG index can be built per-team.
+    # "default" when no team header was sent; the same value used for caps/rules.
+    team: str | None = None
 
 
 class Database:
@@ -133,6 +139,8 @@ class Database:
                     record.stream,
                     record.cached,
                     record.routed_from,
+                    record.prompt_text,
+                    record.team,
                 )
         except Exception as exc:
             # The response is already out the door; note it and drop the row.

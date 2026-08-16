@@ -81,23 +81,34 @@ def _parse_verdict(text: str) -> str:
     return VERDICT_EASY if token == VERDICT_EASY else VERDICT_HARD
 
 
-def _judge_payload(text: str, model: str) -> dict:
+def _judge_payload(text: str, model: str, hint: str | None = None) -> dict:
+    # A RAG hint (phase 6) is advisory context, appended to the system prompt and
+    # explicitly framed as fallible so a small model doesn't treat it as a rule.
+    system = CLASSIFIER_SYSTEM
+    if hint:
+        system = (
+            f"{CLASSIFIER_SYSTEM}\n\nAdvisory context (may be wrong, use your own "
+            f"judgment): {hint}"
+        )
     return {
         "model": model,
         "max_tokens": 5,
-        "system": CLASSIFIER_SYSTEM,
+        "system": system,
         "messages": [{"role": "user", "content": text}],
     }
 
 
-async def classify(text: str, model: str, headers, client: httpx.AsyncClient) -> JudgeResult:
+async def classify(
+    text: str, model: str, headers, client: httpx.AsyncClient, *, hint: str | None = None
+) -> JudgeResult:
     """Classify ``text`` as easy or hard. Never raises; "hard" on any trouble.
 
     ``headers`` are the client's inbound headers, passed straight to the adapter:
     the Anthropic adapter picks the caller's x-api-key out of them, and every other
-    adapter ignores them and uses its own server key.
+    adapter ignores them and uses its own server key. ``hint`` is the optional RAG
+    summary (phase 6): advisory context the classifier may weigh but need not obey.
     """
-    payload = _judge_payload(text, model)
+    payload = _judge_payload(text, model, hint)
     raw = json.dumps(payload).encode()
 
     try:

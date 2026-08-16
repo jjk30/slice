@@ -22,8 +22,10 @@ request with the model the client asked for. Routing is never a client-facing er
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable, TypedDict
 
@@ -43,6 +45,11 @@ PIN_OFF = "off"
 # Response header stamped when the served model differs from the requested one.
 ROUTED_HEADER = "x-slice-routed"
 
+# Response header describing the RAG retrieval outcome on the auto path: "hit:N"
+# when N neighbors were found, "empty" when the index had nothing to offer. Absent
+# when retrieval never ran (pin, rule, disabled, or empty prompt) — phase-5 shape.
+RAG_HEADER = "x-slice-rag"
+
 VERDICT_NONE = "none"
 
 
@@ -59,6 +66,9 @@ class RoutingDecision:
     served_model: str | None
     verdict: str
     reason: str
+    # Phase 6: the RAG header value ("hit:N" / "empty"), or None when retrieval
+    # never ran. A hint only — it never overrides the verdict below.
+    rag: str | None = None
 
     @property
     def routed(self) -> bool:
@@ -86,6 +96,8 @@ class _State(TypedDict, total=False):
     pin_off: bool
     rule_matched: bool
     rule_to: str | None
+    hint: str | None
+    rag: str | None
     verdict: str
     served_model: str | None
     reason: str
@@ -109,12 +121,66 @@ async def _rule_node(state: _State) -> dict:
     return {"rule_matched": True, "rule_to": rule.to_model}
 
 
+# Map long provider model ids to a short human label for the judge's hint summary.
+_MODEL_LABELS = (
+    ("haiku", "Haiku"),
+    ("sonnet", "Sonnet"),
+    ("opus", "Opus"),
+    ("gpt", "GPT"),
+    ("gemini", "Gemini"),
+)
+
+
+def _short_model(model: str | None) -> str:
+    if not model:
+        return "unknown"
+    lowered = model.lower()
+    for needle, label in _MODEL_LABELS:
+        if needle in lowered:
+            return label
+    return model
+
+
+def _summarize_neighbors(neighbors: list) -> str:
+    """A one-line, judge-facing summary of how similar past requests were handled."""
+    counts = Counter(_short_model(getattr(n, "model", None)) for n in neighbors)
+    parts = [f"{label} x{count}" for label, count in counts.most_common()]
+    return "similar past requests were handled by: " + ", ".join(parts)
+
+
+async def _retrieve_node(state: _State) -> dict:
+    """Search the RAG index for a hint. Only ever reached on the auto path.
+
+    Runs off the event loop (the embedding + FAISS search are blocking CPU work)
+    and never raises: a disabled flag, a missing retriever, or any failure leaves
+    the state untouched, so the judge runs exactly as it would in phase 5.
+    """
+    ctx = state["ctx"]
+    retriever = ctx.get("retriever")
+    if not config.RAG_ENABLED or retriever is None:
+        return {}
+    try:
+        neighbors = await asyncio.to_thread(
+            retriever.retrieve, ctx["team"], state.get("user_text", ""), config.RAG_TOP_K
+        )
+    except Exception as exc:  # noqa: BLE001 — retrieve() shouldn't raise; never trust it.
+        logger.debug(json.dumps({"event": "rag_node_error", "error": str(exc)}))
+        return {}
+    if not neighbors:
+        return {"rag": "empty"}
+    return {"rag": f"hit:{len(neighbors)}", "hint": _summarize_neighbors(neighbors)}
+
+
 async def _judge_node(state: _State) -> dict:
     ctx = state["ctx"]
     classify: Callable = ctx["classify"]
     try:
         result = await classify(
-            state.get("user_text", ""), config.JUDGE_MODEL, ctx["headers"], ctx["client"]
+            state.get("user_text", ""),
+            config.JUDGE_MODEL,
+            ctx["headers"],
+            ctx["client"],
+            hint=state.get("hint"),
         )
     except Exception as exc:  # noqa: BLE001 — classify shouldn't raise, but never trust it.
         logger.debug(json.dumps({"event": "judge_node_error", "error": str(exc)}))
@@ -165,19 +231,25 @@ def _after_rule(state: _State) -> str:
     if not (state.get("user_text") or "").strip():
         # Empty or whitespace-only prompt: skip routing entirely, judge never called.
         return "decide"
-    return "judge"
+    # The auto path: gather a RAG hint first, then judge. Retrieval is a no-op when
+    # RAG is off or has no index, so this stays identical to phase 5 in that case.
+    return "retrieve"
 
 
 def _build_graph():
     graph = StateGraph(_State)
     graph.add_node("pin", _pin_node)
     graph.add_node("rule", _rule_node)
+    graph.add_node("retrieve", _retrieve_node)
     graph.add_node("judge", _judge_node)
     graph.add_node("decide", _decide_node)
 
     graph.set_entry_point("pin")
     graph.add_conditional_edges("pin", _after_pin, {"rule": "rule", "decide": "decide"})
-    graph.add_conditional_edges("rule", _after_rule, {"judge": "judge", "decide": "decide"})
+    graph.add_conditional_edges(
+        "rule", _after_rule, {"retrieve": "retrieve", "decide": "decide"}
+    )
+    graph.add_edge("retrieve", "judge")
     graph.add_edge("judge", "decide")
     graph.add_edge("decide", END)
     return graph.compile()
@@ -212,11 +284,13 @@ async def route(
     rules_cache,
     *,
     classify: Callable | None = None,
+    retriever=None,
 ) -> RoutingDecision:
     """Run the router graph for one request. Never raises — forwards as asked on error.
 
     ``classify`` is injectable so tests can supply a fake judge; production leaves it
-    as the real ``app.judge.classify``.
+    as the real ``app.judge.classify``. ``retriever`` is the phase-6 RAG index; None
+    (or ``RAG_ENABLED`` off) skips retrieval and the router behaves exactly as phase 5.
     """
     requested = payload.get("model") if isinstance(payload, dict) else None
     initial: _State = {
@@ -230,6 +304,7 @@ async def route(
             "client": client,
             "rules": rules_cache,
             "classify": classify or judge.classify,
+            "retriever": retriever,
         },
     }
 
@@ -244,4 +319,5 @@ async def route(
         served_model=final.get("served_model", requested),
         verdict=final.get("verdict", VERDICT_NONE),
         reason=final.get("reason", VERDICT_NONE),
+        rag=final.get("rag"),
     )

@@ -66,3 +66,22 @@ JUDGE_MAX_INPUT_CHARS = int(os.getenv("JUDGE_MAX_INPUT_CHARS", "2000"))
 # How often the in-memory switch-rules cache reloads from Postgres. Writes refresh
 # it immediately; this is just the background staleness bound.
 RULES_REFRESH_SECONDS = float(os.getenv("RULES_REFRESH_SECONDS", "30"))
+
+# --- RAG retrieval (phase 6): semantic hint for the judge. ---
+# Retrieval runs only on the auto path (no pin, no rule) and only feeds the judge a
+# soft hint — never a hard rule. Off, or a missing index, leaves phase-5 behavior
+# untouched. The index is per-team: RAG_INDEX_DIR holds one subdirectory per team
+# (rag_store/<team>/), each with its own FAISS index and sidecar, so one team's
+# history never feeds another team's hint. Built offline by build_rag_index.py.
+RAG_ENABLED = _bool("RAG_ENABLED", True)
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
+RAG_INDEX_DIR = os.getenv("RAG_INDEX_DIR", "rag_store")
+
+# Prompt text is only logged when this is on — prompts can be sensitive, so storing
+# them for the offline index build is opt-in. Off means prompt_text is never stored
+# and (until it is turned on and an index is built) retrieval simply finds nothing.
+RAG_STORE_PROMPTS = _bool("RAG_STORE_PROMPTS", False)
+
+# The local sentence-transformers model used for embeddings, both at build time and
+# at query time. Configurable so the model name isn't hardcoded; the two must match.
+RAG_EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
