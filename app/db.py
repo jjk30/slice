@@ -34,6 +34,16 @@ INSERT INTO requests
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 """
 
+# --- Eval scores (phase 8) --------------------------------------------------
+INSERT_EVAL = """
+INSERT INTO eval_scores
+    (request_id, model, routed_from, metric, score, passed, judge_model)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+"""
+# The summary only needs these three columns per row; the aggregation happens in
+# summarize_eval_rows so it can be unit-tested without a live database.
+SELECT_EVAL_ROWS = "SELECT model, routed_from, passed FROM eval_scores"
+
 # --- Switch rules (phase 5) -------------------------------------------------
 SELECT_RULES = "SELECT id, team, from_model, to_model FROM switch_rules ORDER BY id"
 INSERT_RULE = """
@@ -68,6 +78,73 @@ class RequestRecord:
     # that did not loop — cache hits, gate rejects, pins, rules, streams, and any
     # request served on its first try — so the default matches pre-phase-7 behavior.
     attempts: int = 1
+
+
+@dataclass(frozen=True)
+class EvalRecord:
+    """One RAGAS score for one sampled, routed-down request (phase 8).
+
+    ``metric`` is which score this is ("answer_relevancy" or "context_relevance"),
+    ``score`` is in [0, 1], and ``passed`` is score >= the configured threshold.
+    ``model`` is the model that was actually served; ``routed_from`` is what the
+    client originally asked for. ``request_id`` is usually None — see the migration.
+    """
+
+    model: str | None
+    routed_from: str | None
+    metric: str
+    score: float
+    passed: bool
+    judge_model: str | None
+    request_id: int | None = None
+
+
+def summarize_eval_rows(rows: list[dict]) -> dict:
+    """Aggregate raw eval rows into overall / per-model / per-route pass rates.
+
+    Each row needs ``model``, ``routed_from``, and ``passed``. A pure function so the
+    summary shape can be tested against seeded rows without a database. ``pass_rate``
+    is None for an empty bucket rather than a divide-by-zero.
+    """
+
+    def bucket() -> dict:
+        return {"count": 0, "passed": 0}
+
+    overall = bucket()
+    by_model: dict = {}
+    by_route: dict = {}
+
+    for row in rows:
+        passed = 1 if row.get("passed") else 0
+        overall["count"] += 1
+        overall["passed"] += passed
+
+        model = row.get("model")
+        m = by_model.setdefault(model, bucket())
+        m["count"] += 1
+        m["passed"] += passed
+
+        route_key = (row.get("routed_from"), model)
+        r = by_route.setdefault(route_key, bucket())
+        r["count"] += 1
+        r["passed"] += passed
+
+    def rate(b: dict) -> float | None:
+        return round(b["passed"] / b["count"], 4) if b["count"] else None
+
+    return {
+        "overall": {**overall, "pass_rate": rate(overall)},
+        "by_model": [
+            {"model": model, **b, "pass_rate": rate(b)}
+            for model, b in sorted(by_model.items(), key=lambda kv: (kv[0] or ""))
+        ],
+        "by_route": [
+            {"routed_from": rf, "model": model, **b, "pass_rate": rate(b)}
+            for (rf, model), b in sorted(
+                by_route.items(), key=lambda kv: (kv[0][0] or "", kv[0][1] or "")
+            )
+        ],
+    }
 
 
 class Database:
@@ -152,6 +229,42 @@ class Database:
             logger.warning(
                 json.dumps({"event": "db_unavailable", "stage": "write", "error": str(exc)})
             )
+
+    # --- Eval scores (phase 8) ---------------------------------------------
+    # record_eval mirrors record(): fire-and-forget, every failure swallowed. A
+    # score is never worth crashing the (already detached) eval task, and a down
+    # database must never propagate up into it. eval_summary() is a read for the
+    # admin endpoint, so it raises like the switch-rule reads below.
+
+    async def record_eval(self, record: EvalRecord) -> None:
+        if self._pool is None:
+            return
+
+        try:
+            async with self._pool.acquire() as connection:
+                await connection.execute(
+                    INSERT_EVAL,
+                    record.request_id,
+                    record.model,
+                    record.routed_from,
+                    record.metric,
+                    record.score,
+                    record.passed,
+                    record.judge_model,
+                )
+        except Exception as exc:
+            # The eval task is already off the request path; note it and drop the row.
+            logger.warning(
+                json.dumps({"event": "db_unavailable", "stage": "eval_write", "error": str(exc)})
+            )
+
+    async def eval_summary(self) -> dict:
+        """Overall / per-model / per-route pass rates. Raises if the pool is unavailable."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(SELECT_EVAL_ROWS)
+        return summarize_eval_rows([dict(row) for row in rows])
 
     # --- Switch rules (phase 5) --------------------------------------------
     # Unlike record(), these return values the caller needs, so they raise on

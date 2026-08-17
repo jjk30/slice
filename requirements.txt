@@ -8,6 +8,17 @@ langchain-core
 sentence-transformers
 faiss-cpu
 numpy
+# --- Evaluation (phase 8) ---
+# Pinned, unlike the rest of this file: ragas pulls a wide, fast-moving dependency
+# tree (its own langchain meta-packages, datasets, pandas), so the exact versions
+# that were verified against the installed langchain-core (1.5.5) / langgraph
+# (1.2.11) are frozen here. ragas 0.4.3 resolves cleanly against those without
+# forcing either up or down (see the phase-8 notes in the README). langchain-anthropic
+# backs the RAGAS judge; langsmith (already an indirect langchain dependency) is
+# pinned explicitly because phase 8 uses its tracing directly.
+ragas==0.4.3
+langchain-anthropic==1.5.6
+langsmith==0.11.0
 pytest
 pytest-asyncio
 respx

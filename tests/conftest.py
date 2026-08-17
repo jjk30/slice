@@ -34,6 +34,20 @@ def agent_loop_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def eval_off_by_default(monkeypatch):
+    """Phase-8 evaluation is opt-in per test, same reasoning as auto-routing.
+
+    Production defaults ``EVAL_SAMPLE_RATE`` to 0.05, so a routed-down request would
+    sometimes spawn a background RAGAS task — which would need a live judge and would
+    add nondeterministic work the other suites don't expect. Force it to 0 here so no
+    test samples by accident; the eval tests set a rate and inject a fake evaluator
+    explicitly. Belt and suspenders: no test runs lifespan's evaluator build either,
+    so ``app.state.evaluator`` stays unset (None) unless a test opts in.
+    """
+    monkeypatch.setattr(config, "EVAL_SAMPLE_RATE", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def isolate_redis(monkeypatch):
     """Keep every test off the real Redis and out of each other's state.
 

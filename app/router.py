@@ -69,6 +69,10 @@ class RoutingDecision:
     # Phase 6: the RAG header value ("hit:N" / "empty"), or None when retrieval
     # never ran. A hint only — it never overrides the verdict below.
     rag: str | None = None
+    # Phase 8: the retrieved neighbors' prompt texts, carried through so evaluation
+    # can score their context relevance. Empty when retrieval found nothing or never
+    # ran — a defaulted field, so nothing that builds a RoutingDecision without it breaks.
+    rag_neighbors: tuple[str, ...] = ()
 
     @property
     def routed(self) -> bool:
@@ -98,6 +102,7 @@ class _State(TypedDict, total=False):
     rule_to: str | None
     hint: str | None
     rag: str | None
+    rag_neighbors: list[str]
     verdict: str
     served_model: str | None
     reason: str
@@ -168,7 +173,15 @@ async def _retrieve_node(state: _State) -> dict:
         return {}
     if not neighbors:
         return {"rag": "empty"}
-    return {"rag": f"hit:{len(neighbors)}", "hint": _summarize_neighbors(neighbors)}
+    # Carry the neighbors' prompt texts through for phase-8 context-relevance scoring,
+    # alongside the judge-facing one-line hint. Neighbors without a stored prompt are
+    # skipped; the list may be empty even on a hit.
+    texts = [n.prompt for n in neighbors if getattr(n, "prompt", None)]
+    return {
+        "rag": f"hit:{len(neighbors)}",
+        "hint": _summarize_neighbors(neighbors),
+        "rag_neighbors": texts,
+    }
 
 
 async def _judge_node(state: _State) -> dict:
@@ -320,4 +333,5 @@ async def route(
         verdict=final.get("verdict", VERDICT_NONE),
         reason=final.get("reason", VERDICT_NONE),
         rag=final.get("rag"),
+        rag_neighbors=tuple(final.get("rag_neighbors") or ()),
     )

@@ -81,6 +81,22 @@ curl -X DELETE localhost:8080/admin/rules/1
 
 Routing is applied on the native `/v1/messages` endpoint only. The OpenAI-compatible `/v1/chat/completions` endpoint is still a straight pass-through — it is not wired to the router yet.
 
+## Evaluation (local only, no auth yet)
+
+slice grades a sample of the answers it served cheaper than asked. When a request is routed down (or the agent loop passes on a cheap rung), a fraction of those responses — `EVAL_SAMPLE_RATE`, default `0.05` — are scored with RAGAS in a detached background task: answer relevancy against the prompt, and, when RAG neighbors rode along, their context relevance. Scoring is fire-and-forget, exactly like the Postgres request logger — it is never awaited on the request path, every failure is swallowed, and `EVAL_SAMPLE_RATE=0` turns it off entirely without importing anything or touching startup. Scores land in the `eval_scores` table.
+
+```bash
+curl localhost:8080/admin/eval/summary
+```
+
+Returns the overall pass rate plus a breakdown per model and per `routed_from → model` pair, each with counts.
+
+> **Warning — `/admin/eval/summary` is unauthenticated**, the same as the rules endpoints. Auth lands in a later phase (12); until then keep `/admin/*` local only.
+
+**Tracing.** LangSmith is wired across the router and agent loop through LangChain's standard env vars (`LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT`, default project `slice`). With tracing off or no key, LangChain no-ops and slice runs exactly as before — no code path requires LangSmith.
+
+**A dependency note.** RAGAS (`ragas==0.4.3`) resolves cleanly against the installed `langchain-core` 1.5.5 / `langgraph` 1.2.11 — it does not force either up or down. It does hard-import one `langchain-community` module that the sunset community package has dropped; slice registers a tiny stub for it at import time (it never uses Vertex) rather than dragging langchain-core *down* to a version that still ships it, which would break the phase 5–7 router and agent loop. No pins are changed to accommodate RAGAS.
+
 ## Tech stack
 
 **Backend.** Python, FastAPI, httpx. LangGraph for the router and agent loop. LangChain for the RAG pieces.

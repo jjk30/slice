@@ -1,8 +1,9 @@
-"""Admin API for the per-team switch rules (phase 5).
+"""Admin API for the per-team switch rules (phase 5) and eval summary (phase 8).
 
-Three endpoints under /admin/rules: list, create, delete. They are LOCAL-ONLY for
-now — there is deliberately no authentication yet; that lands in a later phase.
-Do not expose this router on a public interface.
+Endpoints under /admin: the switch-rules CRUD (/admin/rules) and a read-only eval
+pass-rate summary (/admin/eval/summary). They are ALL LOCAL-ONLY for now — there is
+deliberately no authentication yet; that lands in a later phase. Do not expose this
+router on a public interface.
 
 Writes persist to Postgres and then refresh the in-memory rules cache immediately,
 so a newly created or deleted rule takes effect on the very next request rather
@@ -81,6 +82,24 @@ async def create_rule(request: Request):
         await rules.refresh()
 
     return JSONResponse(status_code=201, content={"rule": row})
+
+
+@router.get("/eval/summary")
+async def eval_summary(request: Request):
+    """Overall / per-model / per-route eval pass rates (phase 8).
+
+    Local-only and unauthenticated, exactly like the rules endpoints above. A missing
+    or disconnected database returns an empty-but-shaped summary rather than an error,
+    since "no scores yet" and "logging off" are both ordinary, not failures.
+    """
+    empty = {"overall": {"count": 0, "passed": 0, "pass_rate": None}, "by_model": [], "by_route": []}
+    db = _get_db(request)
+    if db is None or not getattr(db, "enabled", False):
+        return empty
+    try:
+        return await db.eval_summary()
+    except Exception:  # noqa: BLE001 — a read failure degrades to the empty summary.
+        return empty
 
 
 @router.delete("/rules/{rule_id}")

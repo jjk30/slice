@@ -15,6 +15,7 @@ from app.adapters.base import STREAM_DOWNGRADED_HEADER
 from app.admin import router as admin_router
 from app.agent import AGENT_HEADER, agent_applies, run_agent_loop
 from app.db import Database, RequestRecord
+from app import evaluation
 from app.rag import retriever as rag_retriever
 from app.rag.prompt import extract_prompt_text
 from app.redis_layer import CACHE_HEADER
@@ -69,6 +70,14 @@ async def lifespan(app: FastAPI):
     # an empty retriever (retrieval returns nothing), and RAG off skips it entirely.
     app.state.retriever = rag_retriever.load_default() if config.RAG_ENABLED else None
 
+    # Phase 8: the RAGAS evaluator, or None when EVAL_SAMPLE_RATE is 0. Construction
+    # is cheap (ragas/torch load lazily on the first score), so an enabled-but-idle
+    # gateway pays nothing here, and a rate of 0 builds nothing at all.
+    app.state.evaluator = evaluation.build_default_evaluator()
+    # Phase 8: default the LangSmith project name when tracing is on. A no-op when
+    # tracing is off or unkeyed — no request path ever depends on LangSmith.
+    evaluation.configure_tracing()
+
     yield
 
     client = getattr(app.state, "client", None)
@@ -117,6 +126,12 @@ def get_retriever(app: FastAPI):
     # None means no RAG index is wired (lifespan not run, e.g. a unit test, or RAG
     # disabled). route() treats None as "skip retrieval", so this fails open.
     return getattr(app.state, "retriever", None)
+
+
+def get_evaluator(app: FastAPI):
+    # None means evaluation is off (rate 0, or lifespan not run, e.g. a unit test).
+    # The finalize path treats None as "never sample", so this fails open.
+    return getattr(app.state, "evaluator", None)
 
 
 def anthropic_error(status_code: int, error_type: str, message: str) -> JSONResponse:
@@ -334,6 +349,15 @@ async def messages(request: Request):
     routed_from = decision.routed_from
     verdict = decision.verdict
     rag = decision.rag
+    # Phase 8: when evaluation is on, gather what a possible sampled scoring will need
+    # — the user prompt (extracted regardless of RAG_STORE_PROMPTS; evaluation needs it
+    # even when prompt logging is off) and the retrieved neighbor texts. Skipped
+    # entirely when evaluation is off, so a disabled gateway's hot path is unchanged.
+    if get_evaluator(app) is not None:
+        eval_prompt = extract_prompt_text(payload)
+        eval_neighbors = list(decision.rag_neighbors)
+    else:
+        eval_prompt, eval_neighbors = None, []
     if decision.routed:
         # Swap the model in both the parsed payload (adapters that rebuild the
         # request read it) and the raw bytes (the Anthropic adapter forwards them).
@@ -367,6 +391,7 @@ async def messages(request: Request):
                 cache_key, routed_from=loop_routed_from, verdict=verdict,
                 routed_header=loop_routed_header, rag=rag, prompt_text=prompt_text,
                 agent_header=loop.header, attempts=loop.attempts, cost_override=loop.spend,
+                eval_prompt=eval_prompt, eval_neighbors=eval_neighbors,
             )
 
     try:
@@ -404,6 +429,7 @@ async def messages(request: Request):
         result, request.method, path, served_model, started, wants_stream, team, cache_key,
         routed_from=routed_from, verdict=verdict, routed_header=decision.routed_header,
         rag=rag, prompt_text=prompt_text, agent_header=agent_header,
+        eval_prompt=eval_prompt, eval_neighbors=eval_neighbors,
     )
 
 
@@ -466,8 +492,15 @@ def _anthropic_upstream_error(
 def _finalize_anthropic(
     result: AdapterResult, method, path, model, started, wants_stream, team, cache_key,
     *, routed_from=None, verdict=None, routed_header=None, rag=None, prompt_text=None,
-    agent_header=None, attempts=1, cost_override=None,
+    agent_header=None, attempts=1, cost_override=None, eval_prompt=None, eval_neighbors=(),
 ):
+    # Phase 8: decide once, off the request's critical section, whether this served
+    # answer is sampled for RAGAS scoring. The trigger (routed down, or the agent loop
+    # passing on a cheap rung) plus the sample rate. The scoring itself happens later,
+    # in the response's background task, and is never awaited here.
+    evaluator = get_evaluator(app)
+    eval_on = evaluator is not None and evaluation.sampled(routed_from, agent_header)
+
     headers = _clean_headers(result.headers)
     # When the served model differs from the requested one, tell the client.
     if routed_header is not None:
@@ -483,11 +516,15 @@ def _finalize_anthropic(
 
     if result.is_stream:
         usage = StreamUsage()
+        # Only a sampled stream assembles its answer text; the other 95% parse nothing.
+        stream_text = evaluation.StreamText() if eval_on else None
 
         async def relay():
             try:
                 async for chunk in result.stream:
                     usage.feed(chunk)
+                    if stream_text is not None:
+                        stream_text.feed(chunk)
                     yield chunk
             except httpx.HTTPError:
                 logger.warning(
@@ -511,6 +548,18 @@ def _finalize_anthropic(
                 routed_from=routed_from,
                 prompt_text=prompt_text,
             )()
+            # Phase 8: the stream has closed, so the assembled answer is final. Score
+            # it off the hot path — spawn returns at once and never blocks this task.
+            if eval_on and stream_text is not None:
+                evaluation.spawn(
+                    evaluator,
+                    getattr(app.state, "db", None),
+                    prompt=eval_prompt,
+                    answer=stream_text.text,
+                    model=model,
+                    routed_from=routed_from,
+                    neighbors=eval_neighbors,
+                )
 
         return StreamingResponse(
             relay(),
@@ -521,25 +570,44 @@ def _finalize_anthropic(
 
     content = result.content or b""
     input_tokens, output_tokens = usage_from_body(content)
+    background = after_response(
+        model,
+        result.status_code,
+        started,
+        wants_stream,
+        team,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_key=cache_key,
+        cache_body=content,
+        routed_from=routed_from,
+        prompt_text=prompt_text,
+        attempts=attempts,
+        cost_override=cost_override,
+    )
+    if eval_on:
+        # Phase 8: run the existing post-response work, then spawn scoring from the
+        # assembled answer. Both happen after the bytes are gone; scoring is detached.
+        base = background
+
+        async def _record_and_eval():
+            await base()
+            evaluation.spawn(
+                evaluator,
+                getattr(app.state, "db", None),
+                prompt=eval_prompt,
+                answer=evaluation.extract_answer_text(content),
+                model=model,
+                routed_from=routed_from,
+                neighbors=eval_neighbors,
+            )
+
+        background = BackgroundTask(_record_and_eval)
     return Response(
         content=result.content,
         status_code=result.status_code,
         headers=headers,
-        background=after_response(
-            model,
-            result.status_code,
-            started,
-            wants_stream,
-            team,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_key=cache_key,
-            cache_body=content,
-            routed_from=routed_from,
-            prompt_text=prompt_text,
-            attempts=attempts,
-            cost_override=cost_override,
-        ),
+        background=background,
     )
 
 

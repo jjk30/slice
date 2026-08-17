@@ -119,3 +119,37 @@ AGENT_CHECK_MODEL = os.getenv("AGENT_CHECK_MODEL", JUDGE_MODEL)
 
 # Output-token count assumed for the cost estimate when a request omits max_tokens.
 AGENT_DEFAULT_MAX_TOKENS = int(os.getenv("AGENT_DEFAULT_MAX_TOKENS", "1024"))
+
+# --- Evaluation (phase 8): score a sample of routed-down answers, fire-and-forget. ---
+# When a request was routed down to a cheaper model (or the agent loop passed on a
+# cheap rung), a fraction of those responses are scored with RAGAS in a detached
+# background task — never on the request path, never awaited, every failure swallowed.
+# The score is written to the eval_scores table and surfaced at /admin/eval/summary.
+#
+# EVAL_SAMPLE_RATE is the whole on/off switch: 0 disables evaluation entirely (no
+# sampling, no scorer built at startup, ragas never imported), and must not break
+# boot. 1 scores every qualifying request; anything between is the sampled fraction.
+EVAL_SAMPLE_RATE = float(os.getenv("EVAL_SAMPLE_RATE", "0.05"))
+
+# A score at or above this passes; below fails. Both go in the row's `passed` column,
+# and the pass rate is what /admin/eval/summary reports.
+EVAL_PASS_THRESHOLD = float(os.getenv("EVAL_PASS_THRESHOLD", "0.7"))
+
+# The model RAGAS uses as its judge, wired through langchain-anthropic. Defaults to the
+# same small model the router judge uses. Its cost is external (billed by the provider
+# on the judge call), not counted against the team budget — evaluation is out-of-band.
+EVAL_JUDGE_MODEL = os.getenv("EVAL_JUDGE_MODEL", JUDGE_MODEL)
+
+# Ceiling on how long a single RAGAS metric call may run before it is abandoned. A
+# timeout is swallowed like any other failure: the score is simply not recorded.
+EVAL_TIMEOUT_SECONDS = float(os.getenv("EVAL_TIMEOUT_SECONDS", "30"))
+
+# --- LangSmith tracing (phase 8): observability for the LangGraph router and loop. ---
+# Tracing is entirely env-var driven by LangChain itself. With LANGCHAIN_TRACING_V2
+# false (the default) or no LANGCHAIN_API_KEY, LangChain no-ops and slice runs exactly
+# as before — no code path here requires LangSmith. When tracing is on, runs are
+# grouped under LANGCHAIN_PROJECT (default "slice"); configure_tracing() sets that
+# default at startup without ever touching the key.
+LANGCHAIN_TRACING_V2 = _bool("LANGCHAIN_TRACING_V2", False)
+LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY") or None
+LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "slice")
