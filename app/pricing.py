@@ -72,6 +72,17 @@ def _lookup(model: str | None) -> Price | None:
     return PRICES.get(base) if base != model else None
 
 
+def price_for(model: str | None) -> Price | None:
+    """The per-million input/output price for a model, or None when it is unknown.
+
+    Public wrapper over the family-resolving lookup. The agent loop (phase 7) uses
+    it to build an upper-bound cost estimate: a None here means the model has no
+    known price, which makes the estimate infinite and blocks the attempt — never a
+    silent zero that could let the spend ceiling be crossed.
+    """
+    return _lookup(model)
+
+
 def cost_usd(
     model: str | None, input_tokens: int | None, output_tokens: int | None
 ) -> Decimal | None:

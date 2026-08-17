@@ -13,6 +13,7 @@ from app import config, pricing, redis_layer
 from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import STREAM_DOWNGRADED_HEADER
 from app.admin import router as admin_router
+from app.agent import AGENT_HEADER, agent_applies, run_agent_loop
 from app.db import Database, RequestRecord
 from app.rag import retriever as rag_retriever
 from app.rag.prompt import extract_prompt_text
@@ -213,6 +214,8 @@ def after_response(
     cache_body: bytes | None = None,
     routed_from: str | None = None,
     prompt_text: str | None = None,
+    attempts: int = 1,
+    cost_override: Decimal | None = None,
 ) -> BackgroundTask:
     """Post-response work for a gated /v1/messages request, in one background task.
 
@@ -220,8 +223,16 @@ def after_response(
     Postgres row is written (if logging is on), the request's cost is added to
     the team's monthly budget counter, and — on a cacheable 200 — the body is
     stored. A cache hit logs a row with cost 0 and never touches the budget.
+
+    ``cost_override`` (phase 7) replaces the computed cost when the agent loop ran:
+    the actual spend there is the sum of every attempt and every checker call, not
+    a single call's price, so it is passed in explicitly for both the row and the
+    budget. ``attempts`` is the loop's attempt count (1 for every non-loop request).
     """
-    cost = Decimal(0) if cached else pricing.cost_usd(model, input_tokens, output_tokens)
+    if cost_override is not None:
+        cost = cost_override
+    else:
+        cost = Decimal(0) if cached else pricing.cost_usd(model, input_tokens, output_tokens)
     database = getattr(app.state, "db", None)
     redis = get_redis(app)
 
@@ -240,6 +251,7 @@ def after_response(
                     routed_from=routed_from,
                     prompt_text=prompt_text,
                     team=team,
+                    attempts=attempts,
                 )
             )
         # A cache hit cost nothing to serve, so it never moves the budget.
@@ -328,6 +340,35 @@ async def messages(request: Request):
         payload = {**payload, "model": served_model}
         body = json.dumps(payload).encode()
 
+    # --- Phase 7 agent loop: extends the auto path only, when routing sent the
+    # request down to a cheaper model. Pins, rules, cache hits, and hard verdicts
+    # never qualify (agent_applies is false for them). Streaming requests skip the
+    # loop entirely and behave exactly as phase 6, flagged "off:stream".
+    agent_header = None
+    if config.AGENT_ENABLED and agent_applies(decision):
+        if wants_stream:
+            agent_header = "off:stream"
+        else:
+            loop = await run_agent_loop(
+                payload, request.headers, team, redis, client,
+                served_model=served_model, requested_model=decision.requested_model,
+            )
+            final_model = loop.model
+            # The loop may have escalated (or fallen back to the client's model), so
+            # recompute the routed markers against whatever it actually served.
+            loop_routed_from = (
+                decision.requested_model if final_model != decision.requested_model else None
+            )
+            loop_routed_header = (
+                f"{decision.requested_model} -> {final_model}" if loop_routed_from else None
+            )
+            return _finalize_anthropic(
+                loop.result, request.method, path, final_model, started, wants_stream, team,
+                cache_key, routed_from=loop_routed_from, verdict=verdict,
+                routed_header=loop_routed_header, rag=rag, prompt_text=prompt_text,
+                agent_header=loop.header, attempts=loop.attempts, cost_override=loop.spend,
+            )
+
     try:
         adapter = select_adapter(served_model)
     except AdapterError as exc:
@@ -362,7 +403,7 @@ async def messages(request: Request):
     return _finalize_anthropic(
         result, request.method, path, served_model, started, wants_stream, team, cache_key,
         routed_from=routed_from, verdict=verdict, routed_header=decision.routed_header,
-        rag=rag, prompt_text=prompt_text,
+        rag=rag, prompt_text=prompt_text, agent_header=agent_header,
     )
 
 
@@ -425,6 +466,7 @@ def _anthropic_upstream_error(
 def _finalize_anthropic(
     result: AdapterResult, method, path, model, started, wants_stream, team, cache_key,
     *, routed_from=None, verdict=None, routed_header=None, rag=None, prompt_text=None,
+    agent_header=None, attempts=1, cost_override=None,
 ):
     headers = _clean_headers(result.headers)
     # When the served model differs from the requested one, tell the client.
@@ -433,6 +475,10 @@ def _finalize_anthropic(
     # Phase 6: surface the retrieval outcome ("hit:N" / "empty") when RAG ran.
     if rag is not None:
         headers[RAG_HEADER] = rag
+    # Phase 7: what the agent loop did ("pass:1" / "esc:N:model" / "ceiling"), or
+    # "off:stream" when a qualifying request was streaming so the loop was skipped.
+    if agent_header is not None:
+        headers[AGENT_HEADER] = agent_header
     log_request(method, path, model, result.status_code, started, routed_from, verdict, rag)
 
     if result.is_stream:
@@ -491,6 +537,8 @@ def _finalize_anthropic(
             cache_body=content,
             routed_from=routed_from,
             prompt_text=prompt_text,
+            attempts=attempts,
+            cost_override=cost_override,
         ),
     )
 

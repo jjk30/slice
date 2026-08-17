@@ -85,3 +85,37 @@ RAG_STORE_PROMPTS = _bool("RAG_STORE_PROMPTS", False)
 # The local sentence-transformers model used for embeddings, both at build time and
 # at query time. Configurable so the model name isn't hardcoded; the two must match.
 RAG_EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
+
+# --- Agent loop (phase 7): try cheap, check, escalate, stop at a ceiling. ---
+# The loop extends the auto path only: it fires when auto-routing sent a request
+# down to a cheaper model, the request is non-streaming, and this flag is on. Pin,
+# rule, cache-hit, and gate-reject paths never loop. Every stage fails open.
+AGENT_ENABLED = _bool("AGENT_ENABLED", True)
+
+# The escalation ladder, cheap to strong, spanning providers. The loop's first try
+# is always the routed cheap model; escalation walks up this ladder from the rung
+# above it (or straight to the final rung if the cheap model isn't listed). The
+# client's originally requested model is always the final rung, appended if absent —
+# the last resort is giving them exactly what they asked for. No model names are
+# hardcoded outside this default; every rung must be priceable for its cost estimate
+# to be finite (an unknown price makes the estimate infinite and blocks the rung).
+AGENT_LADDER = os.getenv(
+    "AGENT_LADDER",
+    "claude-haiku-4-5-20251001,gemini-3.6-flash,gpt-5.2,claude-sonnet-5",
+)
+
+# Hard cap on total attempts (the first try plus escalations) for one request.
+AGENT_MAX_ATTEMPTS = int(os.getenv("AGENT_MAX_ATTEMPTS", "3"))
+
+# The spend ceiling for one request, across every attempt and every checker call.
+# Before each escalation the loop computes an upper-bound estimate of the next
+# attempt; if spend-so-far plus that estimate would cross this, the attempt is not
+# made and the best answer already in hand is served. The ceiling is never crossed.
+AGENT_COST_CEILING_USD = Decimal(os.getenv("AGENT_COST_CEILING_USD", "0.25"))
+
+# The model the checker uses to judge pass/fail on an answer. Defaults to the same
+# small judge model the router uses. Its cost counts toward the ceiling.
+AGENT_CHECK_MODEL = os.getenv("AGENT_CHECK_MODEL", JUDGE_MODEL)
+
+# Output-token count assumed for the cost estimate when a request omits max_tokens.
+AGENT_DEFAULT_MAX_TOKENS = int(os.getenv("AGENT_DEFAULT_MAX_TOKENS", "1024"))

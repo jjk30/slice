@@ -20,6 +20,20 @@ def routing_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def agent_loop_off_by_default(monkeypatch):
+    """Phase-7 agent loop is opt-in per test, same reasoning as auto-routing.
+
+    Production defaults ``AGENT_ENABLED`` to true, but the loop only fires on the
+    auto path (which is off above by default), so this matters chiefly for the
+    router suite that turns auto on: with the loop also on, every routed-down
+    request would fire a checker call and possibly escalate, changing the upstream
+    call counts and served model those tests assert. Default it off so the router
+    suite sees phase-6 behavior; the agent-loop tests turn it back on explicitly.
+    """
+    monkeypatch.setattr(config, "AGENT_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def isolate_redis(monkeypatch):
     """Keep every test off the real Redis and out of each other's state.
 

@@ -62,6 +62,25 @@ def test_request_mapping_moves_system_and_params():
     assert request["temperature"] == 0.2
 
 
+def test_openai_body_never_emits_max_tokens():
+    # The gpt-5 family rejects max_tokens with a 400 ("use max_completion_tokens
+    # instead"), so the outbound OpenAI body must never carry a max_tokens key —
+    # whether the cap is present, or absent entirely. (NIM, a different provider,
+    # keeps plain max_tokens; see test_nim_uses_openai_mapping_with_its_base_and_key.)
+    token_param = OPENAI._token_param
+    with_cap = anthropic_to_openai_request(
+        {"model": "gpt-5.2", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]},
+        token_param,
+    )
+    assert with_cap["max_completion_tokens"] == 64
+    assert "max_tokens" not in with_cap
+
+    without_cap = anthropic_to_openai_request(
+        {"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}]}, token_param
+    )
+    assert "max_tokens" not in without_cap
+
+
 def test_response_mapping_includes_tokens_and_stop_reason():
     response = {
         "id": "chatcmpl-1",

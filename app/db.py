@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS requests (
 INSERT = """
 INSERT INTO requests
     (model, status, latency_ms, input_tokens, output_tokens, cost_usd, stream, cached,
-     routed_from, prompt_text, team)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     routed_from, prompt_text, team, attempts)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 """
 
 # --- Switch rules (phase 5) -------------------------------------------------
@@ -64,6 +64,10 @@ class RequestRecord:
     # The calling team (phase 6 follow-up), so the RAG index can be built per-team.
     # "default" when no team header was sent; the same value used for caps/rules.
     team: str | None = None
+    # How many provider attempts the agent loop made (phase 7). 1 for every request
+    # that did not loop — cache hits, gate rejects, pins, rules, streams, and any
+    # request served on its first try — so the default matches pre-phase-7 behavior.
+    attempts: int = 1
 
 
 class Database:
@@ -141,6 +145,7 @@ class Database:
                     record.routed_from,
                     record.prompt_text,
                     record.team,
+                    record.attempts,
                 )
         except Exception as exc:
             # The response is already out the door; note it and drop the row.
