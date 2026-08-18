@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -17,6 +18,7 @@ from app import config, pricing, redis_layer
 from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import STREAM_DOWNGRADED_HEADER
 from app.admin import router as admin_router
+from app import alerts
 from app.agent import AGENT_HEADER, agent_applies, run_agent_loop
 from app.dashboard import get_broadcaster, make_event
 from app.dashboard import router as dashboard_router
@@ -97,7 +99,23 @@ async def lifespan(app: FastAPI):
     # synchronously and never waits on a client.
     get_broadcaster(app)
 
+    # Phase 11: the alerts engine, or None when ALERTS_ENABLED is off (the default
+    # without a RESEND_API_KEY). It borrows the same Redis client (for the cooldown
+    # latch) and database (for the alerts rows); both fail open inside it. Installed
+    # module-level because the wire-in points live in redis_layer, which has no app.
+    app.state.alerts = alerts.configure(
+        alerts.build_engine(redis=app.state.redis, database=app.state.db)
+    )
+
     yield
+
+    # Give any in-flight alert a moment to finish before the clients it uses go away.
+    # Bounded: a hung channel can't hold shutdown (its own timeout is 10s anyway).
+    try:
+        await asyncio.wait_for(alerts.drain(), timeout=15)
+    except Exception:  # noqa: BLE001 — shutdown must not trip on an alert.
+        pass
+    alerts.configure(None)
 
     client = getattr(app.state, "client", None)
     if client is not None and not client.is_closed:

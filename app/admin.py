@@ -1,8 +1,9 @@
-"""Admin API for switch rules (phase 5), eval summary (phase 8), guardrails (phase 9).
+"""Admin API: switch rules (phase 5), eval (phase 8), guardrails (phase 9), alerts (phase 11).
 
 Endpoints under /admin: the switch-rules CRUD (/admin/rules), a read-only eval
-pass-rate summary (/admin/eval/summary), and a read-only guardrails summary
-(/admin/guardrails/summary). They are ALL LOCAL-ONLY for now — there is deliberately
+pass-rate summary (/admin/eval/summary), a read-only guardrails summary
+(/admin/guardrails/summary), and a read-only alerts summary (/admin/alerts/summary).
+They are ALL LOCAL-ONLY for now — there is deliberately
 no authentication yet; that lands in a later phase. Do not expose this router on a
 public interface.
 
@@ -119,6 +120,26 @@ async def guardrails_summary(request: Request):
         return empty
     try:
         return await db.guardrail_summary()
+    except Exception:  # noqa: BLE001 — a read failure degrades to the empty summary.
+        return empty
+
+
+@router.get("/alerts/summary")
+async def alerts_summary(request: Request):
+    """Per-kind / per-status alert counts plus the 10 most recent attempts (phase 11).
+
+    Local-only and unauthenticated, exactly like the endpoints above — there is
+    deliberately no auth yet; that lands in a later phase, and this router must not be
+    exposed on a public interface. A missing or disconnected database returns an
+    empty-but-shaped summary rather than an error, since "no alerts yet" and "logging
+    off" are both ordinary, not failures.
+    """
+    empty = {"total": 0, "by_kind": [], "by_status": [], "by_kind_status": [], "recent": []}
+    db = _get_db(request)
+    if db is None or not getattr(db, "enabled", False):
+        return empty
+    try:
+        return await db.alert_summary()
     except Exception:  # noqa: BLE001 — a read failure degrades to the empty summary.
         return empty
 

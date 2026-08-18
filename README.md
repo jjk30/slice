@@ -156,6 +156,24 @@ In dev, the gateway allows the Vite origin through `CORS_ORIGINS` (default `http
 
 > **Warning — `/dashboard/*` is unauthenticated**, exactly like `/admin/*`. Auth lands in a later phase (12); until then keep the gateway, the dashboard, and `CORS_ORIGINS` local only.
 
+## Alerts (email via Resend)
+
+When a team crosses its budget warn line (`warn`, the first time its month's spend reaches `BUDGET_WARN_RATIO` of the cap) or hits its cap (`block`), slice emails someone. Both moments were already detected by the Redis layer — the once-per-month SETNX latch in `add_cost` and the blocked decision in `check_budget` — and the alert fires from those exact spots as a detached `asyncio.create_task`: never awaited by the request, every exception inside caught and logged. Routing, caching, and the request path are unchanged.
+
+- **Cooldown.** One alert per team per kind per `ALERT_COOLDOWN_SECONDS` (default 3600), latched by the Redis key `alert:cooldown:{team}:{kind}`. Inside the window nothing is sent and the attempt is recorded as `skipped_cooldown`. Redis down fails open: send anyway, never crash.
+- **Channels.** A tiny interface in `app/alerts/channels.py` (`name` + `async send(alert) -> DeliveryResult`); one implementation for now, `ResendEmailChannel` — a single POST to `https://api.resend.com/emails`, Bearer `RESEND_API_KEY`, 10s timeout, plain-text body with team, kind, spend so far, cap, timestamp. Non-2xx or any exception is recorded as `failed`, never raised. Slack and WhatsApp land as new classes there; the engine doesn't change.
+- **Storage.** One row per attempt in the `alerts` table (migration 009): `ts, team, kind (warn|block), channel, status (sent|failed|skipped_cooldown), detail`, written fire-and-forget like request logging.
+
+`ALERTS_ENABLED` defaults to true only when `RESEND_API_KEY` is set (otherwise no alert code runs on any path); `ALERT_FROM` defaults to `onboarding@resend.dev`, `ALERT_EMAIL_TO` is the recipient list. See `.env.example`.
+
+```bash
+curl localhost:8080/admin/alerts/summary
+```
+
+Returns counts by kind and by status (plus the kind × status cross count) and the 10 most recent attempts.
+
+> **Warning — `/admin/alerts/summary` is unauthenticated**, the same as the other `/admin/*` endpoints. Keep it local until auth lands (phase 12).
+
 ## Tech stack
 
 **Backend.** Python, FastAPI, httpx. LangGraph for the router and agent loop. LangChain for the RAG pieces.

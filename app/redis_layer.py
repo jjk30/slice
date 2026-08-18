@@ -22,6 +22,7 @@ from decimal import Decimal
 import redis.asyncio as aioredis
 
 from app import config
+from app.alerts import engine as alerts
 
 logger = logging.getLogger("slice.gateway")
 
@@ -115,13 +116,31 @@ async def check_budget(redis: aioredis.Redis | None, team: str) -> BudgetDecisio
 
     Reads the accumulated spend counter (written after each prior response) and
     blocks at or past the cap. Any Redis error fails open — not blocked.
+
+    Phase 11: a blocked decision is the "cap hit" moment, so it fires the ``block``
+    alert here — fire-and-forget (a detached task, never awaited, off entirely when
+    ``ALERTS_ENABLED`` is false); the engine's cooldown collapses the repeat blocks a
+    capped team keeps producing into one alert per window. The decision itself is
+    exactly as before.
     """
     if redis is None:
         return BudgetDecision(blocked=False, spend=Decimal(0))
     try:
-        raw = await redis.get(f"{_BUDGET_PREFIX}:{team}:{month_key()}")
+        month = month_key()
+        raw = await redis.get(f"{_BUDGET_PREFIX}:{team}:{month}")
         spend = Decimal(raw.decode()) if raw else Decimal(0)
-        return BudgetDecision(blocked=spend >= config.BUDGET_MONTHLY_USD, spend=spend)
+        blocked = spend >= config.BUDGET_MONTHLY_USD
+        if blocked:
+            alerts.fire(
+                team,
+                alerts.KIND_BLOCK,
+                {
+                    "spend_usd": float(spend),
+                    "budget_usd": float(config.BUDGET_MONTHLY_USD),
+                    "month": month,
+                },
+            )
+        return BudgetDecision(blocked=blocked, spend=spend)
     except Exception as exc:
         _debug("budget_check", exc)
         return BudgetDecision(blocked=False, spend=Decimal(0))
@@ -156,6 +175,11 @@ async def add_cost(redis: aioredis.Redis | None, team: str, cost: Decimal | None
     Also fires the budget warning exactly once per team per month, the first
     time the running total reaches the warn ratio. The once-only guard lives in
     Redis (a SETNX flag) so it holds across processes and restarts. Fails open.
+
+    Phase 11: that first crossing is also where the ``warn`` alert fires — the same
+    SETNX branch, right after the log line, fire-and-forget (a detached task, never
+    awaited, off entirely when ``ALERTS_ENABLED`` is false). The counter, the latch,
+    and the log line are exactly as before.
     """
     if redis is None or cost is None or cost <= 0:
         return
@@ -183,6 +207,16 @@ async def add_cost(redis: aioredis.Redis | None, team: str, cost: Decimal | None
                             "warn_ratio": config.BUDGET_WARN_RATIO,
                         }
                     )
+                )
+                alerts.fire(
+                    team,
+                    alerts.KIND_WARN,
+                    {
+                        "spend_usd": float(new_total),
+                        "budget_usd": float(config.BUDGET_MONTHLY_USD),
+                        "warn_ratio": config.BUDGET_WARN_RATIO,
+                        "month": month,
+                    },
                 )
     except Exception as exc:
         _debug("budget_add", exc)

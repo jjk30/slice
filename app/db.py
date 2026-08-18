@@ -56,6 +56,17 @@ SELECT_GUARDRAIL_ROWS = (
     "SELECT rail, action, reason, team, created_at FROM guardrail_events ORDER BY id DESC"
 )
 
+# --- Alerts (phase 11) --------------------------------------------------------
+INSERT_ALERT = """
+INSERT INTO alerts (team, kind, channel, status, detail, ts)
+VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()))
+"""
+# The summary counts per kind / per status and lists the newest rows; the aggregation
+# lives in summarize_alert_rows so it can be tested without a database. Cooldowns keep
+# this table small (at most one send per team per kind per cooldown window), so one
+# ordered scan is fine.
+SELECT_ALERT_ROWS = "SELECT id, ts, team, kind, channel, status, detail FROM alerts ORDER BY id DESC"
+
 # --- Dashboard reads (phase 10) ---------------------------------------------
 # The dashboard's math lives in app.dashboard.stats (pure functions, unit-tested
 # against seeded rows, the same way the eval and guardrail summaries work). To keep a
@@ -169,6 +180,98 @@ class GuardrailEvent:
     action: str
     reason: str | None = None
     request_id: int | None = None
+
+
+@dataclass(frozen=True)
+class AlertRecord:
+    """One delivery attempt of one budget alert (phase 11).
+
+    ``kind`` is "warn" (the team crossed its warn ratio) or "block" (it hit its cap).
+    ``channel`` names the delivery channel ("email" for now); ``status`` is "sent",
+    "failed", or "skipped_cooldown". ``detail`` is a small dict — spend so far, cap,
+    month, and the error text on a failure — stored as JSON text. ``ts`` is when the
+    attempt was made; None lets Postgres default to now().
+    """
+
+    team: str | None
+    kind: str
+    channel: str
+    status: str
+    detail: dict | None = None
+    ts: datetime | None = None
+
+
+ALERT_STATUS_SENT = "sent"
+ALERT_STATUS_FAILED = "failed"
+ALERT_STATUS_SKIPPED_COOLDOWN = "skipped_cooldown"
+
+
+def summarize_alert_rows(rows: list[dict], *, recent_limit: int = 10) -> dict:
+    """Aggregate raw alert rows into per-kind / per-status counts plus the newest rows.
+
+    Each row needs ``kind`` and ``status``; the recent list also uses ``id``, ``ts``,
+    ``team``, ``channel`` and ``detail`` (JSON text, decoded when it parses, otherwise
+    passed through). A pure function so the summary shape can be tested against seeded
+    rows without a database. ``recent`` is newest first, capped at ``recent_limit``.
+    ``by_kind_status`` is the cross count (e.g. how many warns were sent vs skipped).
+    """
+    by_kind: dict = {}
+    by_status: dict = {}
+    by_kind_status: dict = {}
+    for row in rows:
+        kind = row.get("kind")
+        status = row.get("status")
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+        by_status[status] = by_status.get(status, 0) + 1
+        by_kind_status[(kind, status)] = by_kind_status.get((kind, status), 0) + 1
+
+    def _ts(row: dict):
+        # Sort key that tolerates a missing timestamp (sorts it oldest).
+        value = row.get("ts")
+        return (value is not None, value)
+
+    def _iso(value):
+        return value.isoformat() if hasattr(value, "isoformat") else value
+
+    def _detail(value):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return value
+        return value
+
+    recent = [
+        {
+            "id": row.get("id"),
+            "ts": _iso(row.get("ts")),
+            "team": row.get("team"),
+            "kind": row.get("kind"),
+            "channel": row.get("channel"),
+            "status": row.get("status"),
+            "detail": _detail(row.get("detail")),
+        }
+        for row in sorted(rows, key=_ts, reverse=True)[:recent_limit]
+    ]
+
+    return {
+        "total": len(rows),
+        "by_kind": [
+            {"kind": kind, "count": count}
+            for kind, count in sorted(by_kind.items(), key=lambda kv: (kv[0] or ""))
+        ],
+        "by_status": [
+            {"status": status, "count": count}
+            for status, count in sorted(by_status.items(), key=lambda kv: (kv[0] or ""))
+        ],
+        "by_kind_status": [
+            {"kind": kind, "status": status, "count": count}
+            for (kind, status), count in sorted(
+                by_kind_status.items(), key=lambda kv: (kv[0][0] or "", kv[0][1] or "")
+            )
+        ],
+        "recent": recent,
+    }
 
 
 def summarize_guardrail_rows(rows: list[dict], *, recent_limit: int = 10) -> dict:
@@ -424,6 +527,43 @@ class Database:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(SELECT_GUARDRAIL_ROWS)
         return summarize_guardrail_rows([dict(row) for row in rows])
+
+    # --- Alerts (phase 11) --------------------------------------------------
+    # record_alert mirrors record()/record_guardrail(): fire-and-forget, every failure
+    # swallowed. The alert task is already detached from the request path, and a down
+    # database must never propagate up into it. alert_summary() is a read for the admin
+    # endpoint, so it raises like the other reads and is caught there.
+
+    async def record_alert(self, record: AlertRecord) -> None:
+        if self._pool is None:
+            return
+
+        try:
+            detail = (
+                json.dumps(record.detail, default=str) if record.detail is not None else None
+            )
+            async with self._pool.acquire() as connection:
+                await connection.execute(
+                    INSERT_ALERT,
+                    record.team,
+                    record.kind,
+                    record.channel,
+                    record.status,
+                    detail,
+                    record.ts,
+                )
+        except Exception as exc:
+            logger.warning(
+                json.dumps({"event": "db_unavailable", "stage": "alert_write", "error": str(exc)})
+            )
+
+    async def alert_summary(self) -> dict:
+        """Per-kind / per-status counts plus the newest alerts. Raises if the pool is unavailable."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(SELECT_ALERT_ROWS)
+        return summarize_alert_rows([dict(row) for row in rows])
 
     # --- Dashboard reads (phase 10) ----------------------------------------
     # Reads for the /dashboard endpoints. Like the other reads they raise when the

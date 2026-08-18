@@ -3,6 +3,7 @@ import httpx
 import pytest
 
 from app import config, redis_layer
+from app.alerts import engine as alerts_engine
 from app.main import app
 
 
@@ -63,6 +64,23 @@ def guardrails_off_by_default(monkeypatch):
     app.state.guardrails = None
     yield
     app.state.guardrails = previous
+
+
+@pytest.fixture(autouse=True)
+def alerts_off_by_default(monkeypatch):
+    """Phase-11 alerts are opt-in per test.
+
+    ``ALERTS_ENABLED`` defaults on whenever a ``RESEND_API_KEY`` is in the environment,
+    so on a keyed machine every budget warn or block in the older suites would spawn a
+    detached alert task and try to email. Force the switch off and clear the module-level
+    engine so ``fire`` returns before creating a task; the alerts tests turn it back on
+    and install an engine built from fakes explicitly.
+    """
+    monkeypatch.setattr(config, "ALERTS_ENABLED", False)
+    previous = alerts_engine.get_engine()
+    alerts_engine.configure(None)
+    yield
+    alerts_engine.configure(previous)
 
 
 @pytest.fixture(autouse=True)

@@ -183,6 +183,37 @@ GUARDRAILS_TIMEOUT_SECONDS = float(os.getenv("GUARDRAILS_TIMEOUT_SECONDS", "5"))
 # prompts and no feature that needs embeddings or downloads a model at runtime.
 GUARDRAILS_CONFIG_DIR = os.getenv("GUARDRAILS_CONFIG_DIR", "guardrails")
 
+# --- Alerts (phase 11): email when a team crosses its budget warn line or its cap. ---
+# The Redis layer already detects both moments (the once-per-month warn latch in
+# add_cost, the blocked decision in check_budget); the alerts engine hangs off those
+# exact spots, fire-and-forget: a detached task, every failure caught and logged, so
+# a slow or broken email provider can never touch a request. One channel for now,
+# email via Resend; the channel interface (app.alerts.channels) is where Slack and
+# WhatsApp plug in later without the engine changing.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY") or None
+
+# The whole switch. Defaults on only when a Resend key is present — an unkeyed
+# deployment has no channel and stays exactly as phase 10, zero alert code on any
+# path. Set explicitly to override either way.
+ALERTS_ENABLED = _bool("ALERTS_ENABLED", RESEND_API_KEY is not None)
+
+# The sender. Resend's onboarding address works out of the box (to the account
+# owner's own email only) with no verified domain; set a verified-domain sender for
+# anything real. Recipients are comma-separated; unset means the email channel is not
+# configured and, with the switch on, a startup warning says so.
+ALERT_FROM = os.getenv("ALERT_FROM", "onboarding@resend.dev")
+ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO") or None
+
+# Minimum seconds between two alerts of the same kind for the same team. The latch is a
+# Redis key (alert:cooldown:{team}:{kind}) with this TTL; a Redis outage fails open to
+# sending, never to crashing.
+ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "3600"))
+
+# The IANA zone the alert's timestamp is rendered in (e.g. "Aug 18, 2026, 3:20 AM EDT"),
+# via the standard-library zoneinfo — no new dependency. An unknown name falls back to
+# UTC at format time rather than failing the alert.
+ALERT_TIMEZONE = os.getenv("ALERT_TIMEZONE", "America/New_York")
+
 # --- Dashboard (phase 10): local read endpoints plus a live SSE stream. ---
 # Browser origins allowed to call the gateway (CORS), comma-separated. The default is
 # the Vite dev server the dashboard runs on; the built dashboard/dist is served by the
