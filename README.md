@@ -4,7 +4,7 @@ slice is an AI cost gateway. Your apps point at slice instead of straight at the
 
 This is v2: a full rebuild in Python around agents, RAG, and evaluation. v1 (Node and TypeScript) proved the idea on real traffic. v2 rebuilds the brain.
 
-PS, I got the idea while craving a slice of cake. That is why the logo is a cake.
+PS, I got the idea while craving a slice of cake. That is why the logo is a cake lol.
 
 ## The problem
 
