@@ -118,6 +118,44 @@ Returns counts per rail and per action (`blocked` / `error`) plus the most recen
 
 **A dependency note.** `nemoguardrails==0.23.0` (the latest) was chosen by checking its declared dependencies against the existing pins *before* installing, because nemoguardrails is known for strict langchain pins. 0.23.0 declares no `langchain`/`langchain-core`/`langchain-community` constraint at all and no `fastapi`/`starlette`/`uvicorn` core constraint, so it forces none of the phase 5–8 pins up or down — a resolver dry-run confirmed langchain 1.3.15, langchain-core 1.5.5, langchain-community 0.4.2, langgraph 1.2.11, langchain-anthropic 1.5.6, langsmith 0.11.0, and ragas 0.4.3 all stay put. The one pre-existing package it moves is `pandas` (3.0.5 → 2.3.3, its `pandas<3` cap); pandas is transitive, not a named pin, and ragas requires it only under an optional extra, so ragas is unaffected.
 
+## Dashboard (local only, no auth yet)
+
+One page, live. Spend and savings this month, per-team budgets with an honest tokens-remaining estimate, spend per model, the latest calls as they happen, and guardrail blocks. Vue 3 + Vite in plain JavaScript, Chart.js for the one chart, green accent. Every number on it comes from the API, which reads Postgres and Redis — nothing is hardcoded, and thin or empty data renders as zeros and dashes, never as placeholder numbers.
+
+**Backend.** A read-only router under `/dashboard`, plus one Server-Sent Events stream:
+
+| Endpoint | What it returns (current UTC month unless noted) |
+|---|---|
+| `GET /dashboard/summary` | total spend, total requests, cache hits, routed count (every request the router swapped — the auto router only routes down; a switch rule can point anywhere and its cost effect shows in savings), total savings, `unpriced_requests` (served requests with no known price, excluded from spend), eval pass rate (the phase-8 summary logic), guardrail block count (the phase-9 logic) |
+| `GET /dashboard/models` | per-model request count and spend (plus `unpriced_requests`) |
+| `GET /dashboard/teams` | per team: `spend_usd` (the record book, Postgres), `budget_usd` (config), `gate_spend_usd` (the live Redis counter the budget gate blocks on — it also carries the judge's cost), `budget_used_usd` / `budget_source` (the gate counter when Redis is up, the recorded spend when it is down — fail open), `remaining_usd` (cap minus budget used, floored at 0) and `estimated_tokens_remaining` |
+| `GET /dashboard/recent?limit=20` | the latest requests: time, team, model, `routed_from`, status, cost, cached (any month; `limit` clamped to 1–200) |
+| `GET /dashboard/events` | SSE: one `request` event per completed gateway request — `request_id`, team, model, routed_from, status, cost, cached, created_at |
+
+**Savings, defined honestly.** For each status-200 request the router swapped (`routed_from` set), savings = what the requested model would have charged for the same input and output tokens, priced from the same table with dated-snapshot resolution, minus what was actually paid. If the `routed_from` model has no price, that row contributes 0 — never a guess. A rule that routes *up* nets negative. Cache hits are counted separately, not folded into savings.
+
+**Tokens remaining, estimated honestly.** `estimated_tokens_remaining` = dollars remaining ÷ the team's blended cost per token this month (total cost ÷ total tokens over that team's status-200, priced requests — cache hits count, at cost 0, so the rate reflects the team's real cache hit rate; unpriced requests are left out of both sums). No traffic, zero tokens, or a zero rate gives `null` — the dashboard shows a dash, never a divide-by-zero and never a guess.
+
+**Cheap to serve.** The month's rows are reduced in SQL (`GROUP BY` team, model, status, cached, routed_from, cost-known, with tokens and cost summed and a count per group), so a refresh costs a few hundred rows, not a table scan decoded on the gateway's event loop. Every dashboard formula is linear, so the same pure functions run over grouped rows in production and over plain seeded rows in the tests.
+
+**Live, without polling.** Every completed request — including cache hits, and streams once they close — publishes one event to an in-process broadcaster, right next to the fire-and-forget Postgres log write. Each SSE client gets its own bounded queue (~100 events); publishing is synchronous, never blocks, and never waits on a slow client — a full queue drops its oldest event. A dashboard client connecting, hanging, or vanishing cannot slow the request path; a disconnected client's queue is dropped. The page connects with `EventSource` and reconnects on its own with a small backoff.
+
+**Failure shapes.** Postgres down → every dashboard read endpoint returns a clean JSON `503` (`{"error": {"message": ...}}`) and the gateway's request path is untouched. Redis down → `/dashboard/teams` still returns spend from Postgres and the cap from config; only `gate_spend_usd` goes `null`.
+
+**Running it.** Needs Node 22 (or 20.19+) and npm.
+
+```bash
+cd dashboard
+cp .env.example .env      # VITE_API_BASE_URL=http://localhost:8080
+npm install
+npm run dev               # Vite on http://localhost:5173, talks to the gateway over CORS
+npm run build             # writes dashboard/dist; the gateway serves it at http://localhost:8080/
+```
+
+In dev, the gateway allows the Vite origin through `CORS_ORIGINS` (default `http://localhost:5173`). Once built, `dashboard/dist` is served by the gateway itself at `/` — one process, no CORS needed (leave `VITE_API_BASE_URL` empty at build time to use same-origin URLs). The gateway checks for `dashboard/dist` once, at startup, so (re)start it after the first build.
+
+> **Warning — `/dashboard/*` is unauthenticated**, exactly like `/admin/*`. Auth lands in a later phase (12); until then keep the gateway, the dashboard, and `CORS_ORIGINS` local only.
+
 ## Tech stack
 
 **Backend.** Python, FastAPI, httpx. LangGraph for the router and agent loop. LangChain for the RAG pieces.

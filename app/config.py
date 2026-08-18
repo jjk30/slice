@@ -182,3 +182,19 @@ GUARDRAILS_TIMEOUT_SECONDS = float(os.getenv("GUARDRAILS_TIMEOUT_SECONDS", "5"))
 # the two built-in self-check rails are enabled there, with custom slice-specific
 # prompts and no feature that needs embeddings or downloads a model at runtime.
 GUARDRAILS_CONFIG_DIR = os.getenv("GUARDRAILS_CONFIG_DIR", "guardrails")
+
+# --- Dashboard (phase 10): local read endpoints plus a live SSE stream. ---
+# Browser origins allowed to call the gateway (CORS), comma-separated. The default is
+# the Vite dev server the dashboard runs on; the built dashboard/dist is served by the
+# gateway itself and needs no CORS. The /dashboard/* endpoints have no auth yet (phase
+# 12), so keep this list to local origins.
+
+
+def _csv(name: str, default: str) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        raw = default
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+CORS_ORIGINS = _csv("CORS_ORIGINS", "http://localhost:5173")

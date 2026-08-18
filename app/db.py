@@ -1,6 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -30,8 +31,8 @@ CREATE TABLE IF NOT EXISTS requests (
 INSERT = """
 INSERT INTO requests
     (model, status, latency_ms, input_tokens, output_tokens, cost_usd, stream, cached,
-     routed_from, prompt_text, team, attempts)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     routed_from, prompt_text, team, attempts, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13, now()))
 """
 
 # --- Eval scores (phase 8) --------------------------------------------------
@@ -54,6 +55,43 @@ VALUES ($1, $2, $3, $4, $5)
 SELECT_GUARDRAIL_ROWS = (
     "SELECT rail, action, reason, team, created_at FROM guardrail_events ORDER BY id DESC"
 )
+
+# --- Dashboard reads (phase 10) ---------------------------------------------
+# The dashboard's math lives in app.dashboard.stats (pure functions, unit-tested
+# against seeded rows, the same way the eval and guardrail summaries work). To keep a
+# month of traffic from being scanned, decoded, and reduced on the gateway's event
+# loop on every refresh, Postgres does the heavy reduction: this month's rows are
+# GROUPed BY every column the math branches on, with tokens and cost summed and a
+# count ``n`` per group. Every stats formula is linear in tokens and cost, so a group
+# gives exactly what its member rows would; the result is a few hundred rows at most.
+# The (cost_usd IS NULL) key keeps unpriced rows in their own group so a SUM over a
+# group is never a mix of known and unknown. prompt_text is never read here.
+# Migration 008 indexes created_at on all three tables so the month filter is cheap.
+SELECT_DASHBOARD_ROWS = """
+SELECT team, model, status, cached, routed_from,
+       COUNT(*)           AS n,
+       SUM(input_tokens)  AS input_tokens,
+       SUM(output_tokens) AS output_tokens,
+       SUM(cost_usd)      AS cost_usd
+FROM requests
+WHERE created_at >= $1
+GROUP BY team, model, status, cached, routed_from, (cost_usd IS NULL)
+"""
+SELECT_RECENT_ROWS = """
+SELECT id, created_at, team, model, routed_from, status, cost_usd, cached
+FROM requests
+ORDER BY id DESC
+LIMIT $1
+"""
+SELECT_EVAL_ROWS_SINCE = (
+    "SELECT model, routed_from, passed FROM eval_scores WHERE created_at >= $1"
+)
+SELECT_GUARDRAIL_ROWS_SINCE = """
+SELECT rail, action, reason, team, created_at
+FROM guardrail_events
+WHERE created_at >= $1
+ORDER BY id DESC
+"""
 
 # --- Switch rules (phase 5) -------------------------------------------------
 SELECT_RULES = "SELECT id, team, from_model, to_model FROM switch_rules ORDER BY id"
@@ -89,6 +127,12 @@ class RequestRecord:
     # that did not loop — cache hits, gate rejects, pins, rules, streams, and any
     # request served on its first try — so the default matches pre-phase-7 behavior.
     attempts: int = 1
+    # When the gateway finished the request (phase 10). The same instant is stamped on
+    # the live dashboard event, so a row and its event carry an identical timestamp and
+    # the dashboard can tell them apart from a neighbor. None (every caller before
+    # phase 10, and any test that builds a record by hand) lets Postgres default to
+    # now() at insert, exactly as before.
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -300,6 +344,7 @@ class Database:
                     record.prompt_text,
                     record.team,
                     record.attempts,
+                    record.created_at,
                 )
         except Exception as exc:
             # The response is already out the door; note it and drop the row.
@@ -379,6 +424,39 @@ class Database:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(SELECT_GUARDRAIL_ROWS)
         return summarize_guardrail_rows([dict(row) for row in rows])
+
+    # --- Dashboard reads (phase 10) ----------------------------------------
+    # Reads for the /dashboard endpoints. Like the other reads they raise when the
+    # pool is unavailable or the query fails; the dashboard router turns that into a
+    # clean JSON 503. Nothing on the gateway's request path ever calls these.
+
+    async def _fetch(self, query: str, *args) -> list[dict]:
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(query, *args)
+        return [dict(row) for row in rows]
+
+    async def dashboard_rows(self, since) -> list[dict]:
+        """This month's requests (at or after ``since``), pre-grouped — see SELECT_DASHBOARD_ROWS.
+
+        Each returned dict is a group carrying ``n`` (how many requests it stands for)
+        with tokens and cost summed; ``app.dashboard.stats`` treats it exactly like a
+        plain row weighted by ``n``.
+        """
+        return await self._fetch(SELECT_DASHBOARD_ROWS, since)
+
+    async def recent_rows(self, limit: int) -> list[dict]:
+        """The latest ``limit`` request rows, newest first."""
+        return await self._fetch(SELECT_RECENT_ROWS, limit)
+
+    async def eval_rows_since(self, since) -> list[dict]:
+        """Eval score rows at or after ``since``, in the shape summarize_eval_rows takes."""
+        return await self._fetch(SELECT_EVAL_ROWS_SINCE, since)
+
+    async def guardrail_rows_since(self, since) -> list[dict]:
+        """Guardrail event rows at or after ``since``, for summarize_guardrail_rows."""
+        return await self._fetch(SELECT_GUARDRAIL_ROWS_SINCE, since)
 
     # --- Switch rules (phase 5) --------------------------------------------
     # Unlike record(), these return values the caller needs, so they raise on

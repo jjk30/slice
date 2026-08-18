@@ -2,11 +2,15 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
 from app import config, pricing, redis_layer
@@ -14,6 +18,8 @@ from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import STREAM_DOWNGRADED_HEADER
 from app.admin import router as admin_router
 from app.agent import AGENT_HEADER, agent_applies, run_agent_loop
+from app.dashboard import get_broadcaster, make_event
+from app.dashboard import router as dashboard_router
 from app.db import Database, RequestRecord
 from app import evaluation
 from app import guardrails
@@ -86,6 +92,11 @@ async def lifespan(app: FastAPI):
     # broken. A None here means the agent loop runs with no rails — exactly phase 7.
     app.state.guardrails = guardrails.build_engine()
 
+    # Phase 10: the live-event broadcaster for /dashboard/events. Pure in-process
+    # fan-out; construction touches nothing. The request path publishes into it
+    # synchronously and never waits on a client.
+    get_broadcaster(app)
+
     yield
 
     client = getattr(app.state, "client", None)
@@ -102,7 +113,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="slice gateway", lifespan=lifespan)
+# Phase 10: let the dashboard's Vite dev origin call the gateway from a browser. Only
+# the configured origins (default http://localhost:5173) get the CORS headers; every
+# other request is exactly as before. The built dashboard is served same-origin (see
+# the static mount at the bottom of this file) and needs none of this.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.CORS_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 app.include_router(admin_router)
+app.include_router(dashboard_router)
 
 
 def get_client(app: FastAPI) -> httpx.AsyncClient:
@@ -206,28 +228,54 @@ def record_task(
     routed_from: str | None = None,
     prompt_text: str | None = None,
     team: str = "default",
-) -> BackgroundTask | None:
+) -> BackgroundTask:
     """Build the row and hand it to a background task, so the write lands after the response.
 
-    Returns None when logging is disabled, which leaves the response untouched.
+    The error paths use this (invalid JSON, adapter and upstream errors); every served
+    or gated response goes through ``after_response`` instead. Phase 10: the same task
+    also publishes the completed request to any live dashboard clients — a synchronous,
+    non-blocking fan-out that runs whether or not logging is on, so a dashboard sees
+    every request even with no database. (Before phase 10 this returned None with
+    logging off; now there is always the publish to do.)
     """
     database = getattr(app.state, "db", None)
-    if database is None:
-        return None
-
-    record = RequestRecord(
-        model=model,
-        status=status,
-        latency_ms=elapsed_ms(started),
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cost_usd=pricing.cost_usd(model, input_tokens, output_tokens),
-        stream=stream,
-        routed_from=routed_from,
-        prompt_text=prompt_text,
-        team=team,
+    cost = pricing.cost_usd(model, input_tokens, output_tokens)
+    # One instant for both the row and the live event, so the dashboard can match them.
+    finished_at = datetime.now(timezone.utc)
+    broadcaster = get_broadcaster(app)
+    event = make_event(
+        team=team, model=model, routed_from=routed_from, status=status, cost=cost,
+        cached=False, created_at=finished_at,
     )
-    return BackgroundTask(database.record, record)
+
+    record = (
+        None
+        if database is None
+        else RequestRecord(
+            model=model,
+            status=status,
+            latency_ms=elapsed_ms(started),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost,
+            stream=stream,
+            routed_from=routed_from,
+            prompt_text=prompt_text,
+            team=team,
+            created_at=finished_at,
+        )
+    )
+
+    # Always a coroutine, never a bare sync callable: Starlette would run a sync
+    # BackgroundTask in a worker thread, and the broadcaster's queues must only be
+    # touched from the event loop.
+    async def run() -> None:
+        # Publish first: it can't block, and the live view must never wait on the write.
+        broadcaster.publish(event)
+        if database is not None and record is not None:
+            await database.record(record)
+
+    return BackgroundTask(run)
 
 
 def after_response(
@@ -258,6 +306,11 @@ def after_response(
     the actual spend there is the sum of every attempt and every checker call, not
     a single call's price, so it is passed in explicitly for both the row and the
     budget. ``attempts`` is the loop's attempt count (1 for every non-loop request).
+
+    Phase 10: the same task publishes one event to the live dashboard broadcaster,
+    right next to the Postgres write and before it. ``publish`` is synchronous and
+    never blocks — a slow, hung, or vanished dashboard client can't touch this task,
+    let alone the response, which is already on its way to the client.
     """
     if cost_override is not None:
         cost = cost_override
@@ -265,8 +318,16 @@ def after_response(
         cost = Decimal(0) if cached else pricing.cost_usd(model, input_tokens, output_tokens)
     database = getattr(app.state, "db", None)
     redis = get_redis(app)
+    # One instant for both the row and the live event, so the dashboard can match them.
+    finished_at = datetime.now(timezone.utc)
+    broadcaster = get_broadcaster(app)
+    event = make_event(
+        team=team, model=model, routed_from=routed_from, status=status, cost=cost,
+        cached=cached, created_at=finished_at,
+    )
 
     async def run() -> None:
+        broadcaster.publish(event)
         if database is not None:
             await database.record(
                 RequestRecord(
@@ -282,6 +343,7 @@ def after_response(
                     prompt_text=prompt_text,
                     team=team,
                     attempts=attempts,
+                    created_at=finished_at,
                 )
             )
         # A cache hit cost nothing to serve, so it never moves the budget.
@@ -975,6 +1037,56 @@ def _finalize_openai(
             prompt_text=prompt_text,
         ),
     )
+
+
+# --- Phase 10: serve the built dashboard, if it has been built ---------------
+# ``npm run build`` in dashboard/ writes dashboard/dist. When that folder exists at
+# startup the gateway serves it: index.html at "/", the hashed bundle under /assets,
+# and any other top-level file Vite copied from dashboard/public (the favicon). One
+# process is then the whole product. In dev the Vite server on :5173 serves the app
+# instead and talks to the gateway over CORS. The check happens once, at import: build
+# the dashboard, then (re)start the gateway.
+#
+# Deliberately NOT a StaticFiles mount at "/": Starlette treats a mount as a full match
+# for every path, which would beat the method-mismatch (partial) match of a real route
+# and turn e.g. GET /v1/messages from a 405 with an Allow header into a 404, and would
+# swallow the trailing-slash redirects. Only exact single-segment paths are claimed
+# here, so /v1/*, /admin/*, /dashboard/*, /docs and /openapi.json behave exactly as
+# before whether or not the dashboard has been built. These are the last routes
+# registered, so every real route above still wins on a full match.
+DASHBOARD_DIST = Path(__file__).resolve().parent.parent / "dashboard" / "dist"
+
+
+def _dashboard_file(name: str) -> Path | None:
+    """A top-level file inside dashboard/dist by name, or None (never a path outside it)."""
+    candidate = (DASHBOARD_DIST / name).resolve()
+    if candidate.parent != DASHBOARD_DIST.resolve() or not candidate.is_file():
+        return None
+    return candidate
+
+
+if DASHBOARD_DIST.is_dir():
+    from fastapi.responses import FileResponse
+
+    assets_dir = DASHBOARD_DIST / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="dashboard-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def dashboard_index():
+        index = _dashboard_file("index.html")
+        if index is None:
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
+        return FileResponse(index)
+
+    @app.get("/{filename}", include_in_schema=False)
+    async def dashboard_public_file(filename: str):
+        # favicon.png and anything else at the top level of the build. A miss is the
+        # same 404 body the framework gives for an unknown path.
+        found = _dashboard_file(filename)
+        if found is None:
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
+        return FileResponse(found)
 
 
 if __name__ == "__main__":

@@ -127,6 +127,29 @@ async def check_budget(redis: aioredis.Redis | None, team: str) -> BudgetDecisio
         return BudgetDecision(blocked=False, spend=Decimal(0))
 
 
+async def get_spend(
+    redis: aioredis.Redis | None, team: str, month: str | None = None
+) -> Decimal | None:
+    """The team's live monthly budget counter, or None when Redis can't be read.
+
+    A dashboard read (phase 10), not a gate: unlike ``check_budget``, which fails open
+    to a spend of 0 because "unknown" and "nothing spent" call for the same decision,
+    this tells the two apart. A missing key is a real 0 (nothing added this month);
+    None means Redis is off or unreachable — or the stored value is not a finite
+    number — and the caller should say so, not show 0. ``month`` lets the caller pin
+    the same month it used for everything else in one response.
+    """
+    if redis is None:
+        return None
+    try:
+        raw = await redis.get(f"{_BUDGET_PREFIX}:{team}:{month or month_key()}")
+        value = Decimal(raw.decode()) if raw else Decimal(0)
+        return value if value.is_finite() else None
+    except Exception as exc:
+        _debug("budget_read", exc)
+        return None
+
+
 async def add_cost(redis: aioredis.Redis | None, team: str, cost: Decimal | None) -> None:
     """Add one request's cost to the team's monthly counter, after the response.
 
