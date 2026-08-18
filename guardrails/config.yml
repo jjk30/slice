@@ -1,0 +1,25 @@
+# NeMo Guardrails config for the slice agent loop (phase 9).
+#
+# This wraps the agent loop ONLY. Plain proxy traffic and the router path never
+# touch these rails; they run just before the loop starts (input) and just after
+# it finishes (output). See app/guardrails/engine.py for the wiring.
+#
+# Only the two built-in self-check rails are enabled, and nothing else. Everything
+# here is deliberately minimal so that constructing the engine never needs
+# embeddings and never downloads a model at runtime:
+#   - no `models:` are declared here — the rails LLM is injected in code from
+#     GUARDRAILS_MODEL (see engine.py), wired through langchain-anthropic.
+#   - no colang flows, no knowledge base, no user/bot message canonical forms, so
+#     no embedding index is ever built. If any feature here started reaching out to
+#     fetch a model, it would be removed: the rails must stay offline-constructible.
+#
+# The self-check prompts live in prompts.yml. Their contract matches NeMo's built-in
+# `is_content_safe` parser: the LLM answers "Yes" to BLOCK and "No" to ALLOW.
+
+rails:
+  input:
+    flows:
+      - self check input
+  output:
+    flows:
+      - self check output

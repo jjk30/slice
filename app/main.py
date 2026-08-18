@@ -16,6 +16,8 @@ from app.admin import router as admin_router
 from app.agent import AGENT_HEADER, agent_applies, run_agent_loop
 from app.db import Database, RequestRecord
 from app import evaluation
+from app import guardrails
+from app.guardrails import GUARDRAIL_HEADER
 from app.rag import retriever as rag_retriever
 from app.rag.prompt import extract_prompt_text
 from app.redis_layer import CACHE_HEADER
@@ -78,6 +80,12 @@ async def lifespan(app: FastAPI):
     # tracing is off or unkeyed — no request path ever depends on LangSmith.
     evaluation.configure_tracing()
 
+    # Phase 9: the guardrails engine, or None when GUARDRAILS_ENABLED is off (the kill
+    # switch) or the build fails. build_engine imports nemoguardrails lazily, so with
+    # the switch off the package is never imported and the server starts even if it is
+    # broken. A None here means the agent loop runs with no rails — exactly phase 7.
+    app.state.guardrails = guardrails.build_engine()
+
     yield
 
     client = getattr(app.state, "client", None)
@@ -132,6 +140,13 @@ def get_evaluator(app: FastAPI):
     # None means evaluation is off (rate 0, or lifespan not run, e.g. a unit test).
     # The finalize path treats None as "never sample", so this fails open.
     return getattr(app.state, "evaluator", None)
+
+
+def get_guardrails(app: FastAPI):
+    # None means the rails are off (kill switch, an unbuildable engine, or lifespan not
+    # run, e.g. a unit test). The agent-loop path treats None as "no rails", so this
+    # fails open to exactly phase-7 behavior.
+    return getattr(app.state, "guardrails", None)
 
 
 def anthropic_error(status_code: int, error_type: str, message: str) -> JSONResponse:
@@ -373,6 +388,33 @@ async def messages(request: Request):
         if wants_stream:
             agent_header = "off:stream"
         else:
+            # --- Phase 9 guardrails: the input rail runs before the loop, the output
+            # rail after it, and ONLY here — the loop is the only path they wrap. When
+            # the engine is off/unbuilt (get_guardrails is None) the loop behaves exactly
+            # as phase 7. Every rail fails open: an error is logged and the loop proceeds.
+            engine = get_guardrails(app)
+            database = getattr(app.state, "db", None)
+
+            # Input rail: a block returns a clean 400 and never reaches a provider. An
+            # empty prompt has nothing to check, so the rail is skipped.
+            if engine is not None:
+                rail_prompt = extract_prompt_text(payload) or ""
+                if rail_prompt.strip():
+                    outcome = await engine.check_input(rail_prompt)
+                    if outcome.blocked:
+                        guardrails.record_event(
+                            database, team=team, rail="input", action="blocked",
+                            reason=outcome.reason,
+                        )
+                        return _guardrail_input_reject(
+                            request, model, started, wants_stream, team, prompt_text,
+                        )
+                    if outcome.errored:
+                        guardrails.record_event(
+                            database, team=team, rail="input", action="error",
+                            reason=outcome.reason,
+                        )
+
             loop = await run_agent_loop(
                 payload, request.headers, team, redis, client,
                 served_model=served_model, requested_model=decision.requested_model,
@@ -386,6 +428,30 @@ async def messages(request: Request):
             loop_routed_header = (
                 f"{decision.requested_model} -> {final_model}" if loop_routed_from else None
             )
+
+            # Output rail: self-check the assembled final answer text. A block replaces
+            # the answer with a standard refusal (still HTTP 200). An error body carries
+            # no answer text, so the rail is skipped for it.
+            if engine is not None:
+                final_text = evaluation.extract_answer_text(loop.result.content or b"")
+                if final_text.strip():
+                    outcome = await engine.check_output(final_text)
+                    if outcome.blocked:
+                        guardrails.record_event(
+                            database, team=team, rail="output", action="blocked",
+                            reason=outcome.reason,
+                        )
+                        return _guardrail_output_refusal(
+                            loop, request.method, path, final_model, started, team,
+                            prompt_text=prompt_text, routed_from=loop_routed_from,
+                            routed_header=loop_routed_header,
+                        )
+                    if outcome.errored:
+                        guardrails.record_event(
+                            database, team=team, rail="output", action="error",
+                            reason=outcome.reason,
+                        )
+
             return _finalize_anthropic(
                 loop.result, request.method, path, final_model, started, wants_stream, team,
                 cache_key, routed_from=loop_routed_from, verdict=verdict,
@@ -442,6 +508,65 @@ def _anthropic_gate_reject(message, request, model, started, wants_stream, team,
         model, status, started, wants_stream, team, prompt_text=prompt_text
     )
     return response
+
+
+# Phase 9: what a blocked request is told. The input message never reaches a provider;
+# the output refusal replaces a final answer the output rail judged to leak internals.
+GUARDRAIL_INPUT_MESSAGE = "This request was blocked by slice's input guardrail."
+GUARDRAIL_OUTPUT_REFUSAL = "I'm sorry, but I can't share that response."
+
+
+def _guardrail_input_reject(request, model, started, wants_stream, team, prompt_text=None):
+    """A clean Anthropic-shaped 400 from the input rail. Never reached a provider."""
+    status = 400
+    log_request(request.method, request.url.path, model, status, started)
+    response = anthropic_error(status, "invalid_request_error", GUARDRAIL_INPUT_MESSAGE)
+    response.headers[GUARDRAIL_HEADER] = "input"
+    response.background = after_response(
+        model, status, started, wants_stream, team, prompt_text=prompt_text
+    )
+    return response
+
+
+def _guardrail_output_refusal(
+    loop, method, path, model, started, team, *, prompt_text=None, routed_from=None,
+    routed_header=None,
+):
+    """A 200 Anthropic-shaped refusal from the output rail, in place of the leaked answer.
+
+    The loop really ran and really spent ``loop.spend`` across its attempts, so the
+    logged row bills that true cost and records the loop's attempt count — only the
+    served body is swapped for the refusal. The refusal is never cached (cache_key is
+    None), so a blocked answer can't poison the cache under the real request's key.
+    """
+    status = 200
+    body = json.dumps(
+        {
+            "id": "msg_slice_guardrail",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": GUARDRAIL_OUTPUT_REFUSAL}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+    ).encode()
+    headers = {"content-type": "application/json", GUARDRAIL_HEADER: "output"}
+    if routed_header is not None:
+        headers[ROUTED_HEADER] = routed_header
+    headers[AGENT_HEADER] = loop.header
+    log_request(method, path, model, status, started, routed_from)
+    return Response(
+        content=body,
+        status_code=status,
+        headers=headers,
+        background=after_response(
+            model, status, started, False, team,
+            routed_from=routed_from, prompt_text=prompt_text,
+            attempts=loop.attempts, cost_override=loop.spend, cache_key=None,
+        ),
+    )
 
 
 def _anthropic_cache_hit(body, request, model, started, team, prompt_text=None):

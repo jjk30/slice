@@ -153,3 +153,32 @@ EVAL_TIMEOUT_SECONDS = float(os.getenv("EVAL_TIMEOUT_SECONDS", "30"))
 LANGCHAIN_TRACING_V2 = _bool("LANGCHAIN_TRACING_V2", False)
 LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY") or None
 LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "slice")
+
+# --- Guardrails (phase 9): NeMo self-check rails around the agent loop only. ---
+# Two rails — a self-check on the incoming prompt and a self-check on the assembled
+# final answer — wrap the phase-7 agent loop and ONLY the agent loop. Plain proxy
+# traffic and the router path never touch them; they run exactly where the loop runs
+# (the non-streaming auto-routed-down path). Everything fails open: any error or
+# timeout inside the rails engine is logged and the loop proceeds as if the rail
+# passed, so a broken rail can never block or crash a request.
+#
+# GUARDRAILS_ENABLED is the whole kill switch. False means zero rails code runs and
+# the loop behaves exactly as phase 7 — and because nemoguardrails is imported lazily
+# (only when the engine is built, which only happens when this is on), the server
+# starts fine even if nemoguardrails is broken or absent while the switch is off.
+GUARDRAILS_ENABLED = _bool("GUARDRAILS_ENABLED", True)
+
+# The model the rails LLM uses for its self-checks, wired through langchain-anthropic
+# (ChatAnthropic), the same integration the phase-8 eval judge uses. Defaults to the
+# router judge model. Its calls are slice's own infrastructure cost, out-of-band from
+# the team budget, exactly like the eval judge.
+GUARDRAILS_MODEL = os.getenv("GUARDRAILS_MODEL", JUDGE_MODEL)
+
+# Ceiling on how long a single rail check may run before it is abandoned. A timeout is
+# swallowed like any other rails failure: fail open, log, the loop continues.
+GUARDRAILS_TIMEOUT_SECONDS = float(os.getenv("GUARDRAILS_TIMEOUT_SECONDS", "5"))
+
+# The NeMo Guardrails config directory (config.yml plus the self-check prompts). Only
+# the two built-in self-check rails are enabled there, with custom slice-specific
+# prompts and no feature that needs embeddings or downloads a model at runtime.
+GUARDRAILS_CONFIG_DIR = os.getenv("GUARDRAILS_CONFIG_DIR", "guardrails")

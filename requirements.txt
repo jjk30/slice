@@ -19,6 +19,19 @@ numpy
 ragas==0.4.3
 langchain-anthropic==1.5.6
 langsmith==0.11.0
+# --- Guardrails (phase 9) ---
+# Pinned. nemoguardrails is notorious for strict langchain pins, so this version was
+# chosen by checking its declared dependencies against the existing pins BEFORE
+# installing. 0.23.0 (the latest) declares NO langchain/langchain-core/langchain-community
+# constraint at all and no fastapi/starlette/uvicorn core constraint, so it forces none
+# of the phase 5-8 pins up or down: langchain 1.3.15, langchain-core 1.5.5,
+# langchain-community 0.4.2, langgraph 1.2.11, langchain-anthropic 1.5.6, langsmith
+# 0.11.0, and ragas 0.4.3 all stay exactly as they were (verified with a resolver
+# dry-run). The one pre-existing package it moves is pandas (3.0.5 -> 2.3.3, its
+# `pandas<3` cap) — pandas is transitive, not a named pin, and ragas 0.4.3 requires it
+# only under `extra == "all"`, so ragas is unaffected. The rails LLM is wired through the
+# already-pinned langchain-anthropic. See the phase-9 notes in the README.
+nemoguardrails==0.23.0
 pytest
 pytest-asyncio
 respx

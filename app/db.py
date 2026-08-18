@@ -44,6 +44,17 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)
 # summarize_eval_rows so it can be unit-tested without a live database.
 SELECT_EVAL_ROWS = "SELECT model, routed_from, passed FROM eval_scores"
 
+# --- Guardrail events (phase 9) ---------------------------------------------
+INSERT_GUARDRAIL = """
+INSERT INTO guardrail_events (request_id, team, rail, action, reason)
+VALUES ($1, $2, $3, $4, $5)
+"""
+# The summary needs the rail/action for counting and created_at for the recent list;
+# summarize_guardrail_rows does the aggregation so it can be tested without a database.
+SELECT_GUARDRAIL_ROWS = (
+    "SELECT rail, action, reason, team, created_at FROM guardrail_events ORDER BY id DESC"
+)
+
 # --- Switch rules (phase 5) -------------------------------------------------
 SELECT_RULES = "SELECT id, team, from_model, to_model FROM switch_rules ORDER BY id"
 INSERT_RULE = """
@@ -97,6 +108,72 @@ class EvalRecord:
     passed: bool
     judge_model: str | None
     request_id: int | None = None
+
+
+@dataclass(frozen=True)
+class GuardrailEvent:
+    """One guardrail rail firing on one agent-loop request (phase 9).
+
+    ``rail`` is "input" or "output"; ``action`` is "blocked" (the rail stopped the
+    request) or "error" (the rails engine failed and the loop failed open). ``reason``
+    is a short note — the rail name for a block, the error string for an error.
+    ``request_id`` is usually None, exactly like EvalRecord — see the migration.
+    """
+
+    team: str | None
+    rail: str
+    action: str
+    reason: str | None = None
+    request_id: int | None = None
+
+
+def summarize_guardrail_rows(rows: list[dict], *, recent_limit: int = 10) -> dict:
+    """Aggregate raw guardrail rows into per-rail / per-action counts plus recents.
+
+    Each row needs ``rail`` and ``action``; the recent list also uses ``reason``,
+    ``team`` and ``created_at``. A pure function so the summary shape can be tested
+    against seeded rows without a database. ``recent`` is the most recent events,
+    newest first, capped at ``recent_limit``.
+    """
+    by_rail: dict = {}
+    by_action: dict = {}
+    for row in rows:
+        rail = row.get("rail")
+        action = row.get("action")
+        by_rail[rail] = by_rail.get(rail, 0) + 1
+        by_action[action] = by_action.get(action, 0) + 1
+
+    def _created(row: dict):
+        # Sort key that tolerates a missing timestamp (sorts it oldest).
+        value = row.get("created_at")
+        return (value is not None, value)
+
+    def _iso(value):
+        return value.isoformat() if hasattr(value, "isoformat") else value
+
+    recent = [
+        {
+            "rail": row.get("rail"),
+            "action": row.get("action"),
+            "reason": row.get("reason"),
+            "team": row.get("team"),
+            "created_at": _iso(row.get("created_at")),
+        }
+        for row in sorted(rows, key=_created, reverse=True)[:recent_limit]
+    ]
+
+    return {
+        "total": len(rows),
+        "by_rail": [
+            {"rail": rail, "count": count}
+            for rail, count in sorted(by_rail.items(), key=lambda kv: (kv[0] or ""))
+        ],
+        "by_action": [
+            {"action": action, "count": count}
+            for action, count in sorted(by_action.items(), key=lambda kv: (kv[0] or ""))
+        ],
+        "recent": recent,
+    }
 
 
 def summarize_eval_rows(rows: list[dict]) -> dict:
@@ -265,6 +342,43 @@ class Database:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(SELECT_EVAL_ROWS)
         return summarize_eval_rows([dict(row) for row in rows])
+
+    # --- Guardrail events (phase 9) ----------------------------------------
+    # record_guardrail mirrors record()/record_eval(): fire-and-forget, every failure
+    # swallowed. A guardrail event is never worth crashing a request (the write is
+    # already off the request path), and a down database must never propagate up.
+    # guardrail_summary() is a read for the admin endpoint, so it raises like the
+    # switch-rule reads above and is caught there.
+
+    async def record_guardrail(self, record: GuardrailEvent) -> None:
+        if self._pool is None:
+            return
+
+        try:
+            async with self._pool.acquire() as connection:
+                await connection.execute(
+                    INSERT_GUARDRAIL,
+                    record.request_id,
+                    record.team,
+                    record.rail,
+                    record.action,
+                    record.reason,
+                )
+        except Exception as exc:
+            # The response is already out the door; note it and drop the row.
+            logger.warning(
+                json.dumps(
+                    {"event": "db_unavailable", "stage": "guardrail_write", "error": str(exc)}
+                )
+            )
+
+    async def guardrail_summary(self) -> dict:
+        """Per-rail / per-action counts plus recent events. Raises if the pool is unavailable."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(SELECT_GUARDRAIL_ROWS)
+        return summarize_guardrail_rows([dict(row) for row in rows])
 
     # --- Switch rules (phase 5) --------------------------------------------
     # Unlike record(), these return values the caller needs, so they raise on

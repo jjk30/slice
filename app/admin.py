@@ -1,9 +1,10 @@
-"""Admin API for the per-team switch rules (phase 5) and eval summary (phase 8).
+"""Admin API for switch rules (phase 5), eval summary (phase 8), guardrails (phase 9).
 
-Endpoints under /admin: the switch-rules CRUD (/admin/rules) and a read-only eval
-pass-rate summary (/admin/eval/summary). They are ALL LOCAL-ONLY for now — there is
-deliberately no authentication yet; that lands in a later phase. Do not expose this
-router on a public interface.
+Endpoints under /admin: the switch-rules CRUD (/admin/rules), a read-only eval
+pass-rate summary (/admin/eval/summary), and a read-only guardrails summary
+(/admin/guardrails/summary). They are ALL LOCAL-ONLY for now — there is deliberately
+no authentication yet; that lands in a later phase. Do not expose this router on a
+public interface.
 
 Writes persist to Postgres and then refresh the in-memory rules cache immediately,
 so a newly created or deleted rule takes effect on the very next request rather
@@ -98,6 +99,26 @@ async def eval_summary(request: Request):
         return empty
     try:
         return await db.eval_summary()
+    except Exception:  # noqa: BLE001 — a read failure degrades to the empty summary.
+        return empty
+
+
+@router.get("/guardrails/summary")
+async def guardrails_summary(request: Request):
+    """Per-rail / per-action guardrail counts plus the most recent events (phase 9).
+
+    Local-only and unauthenticated, exactly like the rules and eval endpoints above —
+    there is deliberately no auth yet; that lands in a later phase, and this router must
+    not be exposed on a public interface. A missing or disconnected database returns an
+    empty-but-shaped summary rather than an error, since "no events yet" and "logging
+    off" are both ordinary, not failures.
+    """
+    empty = {"total": 0, "by_rail": [], "by_action": [], "recent": []}
+    db = _get_db(request)
+    if db is None or not getattr(db, "enabled", False):
+        return empty
+    try:
+        return await db.guardrail_summary()
     except Exception:  # noqa: BLE001 — a read failure degrades to the empty summary.
         return empty
 

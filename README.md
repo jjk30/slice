@@ -97,6 +97,27 @@ Returns the overall pass rate plus a breakdown per model and per `routed_from �
 
 **A dependency note.** RAGAS (`ragas==0.4.3`) resolves cleanly against the installed `langchain-core` 1.5.5 / `langgraph` 1.2.11 — it does not force either up or down. It does hard-import one `langchain-community` module that the sunset community package has dropped; slice registers a tiny stub for it at import time (it never uses Vertex) rather than dragging langchain-core *down* to a version that still ships it, which would break the phase 5–7 router and agent loop. No pins are changed to accommodate RAGAS.
 
+## Guardrails (local only, no auth yet)
+
+slice wraps the agent loop — and **only** the agent loop — in two NeMo Guardrails self-check rails. Plain proxy traffic and the router path never touch them; the rails run exactly where the loop runs (the non-streaming, auto-routed-down path).
+
+- **Input rail**, before the loop starts: self-checks the user prompt for attempts to manipulate slice itself — injection aimed at the routing judge or the loop's checker, attempts to force a pass on a bad answer or force an escalation, or attempts to extract slice's config or internal prompts. A block returns a clean Anthropic-shaped **400** with header `x-slice-guardrail: input`, and the request never reaches a provider.
+- **Output rail**, after the loop finishes: self-checks the assembled final answer for leaked slice internals (config values, key names, internal prompts). A block returns **200** with an Anthropic-shaped standard refusal and header `x-slice-guardrail: output`. The loop's real spend is still billed; the refusal is never cached.
+
+Only the two built-in self-check rails are used, with slice-specific prompts, configured in `guardrails/` (`config.yml` plus `prompts.yml`). No NeMo feature that needs embeddings or downloads a model at runtime is enabled — the engine constructs fully offline. The rails LLM is `GUARDRAILS_MODEL` (default the router judge model), wired through `langchain-anthropic`.
+
+Everything fails open. `GUARDRAILS_ENABLED` (default `true`) is the whole kill switch: false means zero rails code runs, the loop behaves exactly as phase 7, and — because `nemoguardrails` is imported lazily — the server starts even if the package is broken or absent. Any exception or timeout (`GUARDRAILS_TIMEOUT_SECONDS`, default `5`) inside the rails engine is caught, logged, and treated as a pass, so a rails failure never blocks or crashes a request. Every block or fail-open error is written to the `guardrail_events` table (fire-and-forget; a down database never blocks or raises) and emitted as one structured log line.
+
+```bash
+curl localhost:8080/admin/guardrails/summary
+```
+
+Returns counts per rail and per action (`blocked` / `error`) plus the most recent events.
+
+> **Warning — `/admin/guardrails/summary` is unauthenticated**, the same as the rules and eval endpoints. Auth lands in a later phase (12); until then keep `/admin/*` local only.
+
+**A dependency note.** `nemoguardrails==0.23.0` (the latest) was chosen by checking its declared dependencies against the existing pins *before* installing, because nemoguardrails is known for strict langchain pins. 0.23.0 declares no `langchain`/`langchain-core`/`langchain-community` constraint at all and no `fastapi`/`starlette`/`uvicorn` core constraint, so it forces none of the phase 5–8 pins up or down — a resolver dry-run confirmed langchain 1.3.15, langchain-core 1.5.5, langchain-community 0.4.2, langgraph 1.2.11, langchain-anthropic 1.5.6, langsmith 0.11.0, and ragas 0.4.3 all stay put. The one pre-existing package it moves is `pandas` (3.0.5 → 2.3.3, its `pandas<3` cap); pandas is transitive, not a named pin, and ragas requires it only under an optional extra, so ragas is unaffected.
+
 ## Tech stack
 
 **Backend.** Python, FastAPI, httpx. LangGraph for the router and agent loop. LangChain for the RAG pieces.

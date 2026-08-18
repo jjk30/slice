@@ -48,6 +48,24 @@ def eval_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def guardrails_off_by_default(monkeypatch):
+    """Phase-9 guardrails are opt-in per test, same reasoning as the agent loop.
+
+    The rails only act on the agent-loop path (off by default above), but a real engine
+    left on ``app.state`` by any lifespan-running test would otherwise fire real
+    langchain-anthropic calls into the agent-loop suite and change its upstream call
+    counts. Force the kill switch off and clear ``app.state.guardrails`` so no test
+    constructs or calls the engine by accident; the guardrail tests inject a fake engine
+    explicitly.
+    """
+    monkeypatch.setattr(config, "GUARDRAILS_ENABLED", False)
+    previous = getattr(app.state, "guardrails", None)
+    app.state.guardrails = None
+    yield
+    app.state.guardrails = previous
+
+
+@pytest.fixture(autouse=True)
 def isolate_redis(monkeypatch):
     """Keep every test off the real Redis and out of each other's state.
 
