@@ -29,8 +29,7 @@ function unpricedNote(r) {
 
 const canvas = ref(null)
 let chart = null // single Chart instance, reused across refreshes
-let mql = null // prefers-color-scheme list so colours follow the theme
-let onSchemeChange = null // its listener, removed on unmount
+let themeObserver = null // watches the manual html.dark class so colours follow it
 
 // Panel meta, right of the title: how many models spent this month.
 const meta = computed(() => {
@@ -132,7 +131,7 @@ function buildChart() {
             callback(value) {
               const label = this.getLabelForValue(value)
               // Shorter still on a narrow canvas, where the axis has little room.
-              const limit = this.chart && this.chart.width < 480 ? 16 : 24
+              const limit = this.chart && this.chart.width < 420 ? 16 : 24
               return label.length > limit ? `${label.slice(0, limit - 1)}…` : label
             },
           },
@@ -158,9 +157,10 @@ const chartHeight = computed(() => {
 
 onMounted(() => {
   if (rows.value.length) buildChart()
-  mql = window.matchMedia('(prefers-color-scheme: dark)')
-  onSchemeChange = () => { applyTheme(); if (chart) chart.update() }
-  mql.addEventListener('change', onSchemeChange)
+  // The theme is not automatic (no prefers-color-scheme); a future manual toggle
+  // adds/removes `dark` on <html>, so watch that class and re-read the tokens.
+  themeObserver = new MutationObserver(() => { applyTheme(); if (chart) chart.update() })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
 })
 
 // The canvas only exists when there is data (v-if), so build lazily once the
@@ -177,9 +177,8 @@ watch(rows, () => {
 }, { flush: 'post' })
 
 onBeforeUnmount(() => {
-  if (mql && onSchemeChange) mql.removeEventListener('change', onSchemeChange)
-  mql = null
-  onSchemeChange = null
+  if (themeObserver) themeObserver.disconnect()
+  themeObserver = null
   if (chart) chart.destroy()
   chart = null
 })

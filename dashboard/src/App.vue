@@ -212,10 +212,10 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
     </div>
 
     <main class="grid">
-      <KpiTile label="spend this month" :value="spend" :sub="spendSub" :failed="failed" tone="cherry" />
-      <KpiTile label="saved this month" :value="saved" :failed="failed" tone="teal" />
-      <KpiTile label="requests" :value="requests" :sub="requestsSub" :failed="failed" />
-      <KpiTile label="eval pass rate" :value="passRate" :sub="passRateSub" :failed="failed" />
+      <KpiTile label="spend this month" :value="spend" :sub="spendSub" :failed="failed" tone="cherry" tint="lavender" />
+      <KpiTile label="saved this month" :value="saved" :failed="failed" tone="teal" tint="green" />
+      <KpiTile label="requests" :value="requests" :sub="requestsSub" :failed="failed" tint="bluegrey" />
+      <KpiTile label="eval pass rate" :value="passRate" :sub="passRateSub" :failed="failed" tint="amber" />
 
       <TeamBudgets class="span-2" :data="teams" :failed="failed" />
       <ModelsChart class="span-2" :data="models" :failed="failed" />

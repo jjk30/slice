@@ -1,6 +1,7 @@
 /* slice dashboard — design tokens lifted from the marketing mockups (hero.html).
-   Light cream is the default; the dark variant retunes the same palette (ink
-   background, paper text, the same cherry / teal / amber). Spacing is an 8px scale. */
+   The cream light theme is the default and the only automatic theme: it renders the
+   same whatever the OS setting. A dark token set is kept behind a manual `html.dark`
+   class for later — nothing applies it automatically. Spacing is an 8px scale. */
 
 :root {
   --ink: #1A1714;
@@ -24,6 +25,17 @@
   --amber-wash: rgba(192, 124, 30, .12);
   --hover: rgba(26, 23, 20, .035);
   --selection: #EAC58C;
+  /* Soft tinted KPI cards (background / border), like the marketing stat cards.
+     Text on them is ink; sublines use a slightly deeper muted so they stay readable. */
+  --tint-lavender: #E9E7F6;
+  --tint-lavender-line: #D3CFEA;
+  --tint-green: #E0EFE5;
+  --tint-green-line: #C6DFCF;
+  --tint-bluegrey: #E3EAF2;
+  --tint-bluegrey-line: #CBD7E5;
+  --tint-amber: #F6ECD9;
+  --tint-amber-line: #E9D6B4;
+  --muted-on-tint: #5E574E;
 
   --display: 'Bricolage Grotesque', sans-serif;
   --body: 'Inter', sans-serif;
@@ -37,23 +49,32 @@
   --s4: 32px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ink: #FBF8F1;
-    --paper: #1A1714;
-    --surface: #2A2521;
-    --card: #211D1A;
-    --muted: #A89F92;
-    --line: rgba(251, 248, 241, .13);
-    --line-strong: rgba(251, 248, 241, .22);
-    --cherry-text: #F07A83;
-    --teal-text: #4FB596;
-    --amber-text: #E0A052;
-    --teal-wash: rgba(15, 110, 86, .28);
-    --cherry-wash: rgba(226, 83, 95, .22);
-    --amber-wash: rgba(192, 124, 30, .24);
-    --hover: rgba(251, 248, 241, .04);
-  }
+/* Dark token set — manual only (add class="dark" to <html>); never applied by the
+   OS setting. Ink background, paper text, the same cherry / teal / amber. */
+html.dark {
+  --ink: #FBF8F1;
+  --paper: #1A1714;
+  --surface: #2A2521;
+  --card: #211D1A;
+  --muted: #A89F92;
+  --line: rgba(251, 248, 241, .13);
+  --line-strong: rgba(251, 248, 241, .22);
+  --cherry-text: #F07A83;
+  --teal-text: #4FB596;
+  --amber-text: #E0A052;
+  --teal-wash: rgba(15, 110, 86, .28);
+  --cherry-wash: rgba(226, 83, 95, .22);
+  --amber-wash: rgba(192, 124, 30, .24);
+  --hover: rgba(251, 248, 241, .04);
+  --tint-lavender: #2A2836;
+  --tint-lavender-line: #3D3A52;
+  --tint-green: #1F2E27;
+  --tint-green-line: #2F4839;
+  --tint-bluegrey: #232A33;
+  --tint-bluegrey-line: #36424F;
+  --tint-amber: #332A1C;
+  --tint-amber-line: #4E3E24;
+  --muted-on-tint: #B5ADA1;
 }
 
 *,
@@ -281,6 +302,34 @@ a {
 }
 
 /* ---------- KPI card ---------- */
+
+/* Soft tinted variants for the four KPI tiles; the guardrails tile and every
+   panel stay white cards on paper. */
+.card.tint-lavender {
+  background: var(--tint-lavender);
+  border-color: var(--tint-lavender-line);
+}
+
+.card.tint-green {
+  background: var(--tint-green);
+  border-color: var(--tint-green-line);
+}
+
+.card.tint-bluegrey {
+  background: var(--tint-bluegrey);
+  border-color: var(--tint-bluegrey-line);
+}
+
+.card.tint-amber {
+  background: var(--tint-amber);
+  border-color: var(--tint-amber-line);
+}
+
+.card[class*="tint-"] .kpi-label,
+.card[class*="tint-"] .kpi-sub,
+.card[class*="tint-"] .loading {
+  color: var(--muted-on-tint);
+}
 
 .kpi-label {
   font-family: var(--mono);
