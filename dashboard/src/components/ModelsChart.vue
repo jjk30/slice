@@ -32,16 +32,24 @@ let chart = null // single Chart instance, reused across refreshes
 let mql = null // prefers-color-scheme list so colours follow the theme
 let onSchemeChange = null // its listener, removed on unmount
 
-// Read theme colours from the CSS custom properties so the chart matches
-// light/dark without duplicating the palette here.
+// Panel meta, right of the title: how many models spent this month.
+const meta = computed(() => {
+  if (!models.value) return ''
+  const n = models.value.length
+  return `${integer(n)} ${n === 1 ? 'model' : 'models'}`
+})
+
+// Read theme colours and fonts from the CSS custom properties so the chart
+// matches light/dark without duplicating the palette here. Spend is cherry.
 function themeColors() {
   const cs = getComputedStyle(document.documentElement)
   return {
-    accent: cs.getPropertyValue('--accent').trim(),
-    text2: cs.getPropertyValue('--text-2').trim(),
-    border: cs.getPropertyValue('--border').trim(),
+    accent: cs.getPropertyValue('--cherry').trim(),
+    text2: cs.getPropertyValue('--muted').trim(),
+    border: cs.getPropertyValue('--line').trim(),
     card: cs.getPropertyValue('--card').trim(),
-    text: cs.getPropertyValue('--text').trim(),
+    text: cs.getPropertyValue('--ink').trim(),
+    mono: cs.getPropertyValue('--mono').trim() || 'monospace',
   }
 }
 
@@ -51,11 +59,15 @@ function applyTheme() {
   chart.data.datasets[0].backgroundColor = c.accent
   chart.options.scales.x.grid.color = c.border
   chart.options.scales.x.ticks.color = c.text2
+  chart.options.scales.x.ticks.font = { family: c.mono, size: 11 }
   chart.options.scales.y.ticks.color = c.text2
+  chart.options.scales.y.ticks.font = { family: c.mono, size: 11 }
   chart.options.plugins.tooltip.backgroundColor = c.card
   chart.options.plugins.tooltip.titleColor = c.text
   chart.options.plugins.tooltip.bodyColor = c.text2
   chart.options.plugins.tooltip.borderColor = c.border
+  chart.options.plugins.tooltip.titleFont = { family: c.mono, size: 12 }
+  chart.options.plugins.tooltip.bodyFont = { family: c.mono, size: 12 }
 }
 
 function buildChart() {
@@ -68,7 +80,7 @@ function buildChart() {
       datasets: [{
         data: rows.value.map((r) => r.spend),
         backgroundColor: c.accent,
-        barThickness: 18,
+        barThickness: 14,
         borderRadius: 4,
         borderSkipped: 'start', // round only the data end of each bar
       }],
@@ -87,6 +99,10 @@ function buildChart() {
           bodyColor: c.text2,
           borderColor: c.border,
           borderWidth: 1,
+          padding: 10,
+          cornerRadius: 8,
+          titleFont: { family: c.mono, size: 12 },
+          bodyFont: { family: c.mono, size: 12 },
           callbacks: {
             label(ctx) {
               const r = rows.value[ctx.dataIndex]
@@ -102,12 +118,24 @@ function buildChart() {
           beginAtZero: true,
           grid: { color: c.border, drawTicks: false },
           border: { display: false },
-          ticks: { color: c.text2, callback: (v) => money(v), maxTicksLimit: 6 },
+          ticks: { color: c.text2, callback: (v) => money(v), maxTicksLimit: 6, maxRotation: 0, font: { family: c.mono, size: 11 } },
         },
         y: {
           grid: { display: false },
           border: { display: false },
-          ticks: { color: c.text2, autoSkip: false },
+          ticks: {
+            color: c.text2,
+            autoSkip: false,
+            font: { family: c.mono, size: 11 },
+            // Long model ids would squeeze the plot; the full name is in the tooltip
+            // title and in the table below.
+            callback(value) {
+              const label = this.getLabelForValue(value)
+              // Shorter still on a narrow canvas, where the axis has little room.
+              const limit = this.chart && this.chart.width < 480 ? 16 : 24
+              return label.length > limit ? `${label.slice(0, limit - 1)}…` : label
+            },
+          },
         },
       },
     },
@@ -125,7 +153,7 @@ function syncChart() {
 // Height grows with the number of models so bars stay thin and readable.
 const chartHeight = computed(() => {
   const n = rows.value.length
-  return `${Math.max(1, n) * 30 + 30}px`
+  return `${Math.max(1, n) * 28 + 32}px`
 })
 
 onMounted(() => {
@@ -158,8 +186,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="card">
-    <h2 class="card-title">Spend by model</h2>
+  <section class="card panel">
+    <div class="panel-head">
+      <h2 class="panel-title">Spend by model</h2>
+      <span v-if="meta" class="meta">{{ meta }}</span>
+    </div>
     <p v-if="models === null && failed" class="empty">—</p>
     <p v-else-if="models === null" class="loading">Loading…</p>
     <p v-else-if="models.length === 0" class="empty">No model spend this month yet.</p>
@@ -168,21 +199,21 @@ onBeforeUnmount(() => {
         <canvas ref="canvas" role="img" aria-label="Horizontal bar chart of spend in USD per model this month; values are listed in the table below"></canvas>
       </div>
       <div class="table-wrap">
-        <table>
+        <table class="models">
           <thead>
             <tr>
-              <th scope="col">Model</th>
-              <th scope="col" class="num">Requests</th>
-              <th scope="col" class="num">Spend</th>
+              <th scope="col">model</th>
+              <th scope="col" class="num">requests</th>
+              <th scope="col" class="num">spend</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="r in rows" :key="r.label">
-              <td class="mono">{{ r.label }}</td>
+              <td class="mono model-cell" :title="r.label">{{ r.label }}</td>
               <td class="num mono">{{ integer(r.requests) }}</td>
               <td class="num mono">
                 {{ money(r.spend) }}
-                <span v-if="r.unpriced > 0" class="muted small unpriced" :title="`${unpricedNote(r)} served request(s) on this model carry no known price and are not in this spend`">· {{ unpricedNote(r) }}</span>
+                <span v-if="r.unpriced > 0" class="small unpriced" :title="`${unpricedNote(r)} served request(s) on this model carry no known price and are not in this spend`">{{ unpricedNote(r) }}</span>
               </td>
             </tr>
           </tbody>
@@ -196,11 +227,29 @@ onBeforeUnmount(() => {
 .chart-box {
   position: relative;
   width: 100%;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+/* Fixed columns so the spend column never scrolls out of the card; long model
+   ids ellipsize (full id in the title and the tooltip). */
+.models {
+  table-layout: fixed;
+}
+
+.models th:nth-child(1) { width: 56%; }
+.models th:nth-child(2) { width: 18%; }
+.models th:nth-child(3) { width: 26%; }
+
+.model-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .unpriced {
-  font-family: var(--font);
+  display: block;
   white-space: nowrap;
+  color: var(--amber-text);
+  line-height: 1.3;
+  margin-top: 2px;
 }
 </style>

@@ -197,10 +197,14 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
   <div class="page">
     <header class="header">
       <div class="brand">
-        <h1 class="wordmark">🍰 slice</h1>
-        <span class="subtitle">This month · {{ month ?? '—' }}</span>
+        <img class="brand-logo" src="/favicon.png" alt="" width="24" height="24" />
+        <h1 class="brand-name">slice</h1>
+        <span class="brand-path">/ dashboard</span>
       </div>
-      <LivePill :status="liveStatus" />
+      <div class="header-right">
+        <span class="meta">this month · {{ month ?? '—' }}</span>
+        <LivePill :status="liveStatus" />
+      </div>
     </header>
 
     <div v-if="error" class="banner" role="alert">
@@ -208,10 +212,10 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
     </div>
 
     <main class="grid">
-      <KpiTile label="Spend this month" :value="spend" :sub="spendSub" :failed="failed" />
-      <KpiTile label="Saved this month" :value="saved" :failed="failed" />
-      <KpiTile label="Requests" :value="requests" :sub="requestsSub" :failed="failed" />
-      <KpiTile label="Eval pass rate" :value="passRate" :sub="passRateSub" :failed="failed" />
+      <KpiTile label="spend this month" :value="spend" :sub="spendSub" :failed="failed" tone="cherry" />
+      <KpiTile label="saved this month" :value="saved" :failed="failed" tone="teal" />
+      <KpiTile label="requests" :value="requests" :sub="requestsSub" :failed="failed" />
+      <KpiTile label="eval pass rate" :value="passRate" :sub="passRateSub" :failed="failed" />
 
       <TeamBudgets class="span-2" :data="teams" :failed="failed" />
       <ModelsChart class="span-2" :data="models" :failed="failed" />

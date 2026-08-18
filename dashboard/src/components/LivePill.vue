@@ -1,5 +1,6 @@
 <script setup>
-// SSE connection status: 'live' | 'reconnecting' | 'offline'.
+// SSE connection status: 'live' | 'reconnecting' | 'offline'. Teal dot when
+// connected, muted otherwise; the word is always there, never colour alone.
 defineProps({
   status: { type: String, required: true },
 })

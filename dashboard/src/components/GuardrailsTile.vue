@@ -3,13 +3,19 @@ import { computed } from 'vue'
 import { integer } from '../format.js'
 
 // `guardrails` is summary.guardrails, or null while loading; `failed` means
-// the load failed and a dash should replace "Loading…".
+// the load failed and a dash should replace "Loading…". Blocks read in cherry
+// once there are any (a block is a warning), ink at zero.
 const props = defineProps({
   guardrails: { type: Object, default: null },
   failed: { type: Boolean, default: false },
 })
 
+const blockedCount = computed(() => {
+  const n = props.guardrails?.blocked
+  return typeof n === 'number' ? n : null
+})
 const blocked = computed(() => (props.guardrails ? integer(props.guardrails.blocked) : null))
+const tone = computed(() => (blockedCount.value > 0 ? 'tone-cherry' : ''))
 
 // "input N · output N" — omitted entirely when blocked_by_rail is empty.
 const byRail = computed(() => {
@@ -27,9 +33,9 @@ const errors = computed(() => {
 
 <template>
   <section class="card">
-    <p class="kpi-label">Guardrail blocks this month</p>
+    <p class="kpi-label">guardrail blocks this month</p>
     <p v-if="blocked === null && !failed" class="loading">Loading…</p>
-    <p v-else class="kpi-value">{{ blocked ?? '—' }}</p>
+    <p v-else class="kpi-value" :class="tone">{{ blocked ?? '—' }}</p>
     <p v-if="byRail" class="kpi-sub">{{ byRail }}</p>
     <p v-if="errors" class="kpi-sub">{{ errors }}</p>
   </section>

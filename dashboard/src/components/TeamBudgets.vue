@@ -11,6 +11,14 @@ const props = defineProps({
 
 const teams = computed(() => (props.data ? props.data.teams || [] : null))
 
+// Panel meta, right of the title: team count and the cap, all from the payload.
+const meta = computed(() => {
+  if (!teams.value) return ''
+  const n = teams.value.length
+  const cap = money(props.data?.budget_usd)
+  return `${integer(n)} ${n === 1 ? 'team' : 'teams'} · cap ${cap}`
+})
+
 // Fill ratio, colour band and aria values for one team's meter. "Used" is
 // budget_used_usd — the live gate counter the cap is enforced against, or the
 // recorded spend when Redis is down (budget_source says which). When either
@@ -68,16 +76,23 @@ const unattributed = computed(() => {
 </script>
 
 <template>
-  <section class="card">
-    <h2 class="card-title">Budgets per team</h2>
+  <section class="card panel">
+    <div class="panel-head">
+      <h2 class="panel-title">Budgets per team</h2>
+      <span v-if="meta" class="meta">{{ meta }}</span>
+    </div>
     <p v-if="teams === null && failed" class="empty">—</p>
     <p v-else-if="teams === null" class="loading">Loading…</p>
     <p v-else-if="teams.length === 0" class="empty">No team spend this month yet.</p>
     <ul v-else class="team-list">
       <li v-for="t in teams" :key="t.team" class="team">
         <div class="team-head">
-          <span class="team-name">{{ t.team ?? '—' }}</span>
-          <span class="muted small mono">{{ money(t.budget_used_usd) }} used of {{ money(t.budget_usd) }} · {{ money(t.remaining_usd) }} left</span>
+          <span class="team-name mono">{{ t.team ?? '—' }}</span>
+          <span class="mono small amounts">
+            <span class="used">{{ money(t.budget_used_usd) }}</span>
+            <span class="muted"> used of {{ money(t.budget_usd) }} · </span>
+            <span class="left">{{ money(t.remaining_usd) }} left</span>
+          </span>
         </div>
         <div
           class="meter"
@@ -91,12 +106,12 @@ const unattributed = computed(() => {
         >
           <div class="meter-fill" :class="meterFor(t).tone" :style="{ width: meterFor(t).widthPct + '%' }"></div>
         </div>
-        <p class="muted small tokens" :title="tokensTitle(t)">
-          {{ tokensLine(t) }}<span v-if="sourceNote(t)"> · {{ sourceNote(t) }}</span>
+        <p class="mono small tokens" :title="tokensTitle(t)">
+          <span class="estimate">{{ tokensLine(t) }}</span><span v-if="sourceNote(t)" class="muted"> · {{ sourceNote(t) }}</span>
         </p>
       </li>
     </ul>
-    <p v-if="unattributed" class="muted small unattributed">{{ unattributed }}</p>
+    <p v-if="unattributed" class="mono small muted unattributed">{{ unattributed }}</p>
   </section>
 </template>
 
@@ -107,7 +122,7 @@ const unattributed = computed(() => {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
 }
 
 .team-head {
@@ -116,18 +131,32 @@ const unattributed = computed(() => {
   align-items: baseline;
   gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .team-name {
-  font-weight: 600;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.amounts .used {
+  color: var(--ink);
+}
+
+.amounts .left {
+  color: var(--teal-text);
 }
 
 .tokens {
-  margin: 5px 0 0;
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.tokens .estimate {
+  color: var(--amber-text);
 }
 
 .unattributed {
-  margin: 14px 0 0;
+  margin: 18px 0 0;
 }
 </style>
