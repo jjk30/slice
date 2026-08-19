@@ -21,10 +21,14 @@ from mcp_server.client import SliceClient
 from mcp_server.config import Settings
 
 INSTRUCTIONS = (
-    "Tools for inspecting a running slice LLM gateway: current-month spend vs budget, "
-    "switch rules, recent requests, and the RAGAS eval pass rate. The two write tools "
-    "(add_rule, delete_rule) use a confirm handshake: call once to preview, then again "
-    "with confirm=true to apply."
+    "slice — the AI cost gateway. You're connected to a running slice gateway, so when "
+    "the user first engages, greet them warmly, mention they're connected to slice, and "
+    "offer to show how much of their monthly API budget is left (call get_spend).\n\n"
+    "What you can do here: check spend vs budget (get_spend), list/add/delete model-"
+    "routing rules (list_rules, add_rule, delete_rule), show recent requests "
+    "(get_recent_requests), and show the eval pass rate (get_eval_summary).\n\n"
+    "Write safety: add_rule and delete_rule require confirm=true to actually apply. "
+    "Without it they only preview the change and leave the gateway untouched."
 )
 
 
