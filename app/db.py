@@ -31,41 +31,91 @@ CREATE TABLE IF NOT EXISTS requests (
 INSERT = """
 INSERT INTO requests
     (model, status, latency_ms, input_tokens, output_tokens, cost_usd, stream, cached,
-     routed_from, prompt_text, team, attempts, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13, now()))
+     routed_from, prompt_text, team, attempts, created_at, account_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13, now()), $14)
 """
 
 # --- Eval scores (phase 8) --------------------------------------------------
 INSERT_EVAL = """
 INSERT INTO eval_scores
-    (request_id, model, routed_from, metric, score, passed, judge_model)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+    (request_id, model, routed_from, metric, score, passed, judge_model, account_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 """
 # The summary only needs these three columns per row; the aggregation happens in
-# summarize_eval_rows so it can be unit-tested without a live database.
-SELECT_EVAL_ROWS = "SELECT model, routed_from, passed FROM eval_scores"
+# summarize_eval_rows so it can be unit-tested without a live database. Phase 12: the
+# read is filtered to one account. A real account id returns only that account's rows
+# (a NULL account_id row — pre-auth — belongs to nobody and is never returned); a NULL
+# filter is local single-tenant mode and returns every row. Same pattern on every
+# account-scoped read below.
+SELECT_EVAL_ROWS = (
+    "SELECT model, routed_from, passed FROM eval_scores "
+    "WHERE ($1::bigint IS NULL OR account_id = $1)"
+)
 
 # --- Guardrail events (phase 9) ---------------------------------------------
 INSERT_GUARDRAIL = """
-INSERT INTO guardrail_events (request_id, team, rail, action, reason)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO guardrail_events (request_id, team, rail, action, reason, account_id)
+VALUES ($1, $2, $3, $4, $5, $6)
 """
 # The summary needs the rail/action for counting and created_at for the recent list;
 # summarize_guardrail_rows does the aggregation so it can be tested without a database.
-SELECT_GUARDRAIL_ROWS = (
-    "SELECT rail, action, reason, team, created_at FROM guardrail_events ORDER BY id DESC"
-)
+SELECT_GUARDRAIL_ROWS = """
+SELECT rail, action, reason, team, created_at FROM guardrail_events
+WHERE ($1::bigint IS NULL OR account_id = $1)
+ORDER BY id DESC
+"""
 
 # --- Alerts (phase 11) --------------------------------------------------------
 INSERT_ALERT = """
-INSERT INTO alerts (team, kind, channel, status, detail, ts)
-VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()))
+INSERT INTO alerts (team, kind, channel, status, detail, ts, account_id)
+VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()), $7)
 """
 # The summary counts per kind / per status and lists the newest rows; the aggregation
 # lives in summarize_alert_rows so it can be tested without a database. Cooldowns keep
 # this table small (at most one send per team per kind per cooldown window), so one
 # ordered scan is fine.
-SELECT_ALERT_ROWS = "SELECT id, ts, team, kind, channel, status, detail FROM alerts ORDER BY id DESC"
+SELECT_ALERT_ROWS = """
+SELECT id, ts, team, kind, channel, status, detail FROM alerts
+WHERE ($1::bigint IS NULL OR account_id = $1)
+ORDER BY id DESC
+"""
+
+# --- Accounts and slice keys (phase 12) ---------------------------------------
+# One account per GitHub user, upserted on every login (the login/email refresh; the
+# id is stable). A slice key row holds only the SHA-256 of the key.
+UPSERT_ACCOUNT = """
+INSERT INTO accounts (github_id, github_login, email)
+VALUES ($1, $2, $3)
+ON CONFLICT (github_id) DO UPDATE
+    SET github_login = EXCLUDED.github_login,
+        email        = COALESCE(EXCLUDED.email, accounts.email)
+RETURNING id, github_id, github_login, email, created_at
+"""
+SELECT_ACCOUNT = "SELECT id, github_id, github_login, email, created_at FROM accounts WHERE id = $1"
+INSERT_KEY = """
+INSERT INTO slice_keys (account_id, key_hash, key_prefix, name)
+VALUES ($1, $2, $3, $4)
+RETURNING id, account_id, key_prefix, name, created_at
+"""
+# The one query on the request path (on a cache miss): the key row joined with its
+# account, revoked_at included so the resolver can refuse a dead key.
+SELECT_KEY_BY_HASH = """
+SELECT k.id AS key_id, k.account_id, k.key_prefix, k.name, k.revoked_at,
+       a.github_id, a.github_login, a.email
+FROM slice_keys k
+JOIN accounts a ON a.id = k.account_id
+WHERE k.key_hash = $1
+"""
+TOUCH_KEY = "UPDATE slice_keys SET last_used_at = now() WHERE id = $1"
+REVOKE_KEY = """
+UPDATE slice_keys SET revoked_at = now()
+WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL
+RETURNING id
+"""
+SELECT_KEYS_FOR_ACCOUNT = """
+SELECT id, key_prefix, name, created_at, last_used_at, revoked_at
+FROM slice_keys WHERE account_id = $1 ORDER BY id
+"""
 
 # --- Dashboard reads (phase 10) ---------------------------------------------
 # The dashboard's math lives in app.dashboard.stats (pure functions, unit-tested
@@ -78,6 +128,10 @@ SELECT_ALERT_ROWS = "SELECT id, ts, team, kind, channel, status, detail FROM ale
 # The (cost_usd IS NULL) key keeps unpriced rows in their own group so a SUM over a
 # group is never a mix of known and unknown. prompt_text is never read here.
 # Migration 008 indexes created_at on all three tables so the month filter is cheap.
+# Phase 12: every dashboard read is one account's rows only. ``$2`` is the account id;
+# a real id returns just that account's rows (pre-auth NULL-account rows are hidden from
+# it), while a NULL ``$2`` is local single-tenant mode and returns every row. Migration
+# 010's (account_id, created_at) index keeps the real-id filter cheap.
 SELECT_DASHBOARD_ROWS = """
 SELECT team, model, status, cached, routed_from,
        COUNT(*)           AS n,
@@ -85,33 +139,41 @@ SELECT team, model, status, cached, routed_from,
        SUM(output_tokens) AS output_tokens,
        SUM(cost_usd)      AS cost_usd
 FROM requests
-WHERE created_at >= $1
+WHERE created_at >= $1 AND ($2::bigint IS NULL OR account_id = $2)
 GROUP BY team, model, status, cached, routed_from, (cost_usd IS NULL)
 """
 SELECT_RECENT_ROWS = """
 SELECT id, created_at, team, model, routed_from, status, cost_usd, cached
 FROM requests
+WHERE ($2::bigint IS NULL OR account_id = $2)
 ORDER BY id DESC
 LIMIT $1
 """
 SELECT_EVAL_ROWS_SINCE = (
-    "SELECT model, routed_from, passed FROM eval_scores WHERE created_at >= $1"
+    "SELECT model, routed_from, passed FROM eval_scores "
+    "WHERE created_at >= $1 AND ($2::bigint IS NULL OR account_id = $2)"
 )
 SELECT_GUARDRAIL_ROWS_SINCE = """
 SELECT rail, action, reason, team, created_at
 FROM guardrail_events
-WHERE created_at >= $1
+WHERE created_at >= $1 AND ($2::bigint IS NULL OR account_id = $2)
 ORDER BY id DESC
 """
 
 # --- Switch rules (phase 5) -------------------------------------------------
-SELECT_RULES = "SELECT id, team, from_model, to_model FROM switch_rules ORDER BY id"
+# Phase 12: rules carry the account that owns them. The cache still loads every rule
+# (one small table, one query) and matches on (account_id, team, from_model); the admin
+# API only ever lists or deletes the caller's own. A NULL account_id is a pre-auth rule:
+# it belongs to nobody and matches no authenticated request.
+SELECT_RULES = "SELECT id, team, from_model, to_model, account_id FROM switch_rules ORDER BY id"
 INSERT_RULE = """
-INSERT INTO switch_rules (team, from_model, to_model)
-VALUES ($1, $2, $3)
-RETURNING id, team, from_model, to_model
+INSERT INTO switch_rules (team, from_model, to_model, account_id)
+VALUES ($1, $2, $3, $4)
+RETURNING id, team, from_model, to_model, account_id
 """
-DELETE_RULE = "DELETE FROM switch_rules WHERE id = $1 RETURNING id"
+DELETE_RULE = (
+    "DELETE FROM switch_rules WHERE id = $1 AND account_id IS NOT DISTINCT FROM $2 RETURNING id"
+)
 
 
 @dataclass(frozen=True)
@@ -144,6 +206,10 @@ class RequestRecord:
     # phase 10, and any test that builds a record by hand) lets Postgres default to
     # now() at insert, exactly as before.
     created_at: datetime | None = None
+    # The account the request was made under (phase 12) — the tenant every dashboard
+    # and admin read filters on. None for callers that build a record without one (the
+    # tests, and any pre-auth path): the column is nullable and the write is unchanged.
+    account_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -163,6 +229,8 @@ class EvalRecord:
     passed: bool
     judge_model: str | None
     request_id: int | None = None
+    # The account the scored request belonged to (phase 12); None when unknown.
+    account_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +248,8 @@ class GuardrailEvent:
     action: str
     reason: str | None = None
     request_id: int | None = None
+    # The account whose request the rail fired on (phase 12); None when unknown.
+    account_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -199,6 +269,8 @@ class AlertRecord:
     status: str
     detail: dict | None = None
     ts: datetime | None = None
+    # The account whose budget the alert is about (phase 12); None when unknown.
+    account_id: int | None = None
 
 
 ALERT_STATUS_SENT = "sent"
@@ -448,6 +520,7 @@ class Database:
                     record.team,
                     record.attempts,
                     record.created_at,
+                    record.account_id,
                 )
         except Exception as exc:
             # The response is already out the door; note it and drop the row.
@@ -476,6 +549,7 @@ class Database:
                     record.score,
                     record.passed,
                     record.judge_model,
+                    record.account_id,
                 )
         except Exception as exc:
             # The eval task is already off the request path; note it and drop the row.
@@ -483,12 +557,12 @@ class Database:
                 json.dumps({"event": "db_unavailable", "stage": "eval_write", "error": str(exc)})
             )
 
-    async def eval_summary(self) -> dict:
-        """Overall / per-model / per-route pass rates. Raises if the pool is unavailable."""
+    async def eval_summary(self, account_id: int | None = None) -> dict:
+        """One account's overall / per-model / per-route pass rates. Raises if the pool is unavailable."""
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
-            rows = await connection.fetch(SELECT_EVAL_ROWS)
+            rows = await connection.fetch(SELECT_EVAL_ROWS, account_id)
         return summarize_eval_rows([dict(row) for row in rows])
 
     # --- Guardrail events (phase 9) ----------------------------------------
@@ -511,6 +585,7 @@ class Database:
                     record.rail,
                     record.action,
                     record.reason,
+                    record.account_id,
                 )
         except Exception as exc:
             # The response is already out the door; note it and drop the row.
@@ -520,12 +595,12 @@ class Database:
                 )
             )
 
-    async def guardrail_summary(self) -> dict:
-        """Per-rail / per-action counts plus recent events. Raises if the pool is unavailable."""
+    async def guardrail_summary(self, account_id: int | None = None) -> dict:
+        """One account's per-rail / per-action counts plus recent events. Raises if the pool is unavailable."""
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
-            rows = await connection.fetch(SELECT_GUARDRAIL_ROWS)
+            rows = await connection.fetch(SELECT_GUARDRAIL_ROWS, account_id)
         return summarize_guardrail_rows([dict(row) for row in rows])
 
     # --- Alerts (phase 11) --------------------------------------------------
@@ -551,18 +626,19 @@ class Database:
                     record.status,
                     detail,
                     record.ts,
+                    record.account_id,
                 )
         except Exception as exc:
             logger.warning(
                 json.dumps({"event": "db_unavailable", "stage": "alert_write", "error": str(exc)})
             )
 
-    async def alert_summary(self) -> dict:
-        """Per-kind / per-status counts plus the newest alerts. Raises if the pool is unavailable."""
+    async def alert_summary(self, account_id: int | None = None) -> dict:
+        """One account's per-kind / per-status counts plus its newest alerts. Raises if the pool is unavailable."""
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
-            rows = await connection.fetch(SELECT_ALERT_ROWS)
+            rows = await connection.fetch(SELECT_ALERT_ROWS, account_id)
         return summarize_alert_rows([dict(row) for row in rows])
 
     # --- Dashboard reads (phase 10) ----------------------------------------
@@ -577,26 +653,26 @@ class Database:
             rows = await connection.fetch(query, *args)
         return [dict(row) for row in rows]
 
-    async def dashboard_rows(self, since) -> list[dict]:
-        """This month's requests (at or after ``since``), pre-grouped — see SELECT_DASHBOARD_ROWS.
+    async def dashboard_rows(self, since, account_id: int | None = None) -> list[dict]:
+        """One account's requests this month (at or after ``since``), pre-grouped — see SELECT_DASHBOARD_ROWS.
 
         Each returned dict is a group carrying ``n`` (how many requests it stands for)
         with tokens and cost summed; ``app.dashboard.stats`` treats it exactly like a
-        plain row weighted by ``n``.
+        plain row weighted by ``n``. Phase 12: only rows whose ``account_id`` matches.
         """
-        return await self._fetch(SELECT_DASHBOARD_ROWS, since)
+        return await self._fetch(SELECT_DASHBOARD_ROWS, since, account_id)
 
-    async def recent_rows(self, limit: int) -> list[dict]:
-        """The latest ``limit`` request rows, newest first."""
-        return await self._fetch(SELECT_RECENT_ROWS, limit)
+    async def recent_rows(self, limit: int, account_id: int | None = None) -> list[dict]:
+        """One account's latest ``limit`` request rows, newest first."""
+        return await self._fetch(SELECT_RECENT_ROWS, limit, account_id)
 
-    async def eval_rows_since(self, since) -> list[dict]:
-        """Eval score rows at or after ``since``, in the shape summarize_eval_rows takes."""
-        return await self._fetch(SELECT_EVAL_ROWS_SINCE, since)
+    async def eval_rows_since(self, since, account_id: int | None = None) -> list[dict]:
+        """One account's eval score rows at or after ``since``, in the shape summarize_eval_rows takes."""
+        return await self._fetch(SELECT_EVAL_ROWS_SINCE, since, account_id)
 
-    async def guardrail_rows_since(self, since) -> list[dict]:
-        """Guardrail event rows at or after ``since``, for summarize_guardrail_rows."""
-        return await self._fetch(SELECT_GUARDRAIL_ROWS_SINCE, since)
+    async def guardrail_rows_since(self, since, account_id: int | None = None) -> list[dict]:
+        """One account's guardrail event rows at or after ``since``, for summarize_guardrail_rows."""
+        return await self._fetch(SELECT_GUARDRAIL_ROWS_SINCE, since, account_id)
 
     # --- Switch rules (phase 5) --------------------------------------------
     # Unlike record(), these return values the caller needs, so they raise on
@@ -611,18 +687,83 @@ class Database:
             rows = await connection.fetch(SELECT_RULES)
         return [dict(row) for row in rows]
 
-    async def add_rule(self, team: str, from_model: str, to_model: str) -> dict:
-        """Insert one rule and return the stored row (with its new id)."""
+    async def add_rule(
+        self, team: str, from_model: str, to_model: str, account_id: int | None = None
+    ) -> dict:
+        """Insert one rule owned by ``account_id`` and return the stored row (with its new id)."""
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
-            row = await connection.fetchrow(INSERT_RULE, team, from_model, to_model)
+            row = await connection.fetchrow(INSERT_RULE, team, from_model, to_model, account_id)
         return dict(row)
 
-    async def delete_rule(self, rule_id: int) -> bool:
-        """Delete one rule by id. True when a row was removed, False otherwise."""
+    async def delete_rule(self, rule_id: int, account_id: int | None = None) -> bool:
+        """Delete one rule by id, only if ``account_id`` owns it. True when a row was removed."""
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
-            row = await connection.fetchrow(DELETE_RULE, rule_id)
+            row = await connection.fetchrow(DELETE_RULE, rule_id, account_id)
         return row is not None
+
+    # --- Accounts and slice keys (phase 12) ----------------------------------
+    # The login path (upsert_account, create_key) and the admin key endpoints raise on
+    # failure like the other reads/writes the caller needs an answer from; the routes
+    # turn that into a clean 503. find_key is the one query on the request path — on a
+    # key-cache miss — and raises too, so the resolver can fail closed with a 503 rather
+    # than let an unknown key through. touch_key is fire-and-forget bookkeeping.
+
+    async def upsert_account(self, github_id: int, github_login: str, email: str | None) -> dict:
+        """Create or refresh the account for this GitHub user; returns the accounts row."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(UPSERT_ACCOUNT, int(github_id), github_login, email)
+        return dict(row)
+
+    async def get_account(self, account_id: int) -> dict | None:
+        """The accounts row for ``account_id``, or None."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(SELECT_ACCOUNT, int(account_id))
+        return dict(row) if row is not None else None
+
+    async def create_key(
+        self, account_id: int, key_hash: str, key_prefix: str, name: str | None
+    ) -> dict:
+        """Store one slice key (hash only) for ``account_id``; returns the key row sans hash."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(INSERT_KEY, int(account_id), key_hash, key_prefix, name)
+        return dict(row)
+
+    async def find_key(self, key_hash: str) -> dict | None:
+        """The key row (joined with its account, ``revoked_at`` included) for a hash, or None."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(SELECT_KEY_BY_HASH, key_hash)
+        return dict(row) if row is not None else None
+
+    async def touch_key(self, key_id: int) -> None:
+        """Bump ``last_used_at``. Fire-and-forget: every failure is swallowed."""
+        if self._pool is None:
+            return
+        try:
+            async with self._pool.acquire() as connection:
+                await connection.execute(TOUCH_KEY, int(key_id))
+        except Exception as exc:  # noqa: BLE001 — bookkeeping is never worth a request.
+            logger.debug(json.dumps({"event": "db_unavailable", "stage": "key_touch", "error": str(exc)}))
+
+    async def revoke_key(self, key_id: int, account_id: int) -> bool:
+        """Revoke one of ``account_id``'s keys. True when a live key was revoked."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(REVOKE_KEY, int(key_id), int(account_id))
+        return row is not None
+
+    async def list_keys(self, account_id: int) -> list[dict]:
+        """One account's keys: prefix, name, created/last-used/revoked. Never the hash."""
+        return await self._fetch(SELECT_KEYS_FOR_ACCOUNT, int(account_id))

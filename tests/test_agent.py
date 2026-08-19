@@ -375,7 +375,7 @@ class FakeRules:
     def __init__(self, rules=None):
         self._rules = list(rules or [])
 
-    async def match(self, team, from_model):
+    async def match(self, team, from_model, account_id=None):
         if from_model is None:
             return None
         for rule in self._rules:
@@ -383,7 +383,7 @@ class FakeRules:
                 return rule
         return None
 
-    async def all(self):
+    async def all(self, account_id=...):
         return list(self._rules)
 
 

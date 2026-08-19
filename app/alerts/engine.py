@@ -114,11 +114,20 @@ class AlertEngine:
         except Exception as exc:  # noqa: BLE001 — Database swallows its own errors; belt and braces.
             logger.warning(json.dumps({"event": "alert_record_failed", "error": str(exc)}))
 
-    async def send(self, team: str, kind: str, detail: dict | None = None) -> list[AlertRecord]:
+    async def send(
+        self,
+        team: str,
+        kind: str,
+        detail: dict | None = None,
+        *,
+        account_id: int | None = None,
+    ) -> list[AlertRecord]:
         """Run one alert through cooldown and every channel. Never raises.
 
         Returns the attempt records (one per channel), mostly for tests and callers
-        that want to look; the request path ignores the return value.
+        that want to look; the request path ignores the return value. ``team`` is the
+        human label the copy and the cooldown key use (the account's login since phase
+        12); ``account_id`` is stamped on every alerts row so the summary can be filtered.
         """
         records: list[AlertRecord] = []
         try:
@@ -137,6 +146,7 @@ class AlertEngine:
                     record = AlertRecord(
                         team=team, kind=kind, channel=channel.name,
                         status=ALERT_STATUS_SKIPPED_COOLDOWN, detail=detail, ts=now,
+                        account_id=account_id,
                     )
                     records.append(record)
                     await self._record(record)
@@ -154,7 +164,7 @@ class AlertEngine:
                 record = AlertRecord(
                     team=team, kind=kind, channel=channel.name,
                     status=ALERT_STATUS_SENT if ok else ALERT_STATUS_FAILED,
-                    detail=row_detail, ts=now,
+                    detail=row_detail, ts=now, account_id=account_id,
                 )
                 records.append(record)
                 await self._record(record)
@@ -197,7 +207,9 @@ def build_engine(*, redis=None, database=None) -> AlertEngine | None:
     return AlertEngine(channels=channels, redis=redis, database=database)
 
 
-async def send_alert(team: str, kind: str, detail: dict | None = None) -> list[AlertRecord]:
+async def send_alert(
+    team: str, kind: str, detail: dict | None = None, *, account_id: int | None = None
+) -> list[AlertRecord]:
     """Send one alert through the configured engine. Never raises.
 
     The coroutine the budget paths hand to ``asyncio.create_task`` (see ``fire``).
@@ -210,7 +222,7 @@ async def send_alert(team: str, kind: str, detail: dict | None = None) -> list[A
         engine = get_engine()
         if engine is None:
             return []
-        return await engine.send(team, kind, detail)
+        return await engine.send(team, kind, detail, account_id=account_id)
     except Exception as exc:  # noqa: BLE001 — never into the caller's task.
         logger.warning(
             json.dumps({"event": "alert_task_failed", "team": team, "kind": kind, "error": str(exc)})
@@ -218,7 +230,9 @@ async def send_alert(team: str, kind: str, detail: dict | None = None) -> list[A
         return []
 
 
-def fire(team: str, kind: str, detail: dict | None = None) -> "asyncio.Task | None":
+def fire(
+    team: str, kind: str, detail: dict | None = None, *, account_id: int | None = None
+) -> "asyncio.Task | None":
     """Fire-and-forget: ``asyncio.create_task(send_alert(...))`` and return at once.
 
     The one call the request path makes. With alerts off, or no engine installed, it
@@ -227,7 +241,7 @@ def fire(team: str, kind: str, detail: dict | None = None) -> "asyncio.Task | No
     """
     if not config.ALERTS_ENABLED or get_engine() is None:
         return None
-    coro = send_alert(team, kind, detail)
+    coro = send_alert(team, kind, detail, account_id=account_id)
     try:
         task = asyncio.create_task(coro)
     except RuntimeError:

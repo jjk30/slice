@@ -256,6 +256,61 @@ def per_team(rows: list[dict]) -> tuple[list[dict], dict]:
     return teams, {"requests": unattributed["requests"], "spend_usd": money(unattributed["spend"])}
 
 
+def account_bucket(rows: list[dict], *, label: str | None = None) -> dict:
+    """One bucket over *all* of an account's rows — every team label and none alike.
+
+    Phase 12: the budget cap and its gate counter are per account, not per team label,
+    so the dashboard's one budget meter is built from this. Same shape as a ``per_team``
+    bucket (``spend`` / ``priced_cost_200`` / ``tokens_200`` for ``team_view``), but the
+    rows are not partitioned by ``team`` — a NULL team label is the account's traffic
+    too. ``label`` is the human name ``team_view`` echoes back (the account's login).
+    """
+    bucket = {
+        "team": label,
+        "requests": 0,
+        "spend": Decimal(0),
+        "unpriced": 0,
+        "priced_cost_200": Decimal(0),
+        "tokens_200": 0,
+    }
+    for row in rows:
+        n = _n(row)
+        cost = as_decimal(row.get("cost_usd"))
+        bucket["requests"] += n
+        if cost is not None:
+            bucket["spend"] += cost
+        if is_unpriced(row):
+            bucket["unpriced"] += n
+        if row.get("status") == 200 and cost is not None:
+            bucket["priced_cost_200"] += cost
+            bucket["tokens_200"] += _tokens(row)
+    return bucket
+
+
+def team_shares(buckets: list[dict], account_spend: Decimal) -> list[dict]:
+    """Per-label breakdown of one account's spend: requests, spend, unpriced, and share.
+
+    ``buckets`` is ``per_team``'s first return (the account's rows grouped by team
+    label); ``account_spend`` is the account's total recorded spend (``account_bucket``'s
+    ``spend``). ``share`` is each label's fraction of that total (None when the account
+    spent nothing this month), so the dashboard can show where an account's budget goes.
+    """
+    out = []
+    for bucket in buckets:
+        spend = bucket["spend"]
+        share = float(spend / account_spend) if account_spend > 0 else None
+        out.append(
+            {
+                "team": bucket["team"],
+                "requests": bucket["requests"],
+                "spend_usd": money(spend),
+                "unpriced_requests": bucket.get("unpriced", 0),
+                "share": share,
+            }
+        )
+    return out
+
+
 def team_view(bucket: dict, budget_usd: Decimal, gate_spend: Decimal | None) -> dict:
     """The JSON shape for one team given its bucket, the cap, and the live Redis counter.
 

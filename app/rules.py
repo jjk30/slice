@@ -1,9 +1,16 @@
-"""Per-team switch rules and their in-memory cache.
+"""Per-account switch rules and their in-memory cache.
 
-A switch rule is an exact (team, from_model) -> to_model swap that the router
+A switch rule is an exact (account, team, from_model) -> to_model swap that the router
 applies ahead of the auto judge, whether or not auto-routing is on. Rules live in
-Postgres (table ``switch_rules``, migration 002) but are read on the request hot
-path, so they are cached in memory and reloaded on a timer and after every write.
+Postgres (table ``switch_rules``, migration 002; ``account_id`` since migration 010)
+but are read on the request hot path, so they are cached in memory and reloaded on a
+timer and after every write.
+
+Phase 12: rules belong to the account that created them. ``match`` takes the caller's
+``account_id`` and only ever returns that account's rules; the ``team`` is the label
+inside the account the rule targets ("default" for requests that send no team header).
+A rule with a NULL account_id predates auth, belongs to nobody, and only matches a
+caller with no account (which the gateway never is).
 
 Fail open, like everything else: if the rules can't be loaded, the cache keeps the
 last set it had (or an empty set on a cold start) and requests keep flowing. A
@@ -29,6 +36,8 @@ class SwitchRule:
     team: str
     from_model: str
     to_model: str
+    # The owning account (phase 12). None = a pre-auth rule that matches no account.
+    account_id: int | None = None
 
 
 class RulesCache:
@@ -50,20 +59,32 @@ class RulesCache:
         self._loaded_at: float | None = None
         self._lock = asyncio.Lock()
 
-    async def match(self, team: str, from_model: str | None) -> SwitchRule | None:
-        """The rule for this exact (team, from_model), or None. Never raises."""
+    async def match(
+        self, team: str, from_model: str | None, account_id: int | None = None
+    ) -> SwitchRule | None:
+        """The rule for this exact (account_id, team, from_model), or None. Never raises."""
         if from_model is None:
             return None
         for rule in await self.all():
-            if rule.team == team and rule.from_model == from_model:
+            if (
+                rule.account_id == account_id
+                and rule.team == team
+                and rule.from_model == from_model
+            ):
                 return rule
         return None
 
-    async def all(self) -> list[SwitchRule]:
-        """Current rules, reloading first if the cache has gone stale."""
+    async def all(self, account_id: int | None = ...) -> list[SwitchRule]:
+        """Current rules, reloading first if the cache has gone stale.
+
+        With no argument, every rule (the cache's own view). With ``account_id`` (None
+        included), only the rules owned by exactly that account.
+        """
         if self._is_stale():
             await self.refresh()
-        return list(self._rules)
+        if account_id is ...:
+            return list(self._rules)
+        return [rule for rule in self._rules if rule.account_id == account_id]
 
     async def refresh(self) -> None:
         """Reload from the source. On failure, keep the last-known rules."""
@@ -81,6 +102,7 @@ class RulesCache:
                         team=row["team"],
                         from_model=row["from_model"],
                         to_model=row["to_model"],
+                        account_id=row.get("account_id"),
                     )
                     for row in rows
                 ]

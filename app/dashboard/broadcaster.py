@@ -60,11 +60,17 @@ def make_event(
     cached: bool,
     request_id: str | None = None,
     created_at: datetime | None = None,
+    account_id: int | None = None,
 ) -> dict:
     """The JSON-safe event dict published for one completed request.
 
     ``cost`` is rendered as a float (or None when the model was unpriced) so the event
     can be ``json.dumps``-ed as-is; ``created_at`` is an ISO-8601 UTC timestamp.
+
+    ``account_id`` (phase 12) is the tenant the event belongs to. It rides on the event
+    inside the broadcaster so the SSE endpoint can deliver an account only its own
+    events; ``/dashboard/events`` strips it before the event reaches the browser (it is
+    the filter, not a field the dashboard shows).
     """
     when = created_at or datetime.now(timezone.utc)
     return {
@@ -76,6 +82,7 @@ def make_event(
         "cost": float(cost) if cost is not None else None,
         "cached": bool(cached),
         "created_at": when.isoformat(),
+        "account_id": account_id,
     }
 
 

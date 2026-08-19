@@ -86,6 +86,14 @@ RAG_STORE_PROMPTS = _bool("RAG_STORE_PROMPTS", False)
 # at query time. Configurable so the model name isn't hardcoded; the two must match.
 RAG_EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
 
+# Seconds the startup RAG warm-up may take before it is abandoned. The heavy embedding
+# model (torch + sentence-transformers) is loaded once at startup, in a daemon thread
+# bounded by this timeout, so a missing, broken, or pathologically slow dependency
+# disables RAG (retrieval returns nothing) instead of hanging or crashing the server.
+# A generous default: a healthy first load (which may fetch model weights) fits inside
+# it, while a genuine hang is cut short so startup always completes.
+RAG_WARM_TIMEOUT_SECONDS = float(os.getenv("RAG_WARM_TIMEOUT_SECONDS", "60"))
+
 # --- Agent loop (phase 7): try cheap, check, escalate, stop at a ceiling. ---
 # The loop extends the auto path only: it fires when auto-routing sent a request
 # down to a cheaper model, the request is non-streaming, and this flag is on. Pin,
@@ -214,11 +222,42 @@ ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "3600"))
 # UTC at format time rather than failing the alert.
 ALERT_TIMEZONE = os.getenv("ALERT_TIMEZONE", "America/New_York")
 
+# --- Auth (phase 12): GitHub device-flow login, slice keys, JWT dashboard sessions. ---
+# The lock. On (the default), the proxy paths and every /admin and /dashboard path
+# require a valid slice key and resolve it to an account — the tenant every counter,
+# cache key, log row and read is scoped by. Off is single-tenant LOCAL mode: no key is
+# required and everything runs under one local account (the pre-phase-12 behavior, keyed
+# by the team header). Off is for local development only — never expose an unlocked
+# gateway. Secure by default: unset means on.
+AUTH_ENABLED = _bool("AUTH_ENABLED", True)
+
+# The public client id of the GitHub OAuth App slice logs in through. Device flow needs
+# no client secret, so this is the only GitHub credential and it is not secret. Unset
+# means login is off: /auth/device/start answers 503 and nobody can mint a key.
+GITHUB_OAUTH_CLIENT_ID = os.getenv("GITHUB_OAUTH_CLIENT_ID") or None
+
+# The HMAC secret the dashboard-session JWTs are signed with. Env only, never in code.
+# Unset means no JWT is ever minted (login still hands out a slice key; the JWT comes back
+# null) and every presented JWT is rejected — closed, not open.
+JWT_SECRET = os.getenv("JWT_SECRET") or None
+
+# How long a minted JWT lives. Short-ish on purpose: it is a browser session, not a key.
+JWT_TTL_SECONDS = int(os.getenv("JWT_TTL_SECONDS", "28800"))  # 8 hours
+
+# How long a resolved slice key -> account is kept in the in-process cache before the
+# next request re-reads Postgres. Same idea as RULES_REFRESH_SECONDS: bounds how long a
+# freshly revoked key keeps working, and keeps the proxy off Postgres per request.
+AUTH_KEY_CACHE_SECONDS = float(os.getenv("AUTH_KEY_CACHE_SECONDS", "30"))
+
+# Where the `slice` CLI points by default (login, init, and the env lines `slice use`
+# prints). Read by the CLI, not the gateway.
+SLICE_BASE_URL = os.getenv("SLICE_BASE_URL", "http://localhost:8080")
+
 # --- Dashboard (phase 10): local read endpoints plus a live SSE stream. ---
 # Browser origins allowed to call the gateway (CORS), comma-separated. The default is
 # the Vite dev server the dashboard runs on; the built dashboard/dist is served by the
-# gateway itself and needs no CORS. The /dashboard/* endpoints have no auth yet (phase
-# 12), so keep this list to local origins.
+# gateway itself and needs no CORS. Since phase 12 every /dashboard/* read needs a slice
+# key, but keep this list to the origins you actually serve the dashboard from.
 
 
 def _csv(name: str, default: str) -> list[str]:

@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -190,8 +191,84 @@ class Retriever:
             return index
 
 
-def load_default() -> Retriever:
-    """Build the per-team retriever for the configured store dir. Never raises."""
+def _has_any_index(base: Path) -> bool:
+    """True when at least one team subdirectory under ``base`` holds a built index.
+
+    With no index there is nothing to search, so the heavy embedding model is never
+    needed and the startup warm-up is skipped entirely (an unconfigured RAG store costs
+    nothing at boot). Any filesystem trouble reading the store is treated as "no index".
+    """
+    try:
+        return any((child / INDEX_FILENAME).is_file() for child in base.iterdir() if child.is_dir())
+    except OSError:
+        return False
+
+
+def warm() -> None:
+    """Force the heavy RAG dependency to load NOW: the embedding model, then faiss.
+
+    Blocking and potentially slow (or, with a broken/missing dependency, raising).
+    ``load_default`` runs this once at startup inside a bounded daemon thread so a
+    crash or a hang here can never take down or wedge the server — it just disables RAG.
+    """
+    _import_faiss()  # imports app.rag.embeddings (constructs the model), then faiss
+
+
+def load_default() -> "Retriever | None":
+    """Build the per-team retriever for the configured store dir, fail-open.
+
+    Returns a ready ``Retriever`` normally, or ``None`` when RAG cannot be made ready —
+    a missing or broken embedding dependency, a model that will not load, or a load that
+    runs past ``RAG_WARM_TIMEOUT_SECONDS`` — logging exactly one structured line. ``None``
+    means the gateway starts and serves traffic with retrieval simply returning nothing.
+
+    The expensive embedding model is loaded HERE, once, in a daemon thread bounded by the
+    timeout: a missing dependency (an instant ImportError), a broken one, or a stuck
+    import are all caught or timed out, so startup never hangs or crashes on RAG. When the
+    store has no index there is nothing to serve, so the warm-up is skipped and a cheap,
+    lazy retriever is returned unchanged.
+    """
     from app import config
 
-    return Retriever(config.RAG_INDEX_DIR)
+    try:
+        retriever = Retriever(config.RAG_INDEX_DIR)
+    except Exception as exc:  # noqa: BLE001 — construction is trivial, but never crash boot.
+        logger.warning(
+            json.dumps({"event": "rag_load_failed", "stage": "construct", "error": str(exc)})
+        )
+        return None
+
+    if not _has_any_index(retriever._base):
+        # Nothing to search: skip the model load, keep the (cheap) retriever. Retrieval
+        # will report "rag_index_absent" per team and never touch the heavy dependency.
+        return retriever
+
+    timeout = config.RAG_WARM_TIMEOUT_SECONDS
+    outcome: dict = {}
+
+    def _run() -> None:
+        started = time.monotonic()
+        try:
+            warm()
+            outcome["ok"] = round(time.monotonic() - started, 3)
+        except Exception as exc:  # noqa: BLE001 — ImportError, model-load failure, anything.
+            outcome["error"] = str(exc)
+
+    thread = threading.Thread(target=_run, name="rag-warm", daemon=True)
+    thread.start()
+    thread.join(timeout)
+
+    if thread.is_alive():
+        # The load is stuck; abandon the daemon thread and start without RAG.
+        logger.warning(
+            json.dumps({"event": "rag_load_failed", "stage": "warm_timeout", "timeout_s": timeout})
+        )
+        return None
+    if "error" in outcome:
+        logger.warning(
+            json.dumps({"event": "rag_load_failed", "stage": "warm", "error": outcome["error"]})
+        )
+        return None
+
+    logger.info(json.dumps({"event": "rag_ready", "warm_seconds": outcome.get("ok")}))
+    return retriever

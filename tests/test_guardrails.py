@@ -146,7 +146,7 @@ class FakeGuardrailDB:
         if self.error is not None:
             raise self.error
 
-    async def guardrail_summary(self) -> dict:
+    async def guardrail_summary(self, account_id=None) -> dict:
         rows = [
             {
                 "rail": e.rail,

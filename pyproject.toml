@@ -1,0 +1,26 @@
+# Phase 12: package metadata, so `pip install -e .` puts the `slice` CLI on PATH.
+# The gateway itself is still run with uvicorn (app.main:app); this exists for the CLI's
+# console entry point. Runtime deps live in requirements.txt (the pinned langchain/ragas
+# tree is documented there); only the two the CLI needs are named here.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slice"
+version = "0.12.0"
+description = "slice — a self-hosted LLM gateway (routing, budgets, guardrails, auth)."
+requires-python = ">=3.11"
+dependencies = [
+    "typer",
+    "httpx",
+    "PyJWT",
+]
+
+[project.scripts]
+# `slice login`, `slice init`, `slice use <tool>` — see app/cli.py.
+slice = "app.cli:main"
+
+[tool.setuptools]
+# The whole app package; the CLI (app/cli.py) is one module inside it.
+packages = ["app"]

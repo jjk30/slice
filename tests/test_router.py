@@ -78,16 +78,22 @@ class FakeRules:
     def __init__(self, rules=None):
         self._rules = list(rules or [])
 
-    async def match(self, team, from_model):
+    async def match(self, team, from_model, account_id=None):
         if from_model is None:
             return None
         for rule in self._rules:
-            if rule.team == team and rule.from_model == from_model:
+            if (
+                rule.account_id == account_id
+                and rule.team == team
+                and rule.from_model == from_model
+            ):
                 return rule
         return None
 
-    async def all(self):
-        return list(self._rules)
+    async def all(self, account_id=...):
+        if account_id is ...:
+            return list(self._rules)
+        return [rule for rule in self._rules if rule.account_id == account_id]
 
 
 class FakeRuleSource:
@@ -107,15 +113,21 @@ class FakeRuleSource:
             raise self.error
         return [dict(row) for row in self.rows]
 
-    async def add_rule(self, team, from_model, to_model):
+    async def add_rule(self, team, from_model, to_model, account_id=None):
         self._next_id += 1
-        row = {"id": self._next_id, "team": team, "from_model": from_model, "to_model": to_model}
+        row = {
+            "id": self._next_id, "team": team, "from_model": from_model,
+            "to_model": to_model, "account_id": account_id,
+        }
         self.rows.append(row)
         return dict(row)
 
-    async def delete_rule(self, rule_id):
+    async def delete_rule(self, rule_id, account_id=None):
         before = len(self.rows)
-        self.rows = [r for r in self.rows if r["id"] != rule_id]
+        self.rows = [
+            r for r in self.rows
+            if not (r["id"] == rule_id and r.get("account_id") == account_id)
+        ]
         return len(self.rows) < before
 
 
@@ -595,8 +607,13 @@ async def test_admin_write_takes_effect_immediately(client, admin_db, monkeypatc
         "/admin/rules", json={"team": "acme", "from_model": OPUS, "to_model": SONNET}
     )
 
+    # Auth is off in these tests, so the admin write stored the rule under the fixed
+    # local account; the router must be told the same account for the match to fire.
+    from app.auth.middleware import LOCAL_ACCOUNT
+
     decision = await route(
-        REQUEST, {}, "acme", None, None, app.state.rules, classify=ExplodingClassify()
+        REQUEST, {}, "acme", None, None, app.state.rules,
+        classify=ExplodingClassify(), account=LOCAL_ACCOUNT,
     )
     assert decision.served_model == SONNET
     assert decision.reason == "rule"

@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { getJson } from './api.js'
+import { getJson, AuthError } from './api.js'
 import { useLiveEvents } from './live.js'
+import { sliceKey, setKey, clearKey, hasKey } from './auth.js'
 import { money, percent, integer } from './format.js'
 import KpiTile from './components/KpiTile.vue'
 import LivePill from './components/LivePill.vue'
@@ -9,6 +10,29 @@ import TeamBudgets from './components/TeamBudgets.vue'
 import ModelsChart from './components/ModelsChart.vue'
 import RecentCalls from './components/RecentCalls.vue'
 import GuardrailsTile from './components/GuardrailsTile.vue'
+import LoginScreen from './components/LoginScreen.vue'
+
+// Phase 12: the dashboard is locked. Until a key is entered (or if the gateway rejects
+// it) the login screen is shown instead of the dashboard. ``authed`` reactively tracks
+// whether we currently hold a key; a 401 anywhere clears it (see api.js) and flips back.
+const authed = computed(() => hasKey())
+const accountLogin = computed(() => summary.value?.account?.login ?? teams.value?.budget?.account ?? null)
+
+function onLogin(key) {
+  setKey(key)
+  error.value = ''
+  recentLoaded = false
+  loadAll()
+  startLive()
+}
+
+function onLogout() {
+  stopLive()
+  clearKey()
+  summary.value = models.value = teams.value = recent.value = null
+  recentLoaded = false
+  error.value = ''
+}
 
 const RECENT_LIMIT = 20
 const REFRESH_DEBOUNCE_MS = 400
@@ -72,7 +96,13 @@ async function loadRecent() {
 
 // A failed load shows the banner and dashes: aggregates are cleared so no
 // stale figure is presented as current. Live rows in `recent` are kept.
+// An AuthError is not an outage: the key was rejected (api.js already cleared it),
+// so fall through to the login screen instead of showing the banner.
 function markFailed(e) {
+  if (e instanceof AuthError) {
+    summary.value = models.value = teams.value = null
+    return
+  }
   error.value = e && e.message ? e.message : 'Backend unavailable.'
   summary.value = null
   models.value = null
@@ -137,7 +167,7 @@ function scheduleRefresh() {
   }, REFRESH_DEBOUNCE_MS)
 }
 
-const { status: liveStatus } = useLiveEvents(
+const { status: liveStatus, start: startLive, stop: stopLive } = useLiveEvents(
   (row) => {
     recent.value = mergeRecent([row], recent.value || [])
     scheduleRefresh()
@@ -154,7 +184,12 @@ const { status: liveStatus } = useLiveEvents(
 )
 
 let initialLoadDone = false
-onMounted(() => { loadAll().finally(() => { initialLoadDone = true }) })
+onMounted(() => {
+  // Only load (and let the live stream connect) when we already hold a key; otherwise
+  // the login screen shows and onLogin kicks things off.
+  if (!hasKey()) { initialLoadDone = true; return }
+  loadAll().finally(() => { initialLoadDone = true })
+})
 onBeforeUnmount(() => {
   if (refreshTimer) clearTimeout(refreshTimer)
   refreshTimer = null
@@ -194,7 +229,8 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
 </script>
 
 <template>
-  <div class="page">
+  <LoginScreen v-if="!authed" @login="onLogin" />
+  <div v-else class="page">
     <header class="header">
       <div class="brand">
         <img class="brand-logo" src="/favicon.png" alt="" width="24" height="24" />
@@ -203,7 +239,9 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
       </div>
       <div class="header-right">
         <span class="meta">this month · {{ month ?? '—' }}</span>
+        <span v-if="accountLogin" class="meta account">{{ accountLogin }}</span>
         <LivePill :status="liveStatus" />
+        <button class="signout" type="button" @click="onLogout">sign out</button>
       </div>
     </header>
 

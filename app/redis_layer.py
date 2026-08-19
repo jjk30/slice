@@ -26,8 +26,13 @@ from app.alerts import engine as alerts
 
 logger = logging.getLogger("slice.gateway")
 
-# The team header is temporary scaffolding until real auth lands in a later
-# phase. A missing or blank header collapses everyone into one shared team.
+# Phase 12: the *account* is the tenant. The rate-limit and budget counters below are
+# keyed by a ``scope`` string, which main.py passes as ``Account.scope`` (``acct:<id>``);
+# the cache keys fold the account id in. The team header survives only as an optional
+# label *inside* an account (a per-tool or per-project tag on the row and the cache
+# key, and the ``team`` a switch rule targets); it is never a tenant boundary and never
+# separates one account's numbers from another's. A missing or blank header is the
+# ``default`` label.
 TEAM_HEADER = "x-slice-team"
 DEFAULT_TEAM = "default"
 
@@ -58,7 +63,7 @@ def make_redis(url: str | None = None) -> aioredis.Redis:
 
 
 def team_from_headers(headers) -> str:
-    """The calling team, or ``default`` when the header is absent or blank."""
+    """The caller's team *label* (within its account), or ``default`` when absent or blank."""
     raw = headers.get(TEAM_HEADER)
     if raw is None:
         return DEFAULT_TEAM
@@ -81,17 +86,18 @@ def month_key(now: datetime | None = None) -> str:
 # --- Rate limit ------------------------------------------------------------
 
 
-async def check_rate_limit(redis: aioredis.Redis | None, team: str) -> bool:
-    """True when the request is under the per-minute cap.
+async def check_rate_limit(redis: aioredis.Redis | None, scope: str) -> bool:
+    """True when the request is under the per-minute cap for ``scope``.
 
-    A single counter per team with a 60s expiry gives a rolling fixed window:
-    the first request in a window sets the TTL, the window resets once it lapses.
-    Any Redis error fails open — the request is allowed.
+    ``scope`` is the tenant the counter belongs to — the account (``Account.scope``)
+    since phase 12. A single counter per scope with a 60s expiry gives a rolling fixed
+    window: the first request in a window sets the TTL, the window resets once it
+    lapses. Any Redis error fails open — the request is allowed.
     """
     if redis is None:
         return True
     try:
-        key = f"{_RATE_PREFIX}:{team}"
+        key = f"{_RATE_PREFIX}:{scope}"
         count = await redis.incr(key)
         if count == 1:
             # First hit of a new window: start the 60s clock.
@@ -111,8 +117,14 @@ class BudgetDecision:
     spend: Decimal
 
 
-async def check_budget(redis: aioredis.Redis | None, team: str) -> BudgetDecision:
-    """Decide whether this team has already hit its monthly cap.
+async def check_budget(
+    redis: aioredis.Redis | None,
+    scope: str,
+    *,
+    label: str | None = None,
+    account_id: int | None = None,
+) -> BudgetDecision:
+    """Decide whether this scope (the account, since phase 12) has already hit its monthly cap.
 
     Reads the accumulated spend counter (written after each prior response) and
     blocks at or past the cap. Any Redis error fails open — not blocked.
@@ -120,25 +132,27 @@ async def check_budget(redis: aioredis.Redis | None, team: str) -> BudgetDecisio
     Phase 11: a blocked decision is the "cap hit" moment, so it fires the ``block``
     alert here — fire-and-forget (a detached task, never awaited, off entirely when
     ``ALERTS_ENABLED`` is false); the engine's cooldown collapses the repeat blocks a
-    capped team keeps producing into one alert per window. The decision itself is
-    exactly as before.
+    capped scope keeps producing into one alert per window. The decision itself is
+    exactly as before. ``label`` is the human name the alert copy uses (the account's
+    login); it defaults to the scope string. ``account_id`` lands on the alerts row.
     """
     if redis is None:
         return BudgetDecision(blocked=False, spend=Decimal(0))
     try:
         month = month_key()
-        raw = await redis.get(f"{_BUDGET_PREFIX}:{team}:{month}")
+        raw = await redis.get(f"{_BUDGET_PREFIX}:{scope}:{month}")
         spend = Decimal(raw.decode()) if raw else Decimal(0)
         blocked = spend >= config.BUDGET_MONTHLY_USD
         if blocked:
             alerts.fire(
-                team,
+                label or scope,
                 alerts.KIND_BLOCK,
                 {
                     "spend_usd": float(spend),
                     "budget_usd": float(config.BUDGET_MONTHLY_USD),
                     "month": month,
                 },
+                account_id=account_id,
             )
         return BudgetDecision(blocked=blocked, spend=spend)
     except Exception as exc:
@@ -147,9 +161,9 @@ async def check_budget(redis: aioredis.Redis | None, team: str) -> BudgetDecisio
 
 
 async def get_spend(
-    redis: aioredis.Redis | None, team: str, month: str | None = None
+    redis: aioredis.Redis | None, scope: str, month: str | None = None
 ) -> Decimal | None:
-    """The team's live monthly budget counter, or None when Redis can't be read.
+    """The scope's (account's) live monthly budget counter, or None when Redis can't be read.
 
     A dashboard read (phase 10), not a gate: unlike ``check_budget``, which fails open
     to a spend of 0 because "unknown" and "nothing spent" call for the same decision,
@@ -161,7 +175,7 @@ async def get_spend(
     if redis is None:
         return None
     try:
-        raw = await redis.get(f"{_BUDGET_PREFIX}:{team}:{month or month_key()}")
+        raw = await redis.get(f"{_BUDGET_PREFIX}:{scope}:{month or month_key()}")
         value = Decimal(raw.decode()) if raw else Decimal(0)
         return value if value.is_finite() else None
     except Exception as exc:
@@ -169,29 +183,37 @@ async def get_spend(
         return None
 
 
-async def add_cost(redis: aioredis.Redis | None, team: str, cost: Decimal | None) -> None:
-    """Add one request's cost to the team's monthly counter, after the response.
+async def add_cost(
+    redis: aioredis.Redis | None,
+    scope: str,
+    cost: Decimal | None,
+    *,
+    label: str | None = None,
+    account_id: int | None = None,
+) -> None:
+    """Add one request's cost to the scope's (account's) monthly counter, after the response.
 
-    Also fires the budget warning exactly once per team per month, the first
+    Also fires the budget warning exactly once per scope per month, the first
     time the running total reaches the warn ratio. The once-only guard lives in
     Redis (a SETNX flag) so it holds across processes and restarts. Fails open.
 
     Phase 11: that first crossing is also where the ``warn`` alert fires — the same
     SETNX branch, right after the log line, fire-and-forget (a detached task, never
     awaited, off entirely when ``ALERTS_ENABLED`` is false). The counter, the latch,
-    and the log line are exactly as before.
+    and the log line are exactly as before. ``label`` / ``account_id`` as in
+    ``check_budget``.
     """
     if redis is None or cost is None or cost <= 0:
         return
     try:
         month = month_key()
-        key = f"{_BUDGET_PREFIX}:{team}:{month}"
+        key = f"{_BUDGET_PREFIX}:{scope}:{month}"
         new_total = Decimal(str(await redis.incrbyfloat(key, float(cost))))
         await redis.expire(key, _MONTH_KEY_TTL)
 
         warn_at = config.BUDGET_MONTHLY_USD * Decimal(str(config.BUDGET_WARN_RATIO))
         if new_total >= warn_at:
-            warned_key = f"{_WARNED_PREFIX}:{team}:{month}"
+            warned_key = f"{_WARNED_PREFIX}:{scope}:{month}"
             # SETNX is the atomic once-per-month latch: only the first crosser
             # gets True back and logs the warning.
             if await redis.setnx(warned_key, b"1"):
@@ -200,7 +222,8 @@ async def add_cost(redis: aioredis.Redis | None, team: str, cost: Decimal | None
                     json.dumps(
                         {
                             "event": "budget_warning",
-                            "team": team,
+                            "team": label or scope,
+                            "scope": scope,
                             "month": month,
                             "spend_usd": float(new_total),
                             "budget_usd": float(config.BUDGET_MONTHLY_USD),
@@ -209,7 +232,7 @@ async def add_cost(redis: aioredis.Redis | None, team: str, cost: Decimal | None
                     )
                 )
                 alerts.fire(
-                    team,
+                    label or scope,
                     alerts.KIND_WARN,
                     {
                         "spend_usd": float(new_total),
@@ -217,6 +240,7 @@ async def add_cost(redis: aioredis.Redis | None, team: str, cost: Decimal | None
                         "warn_ratio": config.BUDGET_WARN_RATIO,
                         "month": month,
                     },
+                    account_id=account_id,
                 )
     except Exception as exc:
         _debug("budget_add", exc)
@@ -225,16 +249,19 @@ async def add_cost(redis: aioredis.Redis | None, team: str, cost: Decimal | None
 # --- Response cache --------------------------------------------------------
 
 
-def cache_key(team: str, payload: dict) -> str:
+def cache_key(team: str, payload: dict, *, account_id: int | None = None) -> str:
     """Deterministic cache key for a request.
 
-    The team is folded into the hash, so one team's cache can never serve
-    another's. Only the fields that change the answer go in: model, the full
-    messages array, and max_tokens. ``sort_keys`` makes the encoding stable
-    while preserving message order (a list is never reordered).
+    Phase 12: the account id is folded into the hash, so one account's cache can never
+    serve another's — that is the tenant boundary. The team label is folded in too
+    (a sub-partition inside the account, as before phase 12). Only the fields that
+    change the answer go in: model, the full messages array, and max_tokens.
+    ``sort_keys`` makes the encoding stable while preserving message order (a list is
+    never reordered).
     """
     material = json.dumps(
         {
+            "account": account_id,
             "team": team,
             "model": payload.get("model"),
             "messages": payload.get("messages"),
@@ -247,10 +274,10 @@ def cache_key(team: str, payload: dict) -> str:
     return f"{_CACHE_PREFIX}:{hashlib.sha256(material).hexdigest()}"
 
 
-def openai_cache_key(team: str, body: dict) -> str:
+def openai_cache_key(team: str, body: dict, *, account_id: int | None = None) -> str:
     """Cache key for the OpenAI-compatible endpoint.
 
-    Same recipe as ``cache_key`` — team plus model, messages, and max_tokens —
+    Same recipe as ``cache_key`` — account, team plus model, messages, and max_tokens —
     but read from the raw OpenAI request body and tagged ``openai`` in the hash.
     The tag keeps this key space disjoint from the native one, so a request with
     identical fields on the two endpoints never collides: each stores its own
@@ -259,6 +286,7 @@ def openai_cache_key(team: str, body: dict) -> str:
     material = json.dumps(
         {
             "api": "openai",
+            "account": account_id,
             "team": team,
             "model": body.get("model"),
             "messages": body.get("messages"),

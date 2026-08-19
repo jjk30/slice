@@ -5,15 +5,17 @@ Endpoints under /dashboard, all read-only:
 - ``GET /dashboard/summary`` — this month's spend, requests, cache hits, routed count,
   honest savings, the phase-8 eval pass rate, and the phase-9 guardrail block count.
 - ``GET /dashboard/models``  — per-model request count and spend, this month.
-- ``GET /dashboard/teams``   — per-team spend vs cap, dollars remaining, and an
-  estimate of tokens remaining at the team's blended rate (null when not estimable).
+- ``GET /dashboard/teams``   — the account's budget (spend vs cap, dollars remaining,
+  and an estimate of tokens remaining at its blended rate; null when not estimable)
+  plus this month's spend split by team label.
 - ``GET /dashboard/recent``  — the latest N requests.
 - ``GET /dashboard/events``  — Server-Sent Events, one ``request`` event per completed
   gateway request, fanned out by the in-process ``Broadcaster``.
 
-They are ALL LOCAL-ONLY for now, exactly like ``/admin/*``: there is deliberately no
-authentication yet (auth lands in phase 12). Do not expose this router on a public
-interface. The Vite dev origin is allowed through CORS (``CORS_ORIGINS``).
+Phase 12: every path here needs a slice key (``app.auth.middleware``), and **every
+number is the caller's own**: the reads are filtered to ``request.state.account`` in
+SQL, and the SSE feed only delivers events stamped with that account. Account A never
+sees account B's numbers. The Vite dev origin is allowed through CORS (``CORS_ORIGINS``).
 
 Failure shapes are boring on purpose. Postgres missing or down → a clean JSON 503 from
 every read endpoint, and the gateway's own request path is untouched (it never reads
@@ -36,6 +38,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app import config, redis_layer
+from app.auth.middleware import read_account
 from app.dashboard import stats
 from app.dashboard.broadcaster import EVENT_NAME, get_broadcaster
 from app.db import summarize_eval_rows, summarize_guardrail_rows
@@ -75,6 +78,11 @@ def _db(request: Request):
     return db
 
 
+def _unauthenticated() -> JSONResponse:
+    # Belt and braces: the middleware never lets an unauthenticated request in here.
+    return _error(401, "Missing slice key. Send it as 'Authorization: Bearer slk_...'.")
+
+
 def _blocked_by_rail(rows: list[dict]) -> list[dict]:
     """Per-rail block counts, reusing the phase-9 aggregation on the blocked rows only."""
     blocked = [row for row in rows if row.get("action") == "blocked"]
@@ -88,6 +96,9 @@ def _action_count(summary: dict, action: str) -> int:
 @router.get("/summary")
 async def summary(request: Request):
     """This month's headline numbers. Every one of them comes from Postgres."""
+    account = read_account(request)
+    if account is None:
+        return _unauthenticated()
     db = _db(request)
     if db is None:
         return _error(503, DB_UNAVAILABLE)
@@ -96,9 +107,9 @@ async def summary(request: Request):
     now = datetime.now(timezone.utc)
     since = stats.month_start(now)
     try:
-        rows = await db.dashboard_rows(since)
-        eval_rows = await db.eval_rows_since(since)
-        guardrail_rows = await db.guardrail_rows_since(since)
+        rows = await db.dashboard_rows(since, account.id)
+        eval_rows = await db.eval_rows_since(since, account.id)
+        guardrail_rows = await db.guardrail_rows_since(since, account.id)
     except Exception as exc:  # noqa: BLE001 — a read failure is a clean 503, never a 500.
         logger.warning(json.dumps({"event": "dashboard_read_failed", "error": str(exc)}))
         return _error(503, DB_READ_FAILED)
@@ -111,6 +122,7 @@ async def summary(request: Request):
         "month": stats.month_label(now),
         "since": since.isoformat(),
         "generated_at": now.isoformat(),
+        "account": {"login": account.login, "id": account.id},
         **stats.summarize_requests(rows),
         "eval": eval_summary,
         "guardrails": {
@@ -124,13 +136,16 @@ async def summary(request: Request):
 
 @router.get("/models")
 async def models(request: Request):
-    """Per-model request count and spend for this month, biggest spend first."""
+    """The caller's per-model request count and spend for this month, biggest spend first."""
+    account = read_account(request)
+    if account is None:
+        return _unauthenticated()
     db = _db(request)
     if db is None:
         return _error(503, DB_UNAVAILABLE)
     now = datetime.now(timezone.utc)
     try:
-        rows = await db.dashboard_rows(stats.month_start(now))
+        rows = await db.dashboard_rows(stats.month_start(now), account.id)
     except Exception as exc:  # noqa: BLE001
         logger.warning(json.dumps({"event": "dashboard_read_failed", "error": str(exc)}))
         return _error(503, DB_READ_FAILED)
@@ -139,20 +154,28 @@ async def models(request: Request):
 
 @router.get("/teams")
 async def teams(request: Request):
-    """Per-team spend vs cap, dollars remaining, and the tokens-remaining estimate.
+    """The account's budget — spend vs cap, dollars remaining, tokens-remaining estimate —
+    plus this month's spend split by team label.
 
-    Spend is Postgres; the cap and warn ratio are config; "budget used" (what the
-    meter and dollars-remaining are built on) is the live Redis gate counter — the
-    number the gate blocks on — and falls back to the Postgres spend when Redis is
-    unavailable (fail open, exactly like the gate; ``budget_source`` says which).
+    Phase 12: the budget cap and its gate counter are per *account* (the tenant), so
+    the meter is one meter, under ``budget``. Spend is Postgres; the cap and warn ratio
+    are config; "budget used" (what the meter and dollars-remaining are built on) is
+    the live Redis gate counter for the account — the number the gate blocks on — and
+    falls back to the Postgres spend when Redis is unavailable (fail open, exactly like
+    the gate; ``budget_source`` says which). ``teams`` is the per-label breakdown of
+    the same rows: requests, spend, unpriced count, and each label's share of the
+    account's recorded spend.
     """
+    account = read_account(request)
+    if account is None:
+        return _unauthenticated()
     db = _db(request)
     if db is None:
         return _error(503, DB_UNAVAILABLE)
     now = datetime.now(timezone.utc)
     month = stats.month_label(now)
     try:
-        rows = await db.dashboard_rows(stats.month_start(now))
+        rows = await db.dashboard_rows(stats.month_start(now), account.id)
     except Exception as exc:  # noqa: BLE001
         logger.warning(json.dumps({"event": "dashboard_read_failed", "error": str(exc)}))
         return _error(503, DB_READ_FAILED)
@@ -160,15 +183,16 @@ async def teams(request: Request):
     buckets, unattributed = stats.per_team(rows)
     redis = getattr(request.app.state, "redis", None)
     budget = config.BUDGET_MONTHLY_USD
-    views = []
-    for bucket in buckets:
-        gate_spend = await redis_layer.get_spend(redis, bucket["team"], month)
-        views.append(stats.team_view(bucket, budget, gate_spend))
+    gate_spend = await redis_layer.get_spend(redis, account.scope, month)
+    account_bucket = stats.account_bucket(rows, label=account.label)
+    budget_view = stats.team_view(account_bucket, budget, gate_spend)
+    budget_view["account"] = budget_view.pop("team")
     return {
         "month": month,
         "budget_usd": stats.money(budget),
         "warn_ratio": config.BUDGET_WARN_RATIO,
-        "teams": views,
+        "budget": budget_view,
+        "teams": stats.team_shares(buckets, account_bucket["spend"]),
         "unattributed": unattributed,
     }
 
@@ -177,11 +201,14 @@ async def teams(request: Request):
 async def recent(request: Request, limit: int = RECENT_DEFAULT_LIMIT):
     """The latest requests, newest first. ``limit`` is clamped to [1, 200]."""
     limit = max(1, min(int(limit), RECENT_MAX_LIMIT))
+    account = read_account(request)
+    if account is None:
+        return _unauthenticated()
     db = _db(request)
     if db is None:
         return _error(503, DB_UNAVAILABLE)
     try:
-        rows = await db.recent_rows(limit)
+        rows = await db.recent_rows(limit, account.id)
     except Exception as exc:  # noqa: BLE001
         logger.warning(json.dumps({"event": "dashboard_read_failed", "error": str(exc)}))
         return _error(503, DB_READ_FAILED)
@@ -205,6 +232,11 @@ async def recent(request: Request, limit: int = RECENT_DEFAULT_LIMIT):
 
 def _iso(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _public_event(event: dict) -> dict:
+    """The event as the browser sees it: the account id is the filter, not a field."""
+    return {k: v for k, v in event.items() if k != "account_id"}
 
 
 class _SSEResponse(StreamingResponse):
@@ -233,8 +265,14 @@ async def events(request: Request):
     """Server-Sent Events: one ``request`` event per completed gateway request.
 
     Each client gets its own bounded queue from the broadcaster. The stream sends a
-    keepalive comment when idle and never touches the database.
+    keepalive comment when idle and never touches the database. Phase 12: only events
+    stamped with the caller's ``account_id`` are delivered; every other account's events
+    are dropped at this client's queue (they still reach that account's own clients).
     """
+    account = read_account(request)
+    if account is None:
+        return _unauthenticated()
+    account_id = account.id
     broadcaster = get_broadcaster(request.app)
     queue = broadcaster.subscribe()
 
@@ -247,7 +285,9 @@ async def events(request: Request):
                 except asyncio.TimeoutError:
                     yield b": keepalive\n\n"
                     continue
-                yield f"event: {EVENT_NAME}\ndata: {json.dumps(event)}\n\n".encode()
+                if event.get("account_id") != account_id:
+                    continue
+                yield f"event: {EVENT_NAME}\ndata: {json.dumps(_public_event(event))}\n\n".encode()
         finally:
             broadcaster.unsubscribe(queue)
 

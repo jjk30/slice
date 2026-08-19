@@ -1,5 +1,6 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { apiBase } from './api.js'
+import { withKeyParam, hasKey } from './auth.js'
 
 const BACKOFF_START_MS = 1000
 const BACKOFF_CAP_MS = 15000
@@ -48,9 +49,16 @@ export function useLiveEvents(onEvent, onOpen) {
 
   function connect() {
     if (stopped) return
+    // Phase 12: no key, no stream — the gateway would just 401 it into a reconnect loop.
+    if (!hasKey()) {
+      status.value = 'offline'
+      return
+    }
     if (es) es.close()
     // Status stays 'offline' until the first open; errors flip it to 'reconnecting'.
-    es = new EventSource(apiBase() + '/dashboard/events')
+    // EventSource can't set headers, so the slice key rides as a query param (the
+    // gateway accepts it there for this one GET only).
+    es = new EventSource(withKeyParam(apiBase() + '/dashboard/events'))
     es.addEventListener('open', () => {
       backoff = BACKOFF_START_MS
       status.value = 'live'
@@ -82,8 +90,16 @@ export function useLiveEvents(onEvent, onOpen) {
     status.value = 'offline'
   }
 
+  // Restart after a login: reset the stopped latch and the backoff, then connect.
+  function start() {
+    stopped = false
+    hadOpened = false
+    backoff = BACKOFF_START_MS
+    connect()
+  }
+
   onMounted(connect)
   onBeforeUnmount(stop)
 
-  return { status }
+  return { status, start, stop }
 }

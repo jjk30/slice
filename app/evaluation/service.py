@@ -81,6 +81,7 @@ async def _run(
     model: str | None,
     routed_from: str | None,
     neighbors: list[str],
+    account_id: int | None = None,
 ) -> None:
     """Score one answer and write its rows. Never raises — this is a detached task."""
     try:
@@ -126,6 +127,7 @@ async def _run(
                         score=scored.score,
                         passed=passed,
                         judge_model=judge_model,
+                        account_id=account_id,
                     )
                 )
     except Exception as exc:  # noqa: BLE001 — a detached task must never surface an error.
@@ -141,11 +143,13 @@ def spawn(
     model: str | None,
     routed_from: str | None,
     neighbors: list[str] | None = None,
+    account_id: int | None = None,
 ) -> "asyncio.Task | None":
     """Fire scoring into a detached task and return at once. None if it can't schedule.
 
     The caller has already decided this request is sampled; this only launches the
-    work. There is no path here that blocks or awaits the request.
+    work. There is no path here that blocks or awaits the request. ``account_id`` (phase
+    12) is stamped on the eval_scores row so the summary can be filtered per account.
     """
     coro = _run(
         evaluator,
@@ -155,6 +159,7 @@ def spawn(
         model=model,
         routed_from=routed_from,
         neighbors=list(neighbors or []),
+        account_id=account_id,
     )
     try:
         task = asyncio.create_task(coro)

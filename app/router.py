@@ -120,7 +120,9 @@ def _pin_node(state: _State) -> dict:
 
 async def _rule_node(state: _State) -> dict:
     ctx = state["ctx"]
-    rule = await ctx["rules"].match(ctx["team"], state.get("requested_model"))
+    rule = await ctx["rules"].match(
+        ctx["team"], state.get("requested_model"), account_id=ctx.get("account_id")
+    )
     if rule is None:
         return {"rule_matched": False, "rule_to": None}
     return {"rule_matched": True, "rule_to": rule.to_model}
@@ -199,9 +201,13 @@ async def _judge_node(state: _State) -> dict:
         logger.debug(json.dumps({"event": "judge_node_error", "error": str(exc)}))
         return {"verdict": judge.VERDICT_HARD}
 
-    # Count everything: the judge's own tokens are billed to the team, upper bound.
+    # Count everything: the judge's own tokens are billed to the caller's budget scope
+    # (the account since phase 12; the team string for direct callers), upper bound.
     cost = pricing.cost_usd(config.JUDGE_MODEL, result.input_tokens, result.output_tokens)
-    await redis_layer.add_cost(ctx["redis"], ctx["team"], cost)
+    await redis_layer.add_cost(
+        ctx["redis"], ctx.get("budget_scope") or ctx["team"], cost,
+        label=ctx.get("budget_label"), account_id=ctx.get("account_id"),
+    )
     return {"verdict": result.verdict}
 
 
@@ -298,12 +304,19 @@ async def route(
     *,
     classify: Callable | None = None,
     retriever=None,
+    account=None,
 ) -> RoutingDecision:
     """Run the router graph for one request. Never raises — forwards as asked on error.
 
     ``classify`` is injectable so tests can supply a fake judge; production leaves it
     as the real ``app.judge.classify``. ``retriever`` is the phase-6 RAG index; None
     (or ``RAG_ENABLED`` off) skips retrieval and the router behaves exactly as phase 5.
+
+    ``team`` is the caller's team label (the rule target and, before phase 12, the
+    budget scope). ``account`` (phase 12) is the resolved ``Account``: its id scopes the
+    rule match and its ``scope`` is what the judge's cost is billed to. Without an
+    account (direct callers, tests) the team string is the budget scope and only rules
+    with no account match, exactly as before.
     """
     requested = payload.get("model") if isinstance(payload, dict) else None
     initial: _State = {
@@ -318,6 +331,9 @@ async def route(
             "rules": rules_cache,
             "classify": classify or judge.classify,
             "retriever": retriever,
+            "account_id": getattr(account, "id", None),
+            "budget_scope": getattr(account, "scope", None),
+            "budget_label": getattr(account, "label", None),
         },
     }
 

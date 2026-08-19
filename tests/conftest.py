@@ -84,6 +84,41 @@ def alerts_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def rag_off_by_default(monkeypatch):
+    """Phase-6 RAG is opt-in per test, same pattern as the flags below.
+
+    Production defaults ``RAG_ENABLED`` to true. That matters for one thing here: the
+    lifespan-running test would otherwise call ``rag_retriever.load_default()``, which
+    now warms the heavy embedding model at startup when a local ``rag_store`` index is
+    present — real, slow work (or a bounded hang) the unit suite must never do. Default
+    it off so lifespan skips RAG entirely; the RAG tests set it true explicitly and drive
+    the retriever with fakes. The request path already treats a None retriever as "no
+    retrieval", so nothing else changes.
+    """
+    monkeypatch.setattr(config, "RAG_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
+def auth_off_by_default(monkeypatch):
+    """Phase-12 auth is opt-in per test, same pattern as the flags above.
+
+    Production defaults ``AUTH_ENABLED`` to true, which locks the proxy paths and every
+    /admin and /dashboard path behind a slice key. The phases 1-11 suites send no key,
+    so leaving auth on would turn every one of their requests into a 401. Default it off
+    here: the gateway then runs in single-tenant LOCAL mode (no key required; the
+    /admin and /dashboard reads scope to the fixed local account), which is exactly the
+    pre-phase-12 behavior those suites assert. The auth tests turn it back on explicitly
+    and install a fake key store. Also clear any Authenticator a lifespan-running test
+    left on app.state so a stale one can't leak between tests.
+    """
+    monkeypatch.setattr(config, "AUTH_ENABLED", False)
+    previous = getattr(app.state, "auth", None)
+    app.state.auth = None
+    yield
+    app.state.auth = previous
+
+
+@pytest.fixture(autouse=True)
 def isolate_redis(monkeypatch):
     """Keep every test off the real Redis and out of each other's state.
 

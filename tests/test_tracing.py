@@ -70,7 +70,7 @@ async def test_router_runs_with_tracing_off_and_no_key(monkeypatch):
     monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
 
     class Rules:
-        async def match(self, team, model):
+        async def match(self, team, model, account_id=None):
             return None
 
     async def fake_classify(text, model, headers, client, *, hint=None):

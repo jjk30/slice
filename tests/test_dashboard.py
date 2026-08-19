@@ -98,28 +98,31 @@ class FakeDashboardDB:
         self.error = error
         self.since_calls: list = []
         self.recent_limits: list[int] = []
+        self.account_ids: list = []
         self.records: list = []
 
     def _maybe_raise(self):
         if self.error is not None:
             raise self.error
 
-    async def dashboard_rows(self, since):
+    async def dashboard_rows(self, since, account_id=None):
         self._maybe_raise()
         self.since_calls.append(since)
+        self.account_ids.append(account_id)
         return list(self.rows)
 
-    async def recent_rows(self, limit):
+    async def recent_rows(self, limit, account_id=None):
         self._maybe_raise()
         self.recent_limits.append(limit)
+        self.account_ids.append(account_id)
         rows = sorted(self.rows, key=lambda r: r.get("id", 0), reverse=True)
         return rows[:limit]
 
-    async def eval_rows_since(self, since):
+    async def eval_rows_since(self, since, account_id=None):
         self._maybe_raise()
         return list(self.eval_rows)
 
-    async def guardrail_rows_since(self, since):
+    async def guardrail_rows_since(self, since, account_id=None):
         self._maybe_raise()
         return list(self.guardrail_rows)
 
@@ -452,6 +455,7 @@ def test_make_event_has_the_published_shape():
     )
     assert set(event) == {
         "request_id", "team", "model", "routed_from", "status", "cost", "cached", "created_at",
+        "account_id",
     }
     assert event["request_id"].startswith("req_")
     assert event["cost"] == 0.0035
@@ -602,7 +606,14 @@ async def test_models_endpoint_shape(client, dash_db):
     ]
 
 
-async def test_teams_endpoint_reads_spend_from_postgres_cap_from_config_and_gate_from_redis(
+# Phase 12: /dashboard/teams is now per *account*. There is one budget meter (``budget``),
+# built from the account's Redis gate counter under its scope; ``teams`` is the per-label
+# breakdown (shares) of the same rows. Auth is off in these tests, so the account is the
+# fixed local account (id None, so its gate counter lives under LOCAL_ACCOUNT.scope).
+LOCAL_SCOPE = "acct:None"
+
+
+async def test_teams_endpoint_budget_from_account_gate_counter_and_per_label_shares(
     client, dash_db, monkeypatch
 ):
     monkeypatch.setattr(config, "BUDGET_MONTHLY_USD", Decimal("10"))
@@ -610,7 +621,8 @@ async def test_teams_endpoint_reads_spend_from_postgres_cap_from_config_and_gate
     dash_db.rows = [_row(team="team-a", model=SONNET), _row(team="team-b", model=HAIKU), _row(team=None)]
 
     redis = fakeredis.aioredis.FakeRedis()
-    await redis.set(f"slice:budget:team-a:{stats.month_label()}", b"0.0125")
+    # The account's single gate counter (judge cost included), not any per-team key.
+    await redis.set(f"slice:budget:{LOCAL_SCOPE}:{stats.month_label()}", b"0.02")
     app.state.redis = redis
 
     r = await client.get("/dashboard/teams")
@@ -620,24 +632,24 @@ async def test_teams_endpoint_reads_spend_from_postgres_cap_from_config_and_gate
     assert body["budget_usd"] == 10.0
     assert body["warn_ratio"] == 0.5
     assert body["unattributed"] == {"requests": 1, "spend_usd": pytest.approx(0.0035)}
+
+    # One budget meter for the whole account: spend is the record-book sum across every
+    # label AND the unattributed rows; the meter follows the gate counter.
+    budget = body["budget"]
+    assert budget["account"] == "local"
+    assert budget["spend_usd"] == pytest.approx(0.0105 + 0.0035 + 0.0035)
+    assert budget["gate_spend_usd"] == 0.02
+    assert budget["budget_used_usd"] == 0.02
+    assert budget["budget_source"] == "redis"
+    assert budget["remaining_usd"] == pytest.approx(10 - 0.02)
+
+    # The per-label breakdown: each label's spend and its share of the account total.
     by_team = {t["team"]: t for t in body["teams"]}
     assert set(by_team) == {"team-a", "team-b"}
-    a = by_team["team-a"]
-    assert a["spend_usd"] == pytest.approx(0.0105)  # the record book
-    assert a["unpriced_requests"] == 0
-    assert a["budget_usd"] == 10.0
-    # The gate counter (judge cost included) is what the cap is enforced against, so
-    # "budget used" and dollars remaining follow it, not the Postgres sum.
-    assert a["gate_spend_usd"] == 0.0125
-    assert a["budget_used_usd"] == 0.0125
-    assert a["budget_source"] == "redis"
-    assert a["remaining_usd"] == pytest.approx(10 - 0.0125)
-    assert a["estimated_tokens_remaining"] == int(Decimal("9.9875") / (Decimal("0.0105") / 1500))
-    # team-b has no counter yet: a real zero, not unknown.
-    b = by_team["team-b"]
-    assert b["gate_spend_usd"] == 0.0
-    assert b["budget_used_usd"] == 0.0 and b["budget_source"] == "redis"
-    assert b["remaining_usd"] == 10.0
+    account_spend = 0.0105 + 0.0035 + 0.0035
+    assert by_team["team-a"]["spend_usd"] == pytest.approx(0.0105)
+    assert by_team["team-a"]["share"] == pytest.approx(0.0105 / account_spend)
+    assert by_team["team-b"]["share"] == pytest.approx(0.0035 / account_spend)
 
 
 async def test_teams_endpoint_fails_open_when_redis_is_down(client, dash_db, monkeypatch):
@@ -648,46 +660,46 @@ async def test_teams_endpoint_fails_open_when_redis_is_down(client, dash_db, mon
     r = await client.get("/dashboard/teams")
 
     assert r.status_code == 200
-    team = r.json()["teams"][0]
-    assert team["spend_usd"] == pytest.approx(0.0105)  # Postgres
-    assert team["budget_usd"] == 25.0  # config
-    assert team["gate_spend_usd"] is None  # Redis: unknown, shown as such
+    budget = r.json()["budget"]
+    assert budget["spend_usd"] == pytest.approx(0.0105)  # Postgres
+    assert budget["budget_usd"] == 25.0  # config
+    assert budget["gate_spend_usd"] is None  # Redis: unknown, shown as such
     # Fail open: the meter falls back to the Postgres spend and says so.
-    assert team["budget_used_usd"] == pytest.approx(0.0105)
-    assert team["budget_source"] == "postgres"
-    assert team["remaining_usd"] == pytest.approx(25 - 0.0105)
-    assert team["estimated_tokens_remaining"] is not None
+    assert budget["budget_used_usd"] == pytest.approx(0.0105)
+    assert budget["budget_source"] == "postgres"
+    assert budget["remaining_usd"] == pytest.approx(25 - 0.0105)
+    assert budget["estimated_tokens_remaining"] is not None
 
 
 async def test_teams_gate_counter_over_cap_shows_nothing_left(client, dash_db, monkeypatch):
-    # Postgres knows $1 of rows; the gate counter (judge cost, rows the writer lost) is
-    # already past the cap and the team IS being blocked. The dashboard must not say
-    # there is money left just because the record book is behind.
+    # Postgres knows $1 of rows; the account's gate counter (judge cost, rows the writer
+    # lost) is already past the cap and the account IS being blocked. The dashboard must
+    # not say there is money left just because the record book is behind.
     monkeypatch.setattr(config, "BUDGET_MONTHLY_USD", Decimal("2"))
     dash_db.rows = [_row(team="team-a", model=SONNET, cost_usd=Decimal("1"))]
     redis = fakeredis.aioredis.FakeRedis()
-    await redis.set(f"slice:budget:team-a:{stats.month_label()}", b"2.5")
+    await redis.set(f"slice:budget:{LOCAL_SCOPE}:{stats.month_label()}", b"2.5")
     app.state.redis = redis
 
-    team = (await client.get("/dashboard/teams")).json()["teams"][0]
-    assert team["spend_usd"] == 1.0
-    assert team["gate_spend_usd"] == 2.5
-    assert team["remaining_usd"] == 0.0
-    assert team["estimated_tokens_remaining"] == 0
+    budget = (await client.get("/dashboard/teams")).json()["budget"]
+    assert budget["spend_usd"] == 1.0
+    assert budget["gate_spend_usd"] == 2.5
+    assert budget["remaining_usd"] == 0.0
+    assert budget["estimated_tokens_remaining"] == 0
 
 
 async def test_teams_non_finite_gate_counter_is_unknown_not_a_500(client, dash_db):
     dash_db.rows = [_row(team="team-a", model=SONNET)]
     redis = fakeredis.aioredis.FakeRedis()
-    await redis.set(f"slice:budget:team-a:{stats.month_label()}", b"NaN")
+    await redis.set(f"slice:budget:{LOCAL_SCOPE}:{stats.month_label()}", b"NaN")
     app.state.redis = redis
 
     r = await client.get("/dashboard/teams")
     assert r.status_code == 200
-    team = r.json()["teams"][0]
-    assert team["gate_spend_usd"] is None
-    assert team["budget_source"] == "postgres"
-    assert await redis_layer.get_spend(redis, "team-a") is None
+    budget = r.json()["budget"]
+    assert budget["gate_spend_usd"] is None
+    assert budget["budget_source"] == "postgres"
+    assert await redis_layer.get_spend(redis, LOCAL_SCOPE) is None
 
 
 async def test_teams_endpoint_empty_month(client, dash_db):
@@ -695,6 +707,7 @@ async def test_teams_endpoint_empty_month(client, dash_db):
     assert r.status_code == 200
     body = r.json()
     assert body["teams"] == []
+    assert body["budget"]["spend_usd"] == 0.0
     assert body["unattributed"] == {"requests": 0, "spend_usd": 0.0}
 
 
@@ -823,9 +836,13 @@ async def test_served_request_publishes_one_event(client, dash_db, fresh_broadca
     assert r.status_code == 200
     assert queue.qsize() == 1
     event = queue.get_nowait()
+    # The raw broadcaster event carries account_id (the SSE endpoint strips it before the
+    # browser); auth is off in the tests, so the local tenant's account_id is None.
     assert set(event) == {
         "request_id", "team", "model", "routed_from", "status", "cost", "cached", "created_at",
+        "account_id",
     }
+    assert event["account_id"] is None
     assert event["team"] == "team-a"
     assert event["model"] == SONNET
     assert event["routed_from"] is None
@@ -1025,7 +1042,10 @@ async def test_sse_stream_delivers_events_and_cleans_up_on_disconnect(fresh_broa
         frame = harness.body.split(b"event: request\n", 1)[1]
         data_line = frame.split(b"\n", 1)[0]
         assert data_line.startswith(b"data: ")
-        assert json.loads(data_line[len(b"data: "):]) == event
+        # The SSE endpoint strips account_id (it is the delivery filter, not a field the
+        # browser shows), so compare against the event without it.
+        expected = {k: v for k, v in event.items() if k != "account_id"}
+        assert json.loads(data_line[len(b"data: "):]) == expected
 
         # The browser goes away: the queue is dropped and nothing leaks.
         harness.disconnect.set()

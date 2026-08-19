@@ -35,6 +35,7 @@ def record_event(
     rail: str,
     action: str,
     reason: str | None,
+    account_id: int | None = None,
 ) -> "asyncio.Task | None":
     """Log one guardrail event and fire its DB write off into a detached task.
 
@@ -48,6 +49,7 @@ def record_event(
                 "rail": rail,
                 "action": action,
                 "team": team,
+                "account_id": account_id,
                 "reason": reason,
             }
         )
@@ -57,7 +59,7 @@ def record_event(
         return None
 
     coro = database.record_guardrail(
-        GuardrailEvent(team=team, rail=rail, action=action, reason=reason)
+        GuardrailEvent(team=team, rail=rail, action=action, reason=reason, account_id=account_id)
     )
     try:
         task = asyncio.create_task(coro)

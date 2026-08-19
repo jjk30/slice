@@ -113,7 +113,7 @@ class FakeAlertDB:
         if self.error is not None:
             raise self.error
 
-    async def alert_summary(self) -> dict:
+    async def alert_summary(self, account_id=None) -> dict:
         rows = [
             {
                 "id": i + 1,
@@ -876,7 +876,7 @@ async def test_summary_endpoint_read_failure_degrades_to_empty(client):
     class Broken:
         enabled = True
 
-        async def alert_summary(self):
+        async def alert_summary(self, account_id=None):
             raise RuntimeError("db exploded")
 
     previous = getattr(app.state, "db", None)

@@ -37,3 +37,11 @@ pytest-asyncio
 respx
 fakeredis
 python-dotenv
+
+# --- Auth (phase 12): GitHub device-flow login, slice keys, JWT sessions, the CLI. ---
+# PyJWT signs and verifies the dashboard-session JWTs (HS256). typer (over click) is the
+# `slice` CLI — login, init, use — installed as a console entry point via pyproject.toml
+# (`pip install -e .`). Both are small and pure-Python; neither touches the pinned
+# langchain/ragas tree, so they force nothing up or down.
+PyJWT
+typer

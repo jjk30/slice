@@ -22,13 +22,16 @@ from app.db import RequestRecord
 from app.main import app
 from app.rag import embeddings
 from app.rag.prompt import MAX_PROMPT_CHARS, extract_prompt_text
+from app.rag import retriever as rag_retriever
 from app.rag.retriever import (
     INDEX_FILENAME,
     META_FILENAME,
     Neighbor,
     Retriever,
+    load_default,
     team_dir_name,
 )
+from app.main import lifespan
 from app.router import route
 from app.rules import RulesCache
 
@@ -85,10 +88,10 @@ class FakeRetriever:
 
 
 class _NoRules:
-    async def match(self, team, from_model):
+    async def match(self, team, from_model, account_id=None):
         return None
 
-    async def all(self):
+    async def all(self, account_id=...):
         return []
 
 
@@ -294,10 +297,10 @@ async def test_retrieval_never_runs_on_the_rule_path(monkeypatch):
     from app.rules import SwitchRule
 
     class OneRule:
-        async def match(self, team, from_model):
+        async def match(self, team, from_model, account_id=None):
             return SwitchRule(1, "acme", OPUS, "claude-sonnet-5")
 
-        async def all(self):
+        async def all(self, account_id=...):
             return []
 
     retriever = FakeRetriever([Neighbor(score=0.9, model=HAIKU)])
@@ -532,3 +535,89 @@ def test_prompt_extraction_only_first_4000_when_joined():
     result = extract_prompt_text(payload)
     assert len(result) == 4000
     assert result.startswith("a" * 3000 + "\n")
+
+
+# --- Fail-open startup (phase 12 hardening) --------------------------------
+# RAG's embedding model is an optional heavy dependency (sentence-transformers + torch).
+# If it is missing, broken, or pathologically slow, loading it must never crash or hang
+# the gateway: load_default() warms it once at startup, bounded by a timeout in a daemon
+# thread, and returns None (retrieval then returns nothing) on any failure. These tests
+# drive that without touching the real model.
+
+
+def _seed_index_dir(base, team="team-a"):
+    """Create a store with one team directory that *looks* like it has a built index,
+    so load_default() decides there is something to warm (the files' contents don't
+    matter — the warm step is faked)."""
+    team_dir = base / team
+    team_dir.mkdir(parents=True)
+    (team_dir / INDEX_FILENAME).write_bytes(b"not-a-real-index")
+    (team_dir / META_FILENAME).write_text("[]")
+
+
+def test_load_default_returns_none_when_dependency_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "RAG_INDEX_DIR", str(tmp_path))
+    _seed_index_dir(tmp_path)
+
+    # Simulate sentence-transformers / faiss not being importable.
+    def _boom():
+        raise ModuleNotFoundError("No module named 'sentence_transformers'")
+
+    monkeypatch.setattr(rag_retriever, "warm", _boom)
+
+    assert load_default() is None  # fail-open: RAG disabled, no exception raised
+
+
+def test_load_default_times_out_on_a_hanging_warm(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "RAG_INDEX_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "RAG_WARM_TIMEOUT_SECONDS", 0.2)
+    _seed_index_dir(tmp_path)
+
+    import threading as _t
+
+    release = _t.Event()
+
+    def _hang():
+        release.wait(30)  # a stuck import; the daemon thread is abandoned on timeout
+
+    monkeypatch.setattr(rag_retriever, "warm", _hang)
+    try:
+        assert load_default() is None  # timed out -> None, startup never blocks
+    finally:
+        release.set()
+
+
+def test_load_default_returns_retriever_when_warm_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "RAG_INDEX_DIR", str(tmp_path))
+    _seed_index_dir(tmp_path)
+    monkeypatch.setattr(rag_retriever, "warm", lambda: None)  # a healthy, fast load
+    assert isinstance(load_default(), Retriever)
+
+
+def test_load_default_skips_warm_when_store_has_no_index(tmp_path, monkeypatch):
+    # An empty store: nothing to search, so the heavy model is never touched.
+    monkeypatch.setattr(config, "RAG_INDEX_DIR", str(tmp_path))
+
+    def _must_not_run():
+        raise AssertionError("warm() must not be called when there is no index")
+
+    monkeypatch.setattr(rag_retriever, "warm", _must_not_run)
+    assert isinstance(load_default(), Retriever)
+
+
+async def test_lifespan_completes_with_rag_dependency_absent(tmp_path, monkeypatch):
+    """The whole point: the server starts even when RAG's dependency is gone."""
+    monkeypatch.setattr(config, "RAG_ENABLED", True)  # override the autouse off default
+    monkeypatch.setattr(config, "RAG_INDEX_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "DATABASE_URL", None)  # no DB either; keep startup pure
+    _seed_index_dir(tmp_path)
+
+    def _boom():
+        raise ModuleNotFoundError("No module named 'sentence_transformers'")
+
+    monkeypatch.setattr(rag_retriever, "warm", _boom)
+
+    # If startup hung or crashed on RAG this would never return / would raise.
+    async with lifespan(app):
+        assert app.state.retriever is None  # RAG disabled, fail-open
+    # And a request path that consults the retriever treats None as "no retrieval".

@@ -81,7 +81,7 @@ class FakeEvalDB:
         if self.error is not None:
             raise self.error
 
-    async def eval_summary(self) -> dict:
+    async def eval_summary(self, account_id=None) -> dict:
         rows = [
             {"model": r.model, "routed_from": r.routed_from, "passed": r.passed}
             for r in self.records
