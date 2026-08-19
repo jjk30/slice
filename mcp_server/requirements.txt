@@ -1,0 +1,6 @@
+# Runtime dependencies for the standalone slice MCP server (phase 14).
+# Kept separate from the gateway's requirements.txt so this adapter stays isolated.
+#   pip install -r mcp_server/requirements.txt
+mcp>=1.9,<2
+httpx
+# Tests additionally use respx (already in the repo's top-level requirements.txt).
