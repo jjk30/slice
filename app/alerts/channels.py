@@ -322,4 +322,29 @@ def build_default_channels() -> list[AlertChannel]:
                     }
                 )
             )
+
+    # WhatsApp via Twilio (phase 13). Local import: whatsapp imports Alert/DeliveryResult/
+    # body_for from this module, so a top-level import here would be a cycle.
+    from app.alerts.whatsapp import TwilioWhatsAppChannel
+
+    whatsapp = TwilioWhatsAppChannel(
+        account_sid=config.TWILIO_ACCOUNT_SID,
+        auth_token=config.TWILIO_AUTH_TOKEN,
+        from_=config.TWILIO_WHATSAPP_FROM,
+        to=config.TWILIO_WHATSAPP_TO,
+    )
+    if whatsapp.configured:
+        channels.append(whatsapp)
+    else:
+        # Disabled when any of the four TWILIO_* settings is empty: no channel, one
+        # quiet debug line. Nothing is recorded for a channel that was never built.
+        logger.debug(
+            json.dumps(
+                {
+                    "event": "alerts_channel_disabled",
+                    "channel": whatsapp.name,
+                    "reason": "one or more TWILIO_* settings are empty",
+                }
+            )
+        )
     return channels

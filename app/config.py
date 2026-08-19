@@ -200,10 +200,26 @@ GUARDRAILS_CONFIG_DIR = os.getenv("GUARDRAILS_CONFIG_DIR", "guardrails")
 # WhatsApp plug in later without the engine changing.
 RESEND_API_KEY = os.getenv("RESEND_API_KEY") or None
 
-# The whole switch. Defaults on only when a Resend key is present — an unkeyed
-# deployment has no channel and stays exactly as phase 10, zero alert code on any
-# path. Set explicitly to override either way.
-ALERTS_ENABLED = _bool("ALERTS_ENABLED", RESEND_API_KEY is not None)
+# WhatsApp via Twilio (phase 13, part 1): a second outbound channel next to email,
+# firing off the same cooldown decision. All four are optional; the channel is built
+# only when all four are present, otherwise it is silently disabled (a debug line at
+# build time) — the same "configured means every secret and address is set" rule the
+# email channel uses. No twilio SDK: app.alerts.whatsapp posts to the REST endpoint
+# over httpx directly.
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID") or None
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN") or None
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM") or None  # e.g. whatsapp:+17372324091
+TWILIO_WHATSAPP_TO = os.getenv("TWILIO_WHATSAPP_TO") or None  # e.g. whatsapp:+13128520631
+
+_WHATSAPP_CONFIGURED = all(
+    (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, TWILIO_WHATSAPP_TO)
+)
+
+# The whole switch. Defaults on only when a channel is present — a Resend key or a
+# fully-configured Twilio WhatsApp channel. A deployment with neither has no channel
+# and stays exactly as phase 10, zero alert code on any path. Set explicitly to
+# override either way.
+ALERTS_ENABLED = _bool("ALERTS_ENABLED", RESEND_API_KEY is not None or _WHATSAPP_CONFIGURED)
 
 # The sender. Resend's onboarding address works out of the box (to the account
 # owner's own email only) with no verified domain; set a verified-domain sender for

@@ -36,6 +36,7 @@ from app.alerts.engine import (
     get_engine,
     send_alert,
 )
+from app.alerts.whatsapp import TwilioWhatsAppChannel, send_whatsapp_message
 
 __all__ = [
     "KIND_BLOCK",
@@ -45,6 +46,7 @@ __all__ = [
     "AlertEngine",
     "DeliveryResult",
     "ResendEmailChannel",
+    "TwilioWhatsAppChannel",
     "build_default_channels",
     "build_engine",
     "configure",
@@ -53,4 +55,5 @@ __all__ = [
     "fire",
     "get_engine",
     "send_alert",
+    "send_whatsapp_message",
 ]
