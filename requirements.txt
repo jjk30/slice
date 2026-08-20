@@ -45,3 +45,4 @@ python-dotenv
 # langchain/ragas tree, so they force nothing up or down.
 PyJWT
 typer
+mcp==1.29.0

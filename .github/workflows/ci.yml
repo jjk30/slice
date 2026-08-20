@@ -1,0 +1,67 @@
+# Phase 15 CI: install, apply migrations against a real Postgres, run the full
+# test suite. Tests only — no build-and-push / deploy / ECR step (that is phase 16).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: slice
+          POSTGRES_PASSWORD: slice
+          POSTGRES_DB: slice
+        ports:
+          - 5432:5432
+        # Wait until Postgres answers before the steps start.
+        options: >-
+          --health-cmd "pg_isready -U slice -d slice"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://slice:slice@localhost:5432/slice
+      REDIS_URL: redis://localhost:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Apply migrations
+        env:
+          PGPASSWORD: slice
+        run: |
+          for f in migrations/*.sql; do
+            echo "applying $f"
+            psql -h localhost -U slice -d slice -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Run tests
+        run: pytest

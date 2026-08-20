@@ -1,0 +1,14 @@
+# Keep the build context (and the image) lean: exclude anything the runtime
+# doesn't need. Mirrors the "copy only what runs" rule in the Dockerfile.
+.venv
+.git
+tests
+dashboard
+.env
+*.pyc
+__pycache__
+.pytest_cache
+rag_store
+.DS_Store
+slice.egg-info
+.claude
