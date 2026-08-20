@@ -1,0 +1,12 @@
+# Terraform local state and caches
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Variable files may hold secrets — don't commit them
+*.tfvars
+*.tfvars.json
+
+# Lock file: committing is recommended, but ignored here while state is local.
+.terraform.lock.hcl
