@@ -64,11 +64,14 @@ resource "aws_secretsmanager_secret_version" "db" {
 
   secret_string = jsonencode({
     username = var.db_username
+    # Raw, un-encoded password so direct readers of this field get the true value.
     password = random_password.db.result
     host     = aws_db_instance.main.address
     port     = aws_db_instance.main.port
     dbname   = var.db_name
-    # Convenience: ready-to-use DATABASE_URL for the app.
-    url = "postgresql://${var.db_username}:${random_password.db.result}@${aws_db_instance.main.address}:${aws_db_instance.main.port}/${var.db_name}"
+    # Convenience: ready-to-use DATABASE_URL. The password may contain URL-special
+    # chars (from override_special "!#%*_-=+"), so it is urlencode()'d here; the
+    # username, host, port and dbname are safe as-is.
+    url = "postgresql://${var.db_username}:${urlencode(random_password.db.result)}@${aws_db_instance.main.address}:${aws_db_instance.main.port}/${var.db_name}"
   })
 }

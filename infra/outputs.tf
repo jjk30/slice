@@ -47,3 +47,18 @@ output "db_secret_arn" {
   description = "ARN of the Secrets Manager secret holding DB connection details."
   value       = aws_secretsmanager_secret.db.arn
 }
+
+output "alb_dns_name" {
+  description = "Public DNS name of the ALB — use this to reach slice."
+  value       = aws_lb.main.dns_name
+}
+
+output "ecs_cluster_name" {
+  description = "Name of the ECS cluster."
+  value       = aws_ecs_cluster.main.name
+}
+
+output "ecs_service_name" {
+  description = "Name of the ECS service."
+  value       = aws_ecs_service.gateway.name
+}

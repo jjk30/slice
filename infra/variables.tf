@@ -45,3 +45,21 @@ variable "cache_node_type" {
   type        = string
   default     = "cache.t3.micro"
 }
+
+variable "task_cpu" {
+  description = "Fargate task CPU units (512 = 0.5 vCPU)."
+  type        = number
+  default     = 512
+}
+
+variable "task_memory" {
+  description = "Fargate task memory in MiB. 2048 to fit heavy libs (torch, ragas)."
+  type        = number
+  default     = 2048
+}
+
+variable "desired_count" {
+  description = "Number of ECS service tasks to run."
+  type        = number
+  default     = 1
+}
