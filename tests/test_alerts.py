@@ -44,6 +44,7 @@ from app.alerts import (
 from app.alerts import channels as alert_channels
 from app.alerts import engine as alerts_engine
 from app.alerts.channels import RESEND_EMAILS_URL, _money, body_for, format_time, subject_for
+from app.alerts.whatsapp import TWILIO_MESSAGES_URL
 from app.db import (
     ALERT_STATUS_FAILED,
     ALERT_STATUS_SENT,
@@ -146,6 +147,23 @@ class BrokenRedis:
 def alerts_on(monkeypatch):
     monkeypatch.setattr(config, "ALERTS_ENABLED", True)
     monkeypatch.setattr(config, "ALERT_COOLDOWN_SECONDS", 3600)
+
+
+@pytest.fixture
+def no_whatsapp_config(monkeypatch):
+    """Force the phase-13 WhatsApp channel off, regardless of the local ``.env``.
+
+    ``build_default_channels`` registers a Twilio WhatsApp channel whenever all four
+    ``TWILIO_*`` settings are present (they are in the developer ``.env``, which
+    python-dotenv loads into ``app.config`` during tests). The email-path tests below
+    predate phase 13 and assert email-only behavior, so they clear the four settings
+    the same way they already clear ``RESEND_API_KEY``/``ALERT_EMAIL_TO`` — making the
+    WhatsApp channel deterministically absent locally and in CI alike.
+    """
+    monkeypatch.setattr(config, "TWILIO_ACCOUNT_SID", None)
+    monkeypatch.setattr(config, "TWILIO_AUTH_TOKEN", None)
+    monkeypatch.setattr(config, "TWILIO_WHATSAPP_FROM", None)
+    monkeypatch.setattr(config, "TWILIO_WHATSAPP_TO", None)
 
 
 @pytest.fixture
@@ -381,7 +399,7 @@ def test_build_engine_returns_none_when_disabled(monkeypatch):
     assert build_engine() is None
 
 
-def test_build_engine_with_channel(monkeypatch):
+def test_build_engine_with_channel(monkeypatch, no_whatsapp_config):
     monkeypatch.setattr(config, "ALERTS_ENABLED", True)
     monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
     monkeypatch.setattr(config, "ALERT_EMAIL_TO", "ops@example.com, oncall@example.com")
@@ -391,7 +409,7 @@ def test_build_engine_with_channel(monkeypatch):
     assert engine.redis == "r" and engine.database == "d"
 
 
-def test_build_default_channels_needs_key_and_recipient(monkeypatch, caplog):
+def test_build_default_channels_needs_key_and_recipient(monkeypatch, caplog, no_whatsapp_config):
     monkeypatch.setattr(config, "RESEND_API_KEY", None)
     monkeypatch.setattr(config, "ALERT_EMAIL_TO", "ops@example.com")
     assert build_default_channels() == []
@@ -404,11 +422,42 @@ def test_build_default_channels_needs_key_and_recipient(monkeypatch, caplog):
     assert "alerts_misconfigured" in events
 
 
-def test_build_engine_enabled_without_channels_still_builds(monkeypatch):
+def test_build_engine_enabled_without_channels_still_builds(monkeypatch, no_whatsapp_config):
     monkeypatch.setattr(config, "ALERTS_ENABLED", True)
     monkeypatch.setattr(config, "RESEND_API_KEY", None)
     engine = build_engine()
     assert engine is not None and engine.channels == []
+
+
+@respx.mock
+async def test_both_channels_build_and_a_warn_records_both(alerts_on, fake_redis, monkeypatch):
+    """Phase-13 reality: with BOTH Resend and Twilio configured, ``build_default_channels``
+    registers email AND whatsapp, and a single warn event drives one send attempt per
+    channel — recording one row each (the email-only tests above are the isolated path)."""
+    sid = "AC_test_sid"
+    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
+    monkeypatch.setattr(config, "ALERT_EMAIL_TO", "ops@example.com")
+    monkeypatch.setattr(config, "TWILIO_ACCOUNT_SID", sid)
+    monkeypatch.setattr(config, "TWILIO_AUTH_TOKEN", "tok_secret")
+    monkeypatch.setattr(config, "TWILIO_WHATSAPP_FROM", "whatsapp:+17372324091")
+    monkeypatch.setattr(config, "TWILIO_WHATSAPP_TO", "whatsapp:+13128520631")
+
+    assert [c.name for c in build_default_channels()] == ["email", "whatsapp"]
+
+    resend = respx.post(RESEND_EMAILS_URL).mock(return_value=httpx.Response(200, json={"id": "e1"}))
+    twilio = respx.post(TWILIO_MESSAGES_URL.format(account_sid=sid)).mock(
+        return_value=httpx.Response(201, json={"sid": "SM1"})
+    )
+    db = FakeAlertDB()
+    engine = build_engine(redis=fake_redis, database=db)
+
+    records = await engine.send("team-a", KIND_WARN, WARN_DETAIL)
+
+    # One warn, one attempt on each channel, one recorded row per channel.
+    assert resend.call_count == 1 and twilio.call_count == 1
+    both_sent = {("email", ALERT_STATUS_SENT), ("whatsapp", ALERT_STATUS_SENT)}
+    assert {(r.channel, r.status) for r in records} == both_sent
+    assert {(r.channel, r.status) for r in db.alerts} == both_sent
 
 
 # --- Resend email channel ------------------------------------------------------------
@@ -717,7 +766,9 @@ async def test_gateway_over_budget_request_fires_block_alert(client, wired, monk
 
 
 @respx.mock
-async def test_gateway_warn_reaches_resend_end_to_end(client, alerts_on, fake_redis, monkeypatch):
+async def test_gateway_warn_reaches_resend_end_to_end(
+    client, alerts_on, fake_redis, monkeypatch, no_whatsapp_config
+):
     """Real engine, real Resend channel (mocked transport), real gateway path: one email."""
     monkeypatch.setattr(config, "BUDGET_MONTHLY_USD", Decimal("0.01"))
     monkeypatch.setattr(config, "BUDGET_WARN_RATIO", 0.8)  # first ~$0.0105 request crosses
