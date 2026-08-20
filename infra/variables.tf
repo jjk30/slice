@@ -21,3 +21,27 @@ variable "app_port" {
   type        = number
   default     = 8080
 }
+
+variable "db_instance_class" {
+  description = "RDS instance class for the Postgres database."
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_name" {
+  description = "Initial Postgres database name."
+  type        = string
+  default     = "slice"
+}
+
+variable "db_username" {
+  description = "Postgres master username."
+  type        = string
+  default     = "slice"
+}
+
+variable "cache_node_type" {
+  description = "ElastiCache node type for the Redis cluster."
+  type        = string
+  default     = "cache.t3.micro"
+}
