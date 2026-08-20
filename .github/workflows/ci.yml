@@ -54,14 +54,26 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
-      - name: Apply migrations
-        env:
-          PGPASSWORD: slice
+      - name: Initialize schema and apply migrations
+        # Use the app's own startup path (app/db.py) instead of a raw psql loop:
+        # Database.connect() runs the SCHEMA constant (which CREATEs the base
+        # `requests` table) FIRST, then _run_migrations() applies migrations/*.sql
+        # in sorted order. The migrations ALTER those base tables, so they only
+        # work after SCHEMA has run. connect() swallows errors and returns False,
+        # so exit non-zero on a falsy result to keep a real DB failure red.
         run: |
-          for f in migrations/*.sql; do
-            echo "applying $f"
-            psql -h localhost -U slice -d slice -v ON_ERROR_STOP=1 -f "$f"
-          done
+          python -c "
+          import asyncio, sys
+          from app.config import DATABASE_URL
+          from app.db import Database
+
+          async def main():
+              ok = await Database(DATABASE_URL).connect()
+              if not ok:
+                  sys.exit('Database.connect() returned False: schema/migrations not applied')
+
+          asyncio.run(main())
+          "
 
       - name: Run tests
         run: pytest
