@@ -63,3 +63,15 @@ variable "desired_count" {
   type        = number
   default     = 1
 }
+
+variable "domain_name" {
+  description = "Apex domain for slice (Route 53 hosted zone)."
+  type        = string
+  default     = "sliceapp.dev"
+}
+
+variable "api_subdomain" {
+  description = "Fully-qualified hostname the API is served at."
+  type        = string
+  default     = "api.sliceapp.dev"
+}

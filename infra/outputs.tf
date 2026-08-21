@@ -62,3 +62,18 @@ output "ecs_service_name" {
   description = "Name of the ECS service."
   value       = aws_ecs_service.gateway.name
 }
+
+output "route53_nameservers" {
+  description = "Route 53 nameservers for the hosted zone — paste these into Namecheap."
+  value       = aws_route53_zone.main.name_servers
+}
+
+output "acm_certificate_arn" {
+  description = "ARN of the validated ACM certificate (apex + api subdomain)."
+  value       = aws_acm_certificate_validation.main.certificate_arn
+}
+
+output "api_url" {
+  description = "HTTPS URL the slice API is served at."
+  value       = "https://${var.api_subdomain}"
+}

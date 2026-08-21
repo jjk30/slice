@@ -30,14 +30,21 @@ resource "aws_lb_target_group" "gateway" {
   }
 }
 
-# HTTP listener on 80 → target group. HTTPS/443 is added in sub-step 5.
+# HTTP listener on 80 → permanent redirect to HTTPS/443. Plain http:// requests
+# bounce to https:// (a .dev domain requires HTTPS anyway). The HTTPS listener
+# that actually serves the target group lives in dns.tf.
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.gateway.arn
+    type = "redirect"
+
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
   }
 }
