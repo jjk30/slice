@@ -12,3 +12,8 @@ output "instance_id" {
   description = "EC2 instance id (use with SSM Session Manager to connect)."
   value       = aws_instance.app.id
 }
+
+output "grafana_url" {
+  description = "Phase 17: Grafana URL (behind Caddy; admin password from the GRAFANA_ADMIN_PASSWORD key in the app secret)."
+  value       = "https://${var.grafana_subdomain}"
+}

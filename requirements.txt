@@ -46,3 +46,9 @@ python-dotenv
 PyJWT
 typer
 mcp==1.29.0
+
+# --- Monitoring (phase 17): Prometheus metrics. ---
+# prometheus-client exposes the gateway's /metrics endpoint (Prometheus text format)
+# and holds the slice_* counters/histogram. Pure-Python, no native deps, and it pulls
+# in nothing else — so it forces none of the pinned langchain/ragas tree up or down.
+prometheus-client

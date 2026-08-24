@@ -21,7 +21,7 @@ from decimal import Decimal
 
 import redis.asyncio as aioredis
 
-from app import config
+from app import config, metrics
 from app.alerts import engine as alerts
 
 logger = logging.getLogger("slice.gateway")
@@ -144,6 +144,7 @@ async def check_budget(
         spend = Decimal(raw.decode()) if raw else Decimal(0)
         blocked = spend >= config.BUDGET_MONTHLY_USD
         if blocked:
+            metrics.record_budget_event("block")
             alerts.fire(
                 label or scope,
                 alerts.KIND_BLOCK,
@@ -218,6 +219,7 @@ async def add_cost(
             # gets True back and logs the warning.
             if await redis.setnx(warned_key, b"1"):
                 await redis.expire(warned_key, _MONTH_KEY_TTL)
+                metrics.record_budget_event("warn")
                 logger.warning(
                     json.dumps(
                         {

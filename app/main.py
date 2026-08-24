@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from app import config, pricing, redis_layer
+from app import config, metrics, pricing, redis_layer
 from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import STREAM_DOWNGRADED_HEADER
 from app.admin import router as admin_router
@@ -326,6 +326,12 @@ def record_task(
     """
     database = getattr(app.state, "db", None)
     cost = pricing.cost_usd(model, input_tokens, output_tokens)
+    # Phase 17: fire-and-forget Prometheus recording. Errors are swallowed inside
+    # metrics.*, so this can never turn a served/errored request into a failure.
+    metrics.record_request(
+        model, status, duration_seconds=elapsed_ms(started) / 1000.0,
+        input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=cost,
+    )
     # One instant for both the row and the live event, so the dashboard can match them.
     finished_at = datetime.now(timezone.utc)
     broadcaster = get_broadcaster(app)
@@ -405,6 +411,13 @@ def after_response(
         cost = cost_override
     else:
         cost = Decimal(0) if cached else pricing.cost_usd(model, input_tokens, output_tokens)
+    # Phase 17: fire-and-forget Prometheus recording (see record_task). A cache hit
+    # carries cost 0, so it counts the request and its served tokens but adds nothing
+    # to the spend counter.
+    metrics.record_request(
+        model, status, duration_seconds=elapsed_ms(started) / 1000.0,
+        input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=cost,
+    )
     database = getattr(app.state, "db", None)
     redis = get_redis(app)
     account_id = _acct_id(account)
@@ -511,9 +524,11 @@ async def messages(request: Request):
         cache_key = redis_layer.cache_key(team, payload, account_id=_acct_id(account))
         cached_body = await redis_layer.cache_get(redis, cache_key)
         if cached_body is not None:
+            metrics.record_cache_event("hit")
             return _anthropic_cache_hit(
                 cached_body, request, model, started, team, prompt_text, account
             )
+        metrics.record_cache_event("miss")
 
     # --- Phase 5 routing: pin ▸ rule ▸ auto. After the cache check (a hit above
     # already returned, so a cache hit never routes or judges), before the forward.
@@ -529,6 +544,8 @@ async def messages(request: Request):
     routed_from = decision.routed_from
     verdict = decision.verdict
     rag = decision.rag
+    # Phase 17: record which stage decided the route (pin/rule/auto/passthrough).
+    metrics.record_router_decision(decision.reason)
     # Phase 8: when evaluation is on, gather what a possible sampled scoring will need
     # — the user prompt (extracted regardless of RAG_STORE_PROMPTS; evaluation needs it
     # even when prompt logging is off) and the retrieved neighbor texts. Skipped
@@ -991,7 +1008,9 @@ async def chat_completions(request: Request):
         cache_key = redis_layer.openai_cache_key(team, inbound, account_id=_acct_id(account))
         cached_body = await redis_layer.cache_get(redis, cache_key)
         if cached_body is not None:
+            metrics.record_cache_event("hit")
             return _openai_cache_hit(cached_body, request, model, started, team, prompt_text, account)
+        metrics.record_cache_event("miss")
 
     try:
         adapter = select_adapter(model)
@@ -1169,6 +1188,18 @@ def _finalize_openai(
             account=account,
         ),
     )
+
+
+# --- Phase 17: Prometheus metrics ------------------------------------------
+# Plain-text exposition of every slice_* metric plus the default process/GC
+# collectors. Unauthenticated by design: it is NOT in AuthMiddleware.LOCKED_ROUTES,
+# so Prometheus can scrape it over the internal docker network without a slice key.
+# Public access on the api host is blocked at Caddy (see the EC2 Caddyfile); the
+# scrape hits gateway:8080/metrics directly, never through Caddy. Defined before
+# the "/{filename}" dashboard catch-all below so that route never shadows it.
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint() -> Response:
+    return Response(content=metrics.render(), media_type=metrics.CONTENT_TYPE_LATEST)
 
 
 # --- Phase 10: serve the built dashboard, if it has been built ---------------

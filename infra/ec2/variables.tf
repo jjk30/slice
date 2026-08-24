@@ -22,6 +22,12 @@ variable "api_subdomain" {
   default     = "api.sliceapp.dev"
 }
 
+variable "grafana_subdomain" {
+  description = "Fully-qualified hostname Grafana is served at (phase 17). A record -> the same Elastic IP as the API; Caddy routes it to the grafana container."
+  type        = string
+  default     = "grafana.sliceapp.dev"
+}
+
 variable "instance_type" {
   description = "EC2 instance type. t4g.small is arm64 (Graviton) and cheap."
   type        = string

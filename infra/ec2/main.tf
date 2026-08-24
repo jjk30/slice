@@ -78,6 +78,17 @@ resource "aws_route53_record" "api" {
   records = [aws_eip.api.public_ip]
 }
 
+# Phase 17: Grafana on the same box, same Elastic IP. Caddy terminates TLS for this
+# host and reverse-proxies it to the grafana container; Prometheus and node_exporter
+# stay internal (no DNS, no public port).
+resource "aws_route53_record" "grafana" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = var.grafana_subdomain
+  type    = "A"
+  ttl     = 300
+  records = [aws_eip.api.public_ip]
+}
+
 # ---------------------------------------------------------------------------
 # Security group: HTTP/HTTPS in from anywhere (Caddy needs 80 for ACME and 443
 # for traffic), everything out. No port 22 — access is via SSM Session Manager.
@@ -197,6 +208,7 @@ resource "aws_instance" "app" {
     gateway_image     = var.gateway_image
     app_secret_name   = var.app_secret_name
     api_domain        = var.api_subdomain
+    grafana_domain    = var.grafana_subdomain
     db_name           = var.db_name
     db_username       = var.db_username
     postgres_password = random_password.postgres.result

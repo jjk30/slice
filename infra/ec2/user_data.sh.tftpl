@@ -53,6 +53,9 @@ ANTHROPIC_API_KEY="$(echo "$SECRET_JSON" | jq -r '.ANTHROPIC_API_KEY')"
 JWT_SECRET="$(echo "$SECRET_JSON" | jq -r '.JWT_SECRET')"
 # Default to "" so a missing key writes an empty value instead of failing.
 GITHUB_OAUTH_CLIENT_ID="$(echo "$SECRET_JSON" | jq -r '.GITHUB_OAUTH_CLIENT_ID // ""')"
+# Phase 17: Grafana admin password. Read from the same app secret; falls back to
+# "admin" if the key is absent so a fresh deploy still boots (change it via the secret).
+GRAFANA_ADMIN_PASSWORD="$(echo "$SECRET_JSON" | jq -r '.GRAFANA_ADMIN_PASSWORD // "admin"')"
 
 # --- Stack config in /opt/slice --------------------------------------------
 install -d /opt/slice
@@ -68,6 +71,18 @@ JWT_SECRET=$JWT_SECRET
 GITHUB_OAUTH_CLIENT_ID=$GITHUB_OAUTH_CLIENT_ID
 EOF
 chmod 600 /opt/slice/.env
+
+# grafana.env (phase 17) — kept SEPARATE from the app .env so the gateway's
+# secrets (Anthropic key, JWT secret) never enter the Grafana container. Only the
+# GF_* config Grafana reads directly. Unquoted heredoc: $GRAFANA_ADMIN_PASSWORD is
+# a shell var expanded at boot, ${grafana_domain} is a Terraform template var.
+cat > /opt/slice/grafana.env <<EOF
+GF_SECURITY_ADMIN_USER=admin
+GF_SECURITY_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
+GF_USERS_ALLOW_SIGN_UP=false
+GF_SERVER_ROOT_URL=https://${grafana_domain}
+EOF
+chmod 600 /opt/slice/grafana.env
 
 # docker-compose.yml — postgres 16 + redis 7 + gateway (ECR) + caddy 2.
 # The gateway runs migrations itself on startup (baked into the image), so the
@@ -108,11 +123,55 @@ services:
         condition: service_healthy
     env_file: .env
 
+  # --- Phase 17 monitoring ---------------------------------------------------
+  # Prometheus scrapes the gateway and node_exporter over the internal compose
+  # network only (no published port). 7-day / ~1GB retention on a small box.
+  prometheus:
+    image: prom/prometheus
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--storage.tsdb.retention.size=1GB"
+    volumes:
+      - /opt/slice/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    mem_limit: 400m
+
+  # Host CPU/RAM/disk metrics. Reads the host rootfs read-only; no published port.
+  node_exporter:
+    image: prom/node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - "/:/host:ro,rslave"
+    mem_limit: 64m
+
+  # Grafana behind Caddy at the grafana host. Datasource + dashboard are
+  # provisioned from files (no UI clicking); admin password + signup policy come
+  # from grafana.env. No published port — Caddy reverse-proxies grafana:3000.
+  grafana:
+    image: grafana/grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    env_file: grafana.env
+    volumes:
+      - /opt/slice/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    mem_limit: 300m
+
   caddy:
     image: caddy:2
     restart: unless-stopped
     depends_on:
       - gateway
+      - grafana
     ports:
       - "80:80"
       - "443:443"
@@ -125,12 +184,265 @@ volumes:
   slice_pgdata:
   caddy_data:
   caddy_config:
+  prometheus_data:
+  grafana_data:
 EOF
 
 # Caddyfile — terminate HTTPS and reverse-proxy to the gateway container.
+# Phase 17: the api host blocks the /metrics path publicly (Prometheus scrapes the
+# gateway internally over the compose network, never through Caddy), and a second
+# site serves Grafana.
 cat > /opt/slice/Caddyfile <<'EOF'
 ${api_domain} {
+    # /metrics is internal-only: return 404 to the public internet so the gateway's
+    # Prometheus endpoint is never exposed here. The internal scrape hits
+    # gateway:8080/metrics directly and bypasses Caddy entirely.
+    @metrics path /metrics /metrics/*
+    respond @metrics 404
+
     reverse_proxy gateway:8080
+}
+
+${grafana_domain} {
+    reverse_proxy grafana:3000
+}
+EOF
+
+# --- Phase 17: Prometheus + Grafana provisioning ---------------------------
+# prometheus.yml — scrape the gateway and node_exporter over the compose network
+# every 15s. No Terraform template tokens here, so the quoted heredoc content
+# survives Terraform templating and bash untouched.
+cat > /opt/slice/prometheus.yml <<'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: slice-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:8080"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node_exporter:9100"]
+EOF
+
+# Grafana provisioning tree: datasource + dashboard provider + the dashboard model.
+install -d /opt/slice/grafana/provisioning/datasources
+install -d /opt/slice/grafana/provisioning/dashboards
+
+cat > /opt/slice/grafana/provisioning/datasources/datasource.yml <<'EOF'
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+EOF
+
+cat > /opt/slice/grafana/provisioning/dashboards/dashboards.yml <<'EOF'
+apiVersion: 1
+providers:
+  - name: slice
+    orgId: 1
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false
+EOF
+
+# The "slice ops" dashboard model. Every target pins the datasource by uid
+# "prometheus" (matches the datasource above). Uses $__rate_interval (no braces)
+# and {{label}} legends so nothing collides with Terraform templating.
+cat > /opt/slice/grafana/provisioning/dashboards/slice-ops.json <<'EOF'
+{
+  "uid": "slice-ops",
+  "title": "slice ops",
+  "tags": ["slice"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Requests / min by provider",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqpm" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (provider) (rate(slice_requests_total[$__rate_interval])) * 60",
+          "legendFormat": "{{provider}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error rate (4xx/5xx)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(slice_requests_total{status=~\"[45]..\"}[$__rate_interval])) / clamp_min(sum(rate(slice_requests_total[$__rate_interval])), 0.0000001)",
+          "legendFormat": "error rate"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Cache hit rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(slice_cache_events_total{result=\"hit\"}[$__rate_interval])) / clamp_min(sum(rate(slice_cache_events_total[$__rate_interval])), 0.0000001)",
+          "legendFormat": "hit rate"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Latency p50 / p95 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(slice_request_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(slice_request_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Spend rate (USD / hour)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (provider) (rate(slice_cost_usd_total[$__rate_interval])) * 3600",
+          "legendFormat": "{{provider}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Budget events (warn / block)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (kind) (increase(slice_budget_events_total[$__rate_interval]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Router decisions / min",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (decision) (rate(slice_router_decisions_total[$__rate_interval])) * 60",
+          "legendFormat": "{{decision}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Box CPU %",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100)",
+          "legendFormat": "cpu"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Box RAM %",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))",
+          "legendFormat": "ram"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Box disk % (root)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 - (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\"} * 100)",
+          "legendFormat": "disk"
+        }
+      ]
+    }
+  ]
 }
 EOF
 

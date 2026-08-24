@@ -31,7 +31,7 @@ from typing import Any, TypedDict
 import httpx
 from langgraph.graph import END, StateGraph
 
-from app import config, pricing
+from app import config, metrics, pricing
 from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import anthropic_error_body
 from app.adapters.openai import _content_text, _system_text
@@ -260,6 +260,8 @@ def _decide_node(state: _LoopState) -> dict:
         return {"stop_reason": "ceiling"}
 
     # Cleared the gate: advance to the next rung and loop back to try.
+    # Phase 17: one escalation. Fire-and-forget (metrics.* swallows its own errors).
+    metrics.record_agent_escalation()
     return {"current_model": next_model, "esc_pos": pos + 1}
 
 
