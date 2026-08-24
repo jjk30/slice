@@ -1,0 +1,140 @@
+#!/bin/bash
+# ===========================================================================
+# slice cheap always-on box bootstrap.
+#
+# Rendered by Terraform (templatefile): the dollar-brace tokens below are
+# Terraform template vars, substituted at render time. Bash variables are
+# written WITHOUT braces (e.g. $ANTHROPIC_API_KEY) so Terraform leaves them
+# alone and the shell expands them at boot.
+#
+# Idempotent and safe to re-run: it re-writes /opt/slice config and runs
+# `docker compose up -d`. The named Postgres volume survives restarts, and the
+# gateway image self-applies DB migrations on startup (app/db.py) exactly like
+# the phase 15 docker-compose.yml at the repo root — so no separate schema step.
+# ===========================================================================
+set -euxo pipefail
+exec > >(tee -a /var/log/slice-bootstrap.log) 2>&1
+
+REGION="${aws_region}"
+ECR_REGISTRY="${ecr_registry}"
+SECRET_NAME="${app_secret_name}"
+
+# --- Docker + jq -----------------------------------------------------------
+dnf install -y docker jq
+systemctl enable --now docker
+
+# --- Docker compose plugin (AL2023 has no compose package; drop the arm64
+#     binary into the CLI plugins dir) ------------------------------------
+COMPOSE_VERSION="v2.29.7"
+install -d /usr/libexec/docker/cli-plugins
+curl -fsSL \
+  "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-aarch64" \
+  -o /usr/libexec/docker/cli-plugins/docker-compose
+chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+# --- 2GB swap (small box; keep it from OOMing under image pulls/builds) -----
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=2048
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+# --- ECR login -------------------------------------------------------------
+aws ecr get-login-password --region "$REGION" \
+  | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+# --- Pull secrets from Secrets Manager -------------------------------------
+SECRET_JSON="$(aws secretsmanager get-secret-value \
+  --region "$REGION" --secret-id "$SECRET_NAME" \
+  --query SecretString --output text)"
+ANTHROPIC_API_KEY="$(echo "$SECRET_JSON" | jq -r '.ANTHROPIC_API_KEY')"
+JWT_SECRET="$(echo "$SECRET_JSON" | jq -r '.JWT_SECRET')"
+# Default to "" so a missing key writes an empty value instead of failing.
+GITHUB_OAUTH_CLIENT_ID="$(echo "$SECRET_JSON" | jq -r '.GITHUB_OAUTH_CLIENT_ID // ""')"
+
+# --- Stack config in /opt/slice --------------------------------------------
+install -d /opt/slice
+
+# .env — exact env var names the gateway expects (mirrored from the phase 15
+# docker-compose.yml), adjusted so DATABASE_URL/REDIS_URL point at the compose
+# services on this box.
+cat > /opt/slice/.env <<EOF
+DATABASE_URL=postgresql://${db_username}:${postgres_password}@postgres:5432/${db_name}
+REDIS_URL=redis://redis:6379
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+JWT_SECRET=$JWT_SECRET
+GITHUB_OAUTH_CLIENT_ID=$GITHUB_OAUTH_CLIENT_ID
+EOF
+chmod 600 /opt/slice/.env
+
+# docker-compose.yml — postgres 16 + redis 7 + gateway (ECR) + caddy 2.
+# The gateway runs migrations itself on startup (baked into the image), so the
+# schema is set up the same way the phase 15 compose does it.
+cat > /opt/slice/docker-compose.yml <<'EOF'
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${db_username}
+      POSTGRES_PASSWORD: ${postgres_password}
+      POSTGRES_DB: ${db_name}
+    volumes:
+      - slice_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${db_username} -d ${db_name}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  gateway:
+    image: ${gateway_image}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /opt/slice/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  slice_pgdata:
+  caddy_data:
+  caddy_config:
+EOF
+
+# Caddyfile — terminate HTTPS and reverse-proxy to the gateway container.
+cat > /opt/slice/Caddyfile <<'EOF'
+${api_domain} {
+    reverse_proxy gateway:8080
+}
+EOF
+
+# --- Launch ----------------------------------------------------------------
+cd /opt/slice
+docker compose pull
+docker compose up -d
