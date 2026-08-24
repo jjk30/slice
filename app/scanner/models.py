@@ -20,6 +20,9 @@ CHECK_S3_PUBLIC = "s3_public"
 CHECK_SG_OPEN = "sg_open"
 CHECK_UNENCRYPTED = "unencrypted"
 CHECK_IAM_RISK = "iam_risk"
+# Phase 18b: not a check but a finding kind — recorded when slice cannot assume a user's
+# role, so the failure is visible in their findings rather than silently swallowed.
+CHECK_CONNECTION = "connection"
 
 
 @dataclass(frozen=True)

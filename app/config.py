@@ -314,3 +314,37 @@ SCANNER_DAILY_INTERVAL_SECONDS = int(os.getenv("SCANNER_DAILY_INTERVAL_SECONDS",
 
 # How many finding summaries the "new high-risk issues" alert lists in its body.
 SCANNER_ALERT_TOP_N = int(os.getenv("SCANNER_ALERT_TOP_N", "5"))
+
+# --- Cross-account scanning (phase 18b): users connect their own AWS account. ---
+# A user connects by creating a read-only IAM role that trusts slice's AWS account and
+# carries a per-account External ID (confused-deputy protection). The scanner then assumes
+# that role to scan THEIR account. Everything stays strictly per-account: every read and
+# write is scoped to the authenticated account, and an assumed-role scan that fails is
+# marked as an error for that account — it never silently falls back to slice's own data.
+
+# slice's own AWS account id — the Principal a user's trust policy allows to assume their
+# role. Baked into the committed CloudFormation template too (users audit that file); this
+# is the value the /scanner/connect response echoes for display.
+SLICE_AWS_ACCOUNT_ID = os.getenv("SLICE_AWS_ACCOUNT_ID", "194133064379")
+
+# The one slice account that scans slice's *own* infrastructure (part A behavior): no
+# connection, no assume-role, findings stored under the NULL/own-account scope. Every other
+# account must connect its own AWS account. Default 1 (the first account, the operator). In
+# local single-tenant mode (auth off, no account id) the lone tenant is the operator too.
+SLICE_OPERATOR_ACCOUNT_ID = int(os.getenv("SLICE_OPERATOR_ACCOUNT_ID", "1"))
+
+# The public HTTPS URL of the committed onboarding template
+# (infra/user-onboarding/slice-readonly-role.yaml). The CloudFormation "quick-create"
+# console link needs a publicly reachable templateURL — a GitHub raw URL or an S3 object.
+# Unset means the quick-create link omits templateURL (the user pastes the template
+# manually); set it once the file is hosted. See the phase-18b deploy notes.
+SCANNER_TEMPLATE_URL = os.getenv("SCANNER_TEMPLATE_URL") or None
+
+# The region the quick-create console link opens in. IAM is global, so this only picks the
+# console's home region; us-east-1 is a safe default.
+SCANNER_CONSOLE_REGION = os.getenv("SCANNER_CONSOLE_REGION", "us-east-1")
+
+# The IAM session name and lifetime for an assumed scanner role. 15 minutes is plenty for
+# one scan and keeps temporary credentials short-lived.
+SCANNER_ASSUME_ROLE_SESSION_NAME = os.getenv("SCANNER_ASSUME_ROLE_SESSION_NAME", "slice-scanner")
+SCANNER_ASSUME_ROLE_DURATION_SECONDS = int(os.getenv("SCANNER_ASSUME_ROLE_DURATION_SECONDS", "900"))

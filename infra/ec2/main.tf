@@ -250,6 +250,35 @@ resource "aws_iam_role_policy" "scanner" {
   policy = data.aws_iam_policy_document.scanner.json
 }
 
+# ---------------------------------------------------------------------------
+# Phase 18b: the box assumes a read-only role in each connected user's account.
+#
+# Narrowest workable scope: sts:AssumeRole limited to roles under the fixed path
+# "/slice-scanner/" — the exact path the committed onboarding CloudFormation template
+# (infra/user-onboarding/slice-readonly-role.yaml) creates. slice cannot assume any other
+# role, in any account. Cross-account role names are not knowable ahead of time (each user
+# creates their own in their own account), so a per-ARN allowlist is impractical; the path
+# constraint bounds the blast radius to exactly slice-created roles.
+#
+# The real security gate is on the *target* side: each user's role trust policy allows only
+# slice's account (194133064379) AND requires the per-account External ID on every call, so
+# even this permission can only assume roles that explicitly opted in. (A plain
+# sts:AssumeRole on "*" would be the fallback if a path scheme were not used — avoided here.)
+data "aws_iam_policy_document" "scanner_assume" {
+  statement {
+    sid       = "AssumeUserScannerRoles"
+    effect    = "Allow"
+    actions   = ["sts:AssumeRole"]
+    resources = ["arn:aws:iam::*:role/slice-scanner/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "scanner_assume" {
+  name   = "${var.project_name}-ec2-scanner-assume"
+  role   = aws_iam_role.instance.id
+  policy = data.aws_iam_policy_document.scanner_assume.json
+}
+
 resource "aws_iam_instance_profile" "instance" {
   name = "${var.project_name}-ec2-profile"
   role = aws_iam_role.instance.name

@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  slice AWS security scanner - read-only cross-account role.
+  Creates one IAM role that lets slice's AWS account (194133064379) assume it,
+  but ONLY when it presents the External ID slice generated for your account
+  (confused-deputy protection). The role can read S3 / EC2 / IAM configuration
+  and Cost Explorer spend. It grants NO write, delete, or data-read access: it
+  cannot read object contents, only bucket/security-group/volume/user settings.
+  Review every permission below before creating the stack.
+
+Parameters:
+  ExternalId:
+    Type: String
+    Description: >-
+      The External ID from your slice /scanner/connect response. slice sends
+      this on every AssumeRole call; the trust policy below requires an exact
+      match, so no other caller (even slice, for another customer) can assume
+      this role.
+    MinLength: 8
+    NoEcho: true
+
+Resources:
+  SliceScannerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Read-only role assumed by the slice security scanner.
+      # A fixed path (not a fixed name, so no naming conflicts and only CAPABILITY_IAM is
+      # needed) lets slice scope its own sts:AssumeRole permission to just these roles:
+      # arn:aws:iam::*:role/slice-scanner/*. The trust policy below is still the real gate.
+      Path: "/slice-scanner/"
+      # Trust policy: only slice's AWS account may assume this role, and only when
+      # it presents the matching External ID.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: "arn:aws:iam::194133064379:root"
+            Action: "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                "sts:ExternalId":
+                  Ref: ExternalId
+      Policies:
+        - PolicyName: slice-scanner-readonly
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Exactly the read-only actions the slice scanner's four checks and the
+              # Cost Explorer pull use. Resources are "*" because these list/describe/get
+              # calls are account-wide by nature; the actions themselves are read-only.
+              - Sid: SliceScannerReadOnly
+                Effect: Allow
+                Action:
+                  - "s3:ListAllMyBuckets"
+                  - "s3:GetBucketAcl"
+                  - "s3:GetBucketPolicy"
+                  - "s3:GetBucketPolicyStatus"
+                  - "s3:GetEncryptionConfiguration"
+                  - "s3:GetBucketPublicAccessBlock"
+                  - "s3:GetAccountPublicAccessBlock"
+                  - "sts:GetCallerIdentity"
+                  - "ec2:DescribeSecurityGroups"
+                  - "ec2:DescribeVolumes"
+                  - "iam:ListUsers"
+                  - "iam:ListAccessKeys"
+                  - "iam:ListAttachedUserPolicies"
+                  - "iam:GetAccessKeyLastUsed"
+                  - "ce:GetCostAndUsage"
+                Resource: "*"
+
+Outputs:
+  RoleArn:
+    Description: >-
+      Paste this ARN back into slice (POST /scanner/connect) to finish connecting.
+    Value:
+      Fn::GetAtt:
+        - SliceScannerRole
+        - Arn

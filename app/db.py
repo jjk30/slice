@@ -80,41 +80,90 @@ WHERE ($1::bigint IS NULL OR account_id = $1)
 ORDER BY id DESC
 """
 
-# --- AWS scanner (phase 18a) --------------------------------------------------
+# --- AWS scanner (phase 18a/b) ------------------------------------------------
 # scan_findings and aws_costs are written fire-and-forget from the detached scanner
 # task, like every other write here. "check" is quoted because CHECK is a SQL keyword.
+# Phase 18b: every row and read is scoped to an account. ``account_id`` NULL means slice's
+# own account (the operator's part-A data); a real id is a connected user's account. The
+# scoping predicate is ``account_id IS NOT DISTINCT FROM $n`` so a NULL argument matches the
+# own-account rows and a real id matches only that account's rows — one account never sees
+# another's findings or costs.
 INSERT_FINDING = """
-INSERT INTO scan_findings (run_id, "check", resource_id, severity, summary, detail)
-VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+INSERT INTO scan_findings (run_id, account_id, "check", resource_id, severity, summary, detail)
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
 """
 SELECT_FINDINGS_FOR_RUN = """
 SELECT run_id, "check", resource_id, severity, summary, detail, created_at
-FROM scan_findings WHERE run_id = $1 ORDER BY id
+FROM scan_findings
+WHERE run_id = $1 AND account_id IS NOT DISTINCT FROM $2
+ORDER BY id
 """
-# The most recent run's id (the findings endpoint's default when no run_id is given).
-SELECT_LATEST_RUN_ID = "SELECT run_id FROM scan_findings ORDER BY id DESC LIMIT 1"
-# The newest run that is not the one passed in — the "previous run" the alert compares
-# against. MIN(id) per run orders runs by when they first landed.
+# The most recent run's id for one account (the findings endpoint's default when no run_id).
+SELECT_LATEST_RUN_ID = """
+SELECT run_id FROM scan_findings
+WHERE account_id IS NOT DISTINCT FROM $1
+ORDER BY id DESC LIMIT 1
+"""
+# The newest run for this account other than the one passed in — the "previous run" the
+# alert compares against. MAX(id) per run orders runs by when they last landed.
 SELECT_PREVIOUS_RUN_ID = """
 SELECT run_id FROM scan_findings
-WHERE run_id <> $1
+WHERE run_id <> $1 AND account_id IS NOT DISTINCT FROM $2
 GROUP BY run_id
 ORDER BY MAX(id) DESC
 LIMIT 1
 """
-SELECT_HIGH_RESOURCE_IDS = (
-    "SELECT DISTINCT resource_id FROM scan_findings WHERE run_id = $1 AND severity = 'high'"
-)
-# One row per completed day, upserted so a re-fetch refreshes the amount and timestamp.
-UPSERT_AWS_COST = """
-INSERT INTO aws_costs (date, amount_usd, fetched_at)
-VALUES ($1, $2, now())
-ON CONFLICT (date) DO UPDATE SET amount_usd = EXCLUDED.amount_usd, fetched_at = now()
+SELECT_HIGH_RESOURCE_IDS = """
+SELECT DISTINCT resource_id FROM scan_findings
+WHERE run_id = $1 AND account_id IS NOT DISTINCT FROM $2 AND severity = 'high'
 """
-# The current month's rows, newest first — the endpoint derives yesterday and MTD from these.
+# Cost rows are per (account, day). The writer replaces a day's row per account (delete +
+# insert, scoped by account) rather than relying on ON CONFLICT, so the NULL own-account
+# key is handled the same as a real id.
+DELETE_AWS_COST_DAY = "DELETE FROM aws_costs WHERE account_id IS NOT DISTINCT FROM $1 AND date = $2"
+INSERT_AWS_COST = """
+INSERT INTO aws_costs (account_id, date, amount_usd, fetched_at)
+VALUES ($1, $2, $3, now())
+"""
+# The current month's rows for one account, newest first — the endpoint derives yesterday
+# and month-to-date from these.
 SELECT_AWS_COSTS_SINCE = """
 SELECT date, amount_usd, fetched_at FROM aws_costs
-WHERE date >= $1 ORDER BY date DESC
+WHERE date >= $1 AND account_id IS NOT DISTINCT FROM $2
+ORDER BY date DESC
+"""
+
+# --- AWS connections (phase 18b) ----------------------------------------------
+# One connection per account. The external id is issued once and kept even across a
+# disconnect (which resets role_arn/status to pending but never drops the row).
+INSERT_CONNECTION = """
+INSERT INTO aws_connections (account_id, external_id, status)
+VALUES ($1, $2, 'pending')
+ON CONFLICT (account_id) DO NOTHING
+RETURNING id, account_id, role_arn, external_id, status, last_error, connected_at, created_at
+"""
+SELECT_CONNECTION = """
+SELECT id, account_id, role_arn, external_id, status, last_error, connected_at, created_at
+FROM aws_connections WHERE account_id = $1
+"""
+SET_CONNECTION_STATUS = """
+UPDATE aws_connections
+SET status = $2, role_arn = $3, last_error = $4,
+    connected_at = CASE WHEN $2 = 'connected' THEN now() ELSE connected_at END
+WHERE account_id = $1
+RETURNING id, account_id, role_arn, external_id, status, last_error, connected_at, created_at
+"""
+# Disconnect: keep the row (and its external id) but forget the role and go back to pending.
+DISCONNECT_CONNECTION = """
+UPDATE aws_connections
+SET role_arn = NULL, status = 'pending', last_error = NULL, connected_at = NULL
+WHERE account_id = $1
+RETURNING id
+"""
+SELECT_CONNECTED_ACCOUNTS = """
+SELECT account_id, role_arn, external_id
+FROM aws_connections WHERE status = 'connected' AND role_arn IS NOT NULL
+ORDER BY account_id
 """
 
 
@@ -687,13 +736,14 @@ class Database:
     # /scanner/* endpoints and the alert comparison; they raise on failure like the other
     # reads, and their callers decide how to fail open around them.
 
-    async def record_findings(self, run_id: str, findings) -> None:
-        """Write one scan run's findings. Fire-and-forget: every failure is swallowed."""
+    async def record_findings(self, account_id, run_id: str, findings) -> None:
+        """Write one scan run's findings for ``account_id`` (NULL = own). Fire-and-forget."""
         if self._pool is None:
             return
         rows = [
             (
                 run_id,
+                account_id,
                 f.check,
                 f.resource_id,
                 f.severity,
@@ -712,36 +762,36 @@ class Database:
                 json.dumps({"event": "db_unavailable", "stage": "finding_write", "error": str(exc)})
             )
 
-    async def findings_for_run(self, run_id: str) -> list[dict]:
-        """One run's findings, oldest first. Raises if the pool is unavailable."""
-        return await self._fetch(SELECT_FINDINGS_FOR_RUN, run_id)
+    async def findings_for_run(self, account_id, run_id: str) -> list[dict]:
+        """One account's findings for one run, oldest first. Raises if the pool is unavailable."""
+        return await self._fetch(SELECT_FINDINGS_FOR_RUN, run_id, account_id)
 
-    async def latest_run_id(self) -> str | None:
-        """The most recent scan run's id, or None when there are no findings yet."""
+    async def latest_run_id(self, account_id) -> str | None:
+        """The account's most recent scan run id, or None when it has no findings yet."""
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
-            value = await connection.fetchval(SELECT_LATEST_RUN_ID)
+            value = await connection.fetchval(SELECT_LATEST_RUN_ID, account_id)
         return value
 
-    async def previous_run_id(self, current_run_id: str) -> str | None:
-        """The newest run other than ``current_run_id`` — what a new scan compares against."""
+    async def previous_run_id(self, account_id, current_run_id: str) -> str | None:
+        """The account's newest run other than ``current_run_id`` — the alert's comparison base."""
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
-            value = await connection.fetchval(SELECT_PREVIOUS_RUN_ID, current_run_id)
+            value = await connection.fetchval(SELECT_PREVIOUS_RUN_ID, current_run_id, account_id)
         return value
 
-    async def high_resource_ids(self, run_id: str) -> set[str]:
-        """The set of resource_ids with a HIGH finding in ``run_id`` (empty set if none)."""
+    async def high_resource_ids(self, account_id, run_id: str) -> set[str]:
+        """The account's resource_ids with a HIGH finding in ``run_id`` (empty set if none)."""
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
-            rows = await connection.fetch(SELECT_HIGH_RESOURCE_IDS, run_id)
+            rows = await connection.fetch(SELECT_HIGH_RESOURCE_IDS, run_id, account_id)
         return {row["resource_id"] for row in rows}
 
-    async def record_aws_costs(self, rows) -> None:
-        """Upsert per-day (date, amount) cost rows. Fire-and-forget: failures swallowed."""
+    async def record_aws_costs(self, account_id, rows) -> None:
+        """Replace one account's per-day cost rows (delete + insert per day). Fire-and-forget."""
         if self._pool is None:
             return
         rows = [(d, a) for d, a in rows]
@@ -749,15 +799,69 @@ class Database:
             return
         try:
             async with self._pool.acquire() as connection:
-                await connection.executemany(UPSERT_AWS_COST, rows)
+                async with connection.transaction():
+                    for day, amount in rows:
+                        await connection.execute(DELETE_AWS_COST_DAY, account_id, day)
+                        await connection.execute(INSERT_AWS_COST, account_id, day, amount)
         except Exception as exc:  # noqa: BLE001 — cost logging is never worth a crash.
             logger.warning(
                 json.dumps({"event": "db_unavailable", "stage": "cost_write", "error": str(exc)})
             )
 
-    async def aws_cost_rows_since(self, since) -> list[dict]:
-        """Cost rows on or after ``since`` (the month start), newest day first. Raises if unavailable."""
-        return await self._fetch(SELECT_AWS_COSTS_SINCE, since)
+    async def aws_cost_rows_since(self, account_id, since) -> list[dict]:
+        """One account's cost rows on or after ``since``, newest day first. Raises if unavailable."""
+        return await self._fetch(SELECT_AWS_COSTS_SINCE, since, account_id)
+
+    # --- AWS connections (phase 18b) ---------------------------------------
+    # The connect flow's reads/writes. They raise on failure like the other reads the
+    # caller needs an answer from; the routes turn that into a clean error.
+
+    async def get_connection(self, account_id: int) -> dict | None:
+        """The account's connection row, or None when it has never called connect."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(SELECT_CONNECTION, int(account_id))
+        return dict(row) if row is not None else None
+
+    async def create_connection(self, account_id: int, external_id: str) -> dict:
+        """Ensure a connection row exists for ``account_id`` and return it.
+
+        Inserts a pending row with ``external_id`` on first call; on a later call the row
+        already exists, so the insert is a no-op and the *existing* row (with its original
+        external id) is returned — the external id is issued exactly once per account.
+        """
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(INSERT_CONNECTION, int(account_id), external_id)
+            if row is None:
+                row = await connection.fetchrow(SELECT_CONNECTION, int(account_id))
+        return dict(row)
+
+    async def set_connection_status(
+        self, account_id: int, status: str, *, role_arn: str | None = None, last_error: str | None = None
+    ) -> dict | None:
+        """Update the account's connection status (and role/last_error); returns the new row."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                SET_CONNECTION_STATUS, int(account_id), status, role_arn, last_error
+            )
+        return dict(row) if row is not None else None
+
+    async def disconnect(self, account_id: int) -> bool:
+        """Reset the account's connection to pending (keep the reserved external id). True if a row changed."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(DISCONNECT_CONNECTION, int(account_id))
+        return row is not None
+
+    async def connected_accounts(self) -> list[dict]:
+        """Every currently-connected account: (account_id, role_arn, external_id). Raises if unavailable."""
+        return await self._fetch(SELECT_CONNECTED_ACCOUNTS)
 
     # --- Dashboard reads (phase 10) ----------------------------------------
     # Reads for the /dashboard endpoints. Like the other reads they raise when the

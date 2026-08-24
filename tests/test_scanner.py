@@ -1,33 +1,42 @@
-"""Phase-18a AWS scanner tests. Stubbed boto3 (botocore Stubber) and fakes only — no real
+"""Phase-18a/b AWS scanner tests. Stubbed boto3 (botocore Stubber) and fakes only — no real
 AWS, no real Redis, no real database.
 
 Layers:
 
-- **Check tests** drive each of the four checks against a stubbed boto3 client: a public
-  bucket is flagged and a closed one is not; a world-open security group on a sensitive
-  port is flagged; an unencrypted bucket/volume is flagged; an old access key and a
-  direct AdministratorAccess attachment are flagged.
-- **Graph tests** prove the supervisor StateGraph fans out to all four checks and that one
-  check raising records an error but never kills the others.
-- **Cost tests** parse a canned get_cost_and_usage response.
-- **Service tests** prove the alert fires on a *new* high and not on a repeat (the diff),
-  and that the cooldown latch collapses repeats.
-- **Endpoint tests** cover the findings/cost shapes and that /scanner is auth-locked.
+- **Check tests** (18a) drive each of the four checks against a stubbed boto3 client.
+- **Graph tests** (18a) prove the supervisor StateGraph fans out to all four checks and
+  that one check raising records an error but never kills the others.
+- **Cost tests** (18a) parse a canned get_cost_and_usage response.
+- **Service tests** cover the per-account new-high alert + cooldown, external-id issuance
+  (once, stable, never reused), assume-role with the External ID, connected vs
+  not-connected targeting, and an assume failure marking the account errored with no
+  fallback to the own account (and not blocking other accounts' daily runs).
+- **Connect/scan/read endpoint tests** cover the connect flow and strict per-account
+  isolation of findings, cost, and connection, plus that /scanner is auth-locked.
+- **CloudFormation tests** parse the onboarding template and check the External ID
+  condition, slice's principal, and that its action set matches part A's policy exactly.
 - **Import test** proves importing the scanner never pulls boto3 in (lazy import).
 """
 
 from __future__ import annotations
 
+import pathlib
+import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from urllib.parse import quote_plus
 
 import boto3
 import pytest
+import yaml
+from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
 from app import config
 from app.alerts import engine as alerts_engine
-from app.scanner import checks, cost, graph, service
+from app.auth.resolver import Account
+from app.scanner import checks, cost, graph, routes, service
+from app.scanner import session as sess
 from app.scanner.checks import (
     check_iam_risk,
     check_s3_public,
@@ -35,6 +44,7 @@ from app.scanner.checks import (
     check_unencrypted,
 )
 from app.scanner.models import (
+    CHECK_CONNECTION,
     CHECK_IAM_RISK,
     CHECK_S3_PUBLIC,
     CHECK_SG_OPEN,
@@ -46,6 +56,11 @@ from app.scanner.models import (
 from app.main import app
 
 ALL_USERS = "http://acs.amazonaws.com/groups/global/AllUsers"
+TEMPLATE_FILE = "infra/user-onboarding/slice-readonly-role.yaml"
+
+
+def _client_error(code: str, message: str, op: str = "AssumeRole") -> ClientError:
+    return ClientError({"Error": {"Code": code, "Message": message}}, op)
 
 
 # --- boto3 stubbing helpers -------------------------------------------------
@@ -427,32 +442,114 @@ def test_fetch_costs_via_stub():
     assert report.yesterday == Decimal("4.00")
 
 
-# --- Service: new-high alert + cooldown -------------------------------------
+# --- Fakes for service / route tests ----------------------------------------
 
 
 class FakeScannerDB:
+    """Account-aware in-memory store for findings, costs, and connections (phase 18b)."""
+
     enabled = True
 
     def __init__(self):
-        self.runs: dict[str, list[Finding]] = {}
+        # run_id -> (account_id, [Finding])
+        self.runs: dict[str, tuple] = {}
         self.order: list[str] = []
+        self.connections: dict[int, dict] = {}
+        self.costs: dict = {}  # (account_id, date) -> amount
 
-    async def record_findings(self, run_id, findings):
-        self.runs[run_id] = list(findings)
-        self.order.append(run_id)
+    # --- findings ---
+    async def record_findings(self, account_id, run_id, findings):
+        acct, existing = self.runs.get(run_id, (account_id, []))
+        self.runs[run_id] = (account_id, list(existing) + list(findings))
+        if run_id not in self.order:
+            self.order.append(run_id)
 
-    async def previous_run_id(self, current):
-        prev = [r for r in self.order if r != current]
+    async def previous_run_id(self, account_id, current):
+        prev = [r for r in self.order if r != current and self.runs[r][0] == account_id]
         return prev[-1] if prev else None
 
-    async def high_resource_ids(self, run_id):
-        return {f.resource_id for f in self.runs.get(run_id, []) if f.severity == SEVERITY_HIGH}
+    async def high_resource_ids(self, account_id, run_id):
+        acct, fs = self.runs.get(run_id, (None, []))
+        if acct != account_id:
+            return set()
+        return {f.resource_id for f in fs if f.severity == SEVERITY_HIGH}
 
-    async def latest_run_id(self):
-        return self.order[-1] if self.order else None
+    async def latest_run_id(self, account_id):
+        for r in reversed(self.order):
+            if self.runs[r][0] == account_id:
+                return r
+        return None
 
-    async def findings_for_run(self, run_id):
-        return [f.as_dict() | {"created_at": None} for f in self.runs.get(run_id, [])]
+    async def findings_for_run(self, account_id, run_id):
+        acct, fs = self.runs.get(run_id, (None, []))
+        if acct != account_id:
+            return []
+        return [f.as_dict() | {"created_at": None} for f in fs]
+
+    # --- costs ---
+    async def record_aws_costs(self, account_id, rows):
+        for d, a in rows:
+            self.costs[(account_id, d)] = a
+
+    async def aws_cost_rows_since(self, account_id, since):
+        rows = [
+            {"date": d, "amount_usd": a, "fetched_at": None}
+            for (acct, d), a in self.costs.items()
+            if acct == account_id and d >= since
+        ]
+        return sorted(rows, key=lambda r: r["date"], reverse=True)
+
+    # --- connections ---
+    async def get_connection(self, account_id):
+        row = self.connections.get(int(account_id))
+        return dict(row) if row else None
+
+    async def create_connection(self, account_id, external_id):
+        row = self.connections.get(int(account_id))
+        if row is None:
+            row = {
+                "id": len(self.connections) + 1, "account_id": int(account_id),
+                "role_arn": None, "external_id": external_id, "status": "pending",
+                "last_error": None, "connected_at": None, "created_at": None,
+            }
+            self.connections[int(account_id)] = row
+        return dict(row)
+
+    async def set_connection_status(self, account_id, status, *, role_arn=None, last_error=None):
+        row = self.connections.setdefault(
+            int(account_id),
+            {"id": len(self.connections) + 1, "account_id": int(account_id),
+             "role_arn": None, "external_id": "seed", "status": "pending",
+             "last_error": None, "connected_at": None, "created_at": None},
+        )
+        row["status"] = status
+        row["role_arn"] = role_arn
+        row["last_error"] = last_error
+        if status == "connected":
+            row["connected_at"] = datetime.now(timezone.utc)
+        return dict(row)
+
+    async def disconnect(self, account_id):
+        row = self.connections.get(int(account_id))
+        if row is None:
+            return False
+        row.update(role_arn=None, status="pending", last_error=None, connected_at=None)
+        return True
+
+    async def connected_accounts(self):
+        return [
+            {"account_id": r["account_id"], "role_arn": r["role_arn"], "external_id": r["external_id"]}
+            for r in self.connections.values()
+            if r["status"] == "connected" and r["role_arn"]
+        ]
+
+    def connect(self, account_id, role_arn, external_id="ext"):
+        """Test helper: seed a live connection."""
+        self.connections[int(account_id)] = {
+            "id": len(self.connections) + 1, "account_id": int(account_id),
+            "role_arn": role_arn, "external_id": external_id, "status": "connected",
+            "last_error": None, "connected_at": None, "created_at": None,
+        }
 
 
 class FakeChannel:
@@ -468,6 +565,12 @@ class FakeChannel:
         return DeliveryResult(ok=True)
 
 
+def _async_return(value):
+    async def fn(session):
+        return value
+    return fn
+
+
 @pytest.fixture
 def scan_alerts_on(monkeypatch):
     import fakeredis.aioredis
@@ -481,6 +584,34 @@ def scan_alerts_on(monkeypatch):
     alerts_engine.configure(engine)
     yield channel
     alerts_engine.configure(None)
+
+
+@pytest.fixture
+def set_db():
+    prev = getattr(app.state, "db", None)
+
+    def _set(db):
+        app.state.db = db
+        return db
+
+    yield _set
+    app.state.db = prev
+
+
+@pytest.fixture
+async def client():
+    import httpx
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://gateway") as c:
+        yield c
+
+
+def _as_account(account):
+    return lambda request: account
+
+
+# --- Service: new-high alert + cooldown (per account) -----------------------
 
 
 async def test_new_high_fires_alert(monkeypatch, scan_alerts_on):
@@ -511,8 +642,6 @@ async def test_repeat_high_does_not_fire(monkeypatch, scan_alerts_on):
     await service.run_scan(object(), db, None, run_id="run1")  # first: new -> fires
     await service.run_scan(object(), db, None, run_id="run2")  # same high -> not new
     await alerts_engine.drain()
-
-    # sg-1 was in run1's highs, so run2 sees no *new* high: exactly one alert total.
     assert len(channel.sent) == 1
 
 
@@ -522,7 +651,6 @@ async def test_cooldown_collapses_repeated_new_highs(monkeypatch, scan_alerts_on
     async def graph_for(session):
         return graph_for.value
 
-    # run1 has sg-1; run2 introduces a genuinely new high sg-2 — but inside the cooldown.
     monkeypatch.setattr(service, "run_scan_graph", graph_for)
     db = FakeScannerDB()
 
@@ -534,117 +662,431 @@ async def test_cooldown_collapses_repeated_new_highs(monkeypatch, scan_alerts_on
     ]
     await service.run_scan(object(), db, None, run_id="run2")
     await alerts_engine.drain()
-
-    # Both runs fired (each had a new high), but the per-hour cooldown let one reach the channel.
     assert len(channel.sent) == 1
 
 
-def _async_return(value):
-    async def fn(session):
-        return value
-    return fn
-
-
-# --- Endpoints --------------------------------------------------------------
-
-
-@pytest.fixture
-async def client():
-    import httpx
-
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://gateway") as c:
-        yield c
-
-
-async def test_findings_endpoint_shape(client):
+async def test_alert_cooldown_is_per_account(monkeypatch, scan_alerts_on):
+    """A new high in account A and in account B each alert — cooldown is keyed per account."""
+    channel = scan_alerts_on
+    monkeypatch.setattr(
+        service, "run_scan_graph",
+        _async_return([Finding(check=CHECK_SG_OPEN, resource_id="sg-x", severity=SEVERITY_HIGH, summary="s")]),
+    )
     db = FakeScannerDB()
-    db.runs["run1"] = [
-        Finding(check=CHECK_S3_PUBLIC, resource_id="b", severity=SEVERITY_HIGH, summary="public", detail={"kind": "public_acl"})
-    ]
-    db.order = ["run1"]
+    await service.run_scan(object(), db, None, run_id="a1", account_id=2)
+    await service.run_scan(object(), db, None, run_id="b1", account_id=3)
+    await alerts_engine.drain()
+    # Two accounts, two independent cooldown keys -> two alerts.
+    assert len(channel.sent) == 2
 
-    previous = getattr(app.state, "db", None)
-    app.state.db = db
-    try:
-        r = await client.get("/scanner/findings")
-    finally:
-        app.state.db = previous
 
-    assert r.status_code == 200
+# --- External id: generated once, stable, never reused -----------------------
+
+
+async def test_external_id_generated_once_stable_and_unique():
+    db = FakeScannerDB()
+    a1 = await service.get_or_create_external_id(db, 5)
+    a2 = await service.get_or_create_external_id(db, 5)
+    assert a1 == a2 and len(a1) == 32  # secrets.token_hex(16) -> 32 hex chars
+    b1 = await service.get_or_create_external_id(db, 6)
+    assert b1 != a1  # never reused across accounts
+
+
+# --- make_session assume-role passes the External ID -------------------------
+
+
+def test_make_session_assumes_with_external_id():
+    sts = _client("sts")
+    stub = Stubber(sts)
+    stub.add_response(
+        "assume_role",
+        {
+            "Credentials": {
+                "AccessKeyId": "ASIAEXAMPLE000001", "SecretAccessKey": "secret",
+                "SessionToken": "token", "Expiration": datetime(2030, 1, 1, tzinfo=timezone.utc),
+            },
+            "AssumedRoleUser": {"AssumedRoleId": "AROAEXAMPLE:slice", "Arn": "arn:aws:sts::111111111111:assumed-role/x/slice"},
+        },
+        {
+            "RoleArn": "arn:aws:iam::111111111111:role/slice-scanner/r",
+            "RoleSessionName": config.SCANNER_ASSUME_ROLE_SESSION_NAME,
+            "DurationSeconds": config.SCANNER_ASSUME_ROLE_DURATION_SECONDS,
+            "ExternalId": "ext-123",
+        },
+    )
+    stub.activate()
+    session = sess.make_session(
+        "arn:aws:iam::111111111111:role/slice-scanner/r", "ext-123", sts_client=sts
+    )
+    stub.assert_no_pending_responses()  # proves assume_role was called with ExternalId=ext-123
+    creds = session.get_credentials()
+    assert creds.access_key == "ASIAEXAMPLE000001"
+
+
+def test_test_role_success(monkeypatch):
+    identity = _client("sts")
+    istub = Stubber(identity)
+    istub.add_response(
+        "get_caller_identity",
+        {"Account": "999999999999", "Arn": "arn:aws:sts::999999999999:assumed-role/x/slice", "UserId": "AROA:slice"},
+    )
+    istub.activate()
+    monkeypatch.setattr(sess, "make_session", lambda role, ext, sts_client=None: FakeSession({"sts": identity}))
+    ok, info = sess.test_role("arn:aws:iam::999999999999:role/slice-scanner/r", "ext")
+    assert ok is True and info == "999999999999"
+
+
+def test_test_role_failure_returns_clear_message(monkeypatch):
+    def boom(role, ext, sts_client=None):
+        raise _client_error("AccessDenied", "not authorized to assume")
+
+    monkeypatch.setattr(sess, "make_session", boom)
+    ok, info = sess.test_role("arn:aws:iam::1:role/slice-scanner/r", "ext")
+    assert ok is False and "AccessDenied" in info
+
+
+# --- Scan targeting: connected / not-connected / assume failure --------------
+
+
+async def test_scan_connected_uses_assumed_session(monkeypatch):
+    """A connected account's scan builds an assumed session for its role + external id."""
+    calls = []
+
+    def spy_make_session(role_arn=None, external_id=None):
+        calls.append((role_arn, external_id))
+        return object()
+
+    monkeypatch.setattr(service, "make_session", spy_make_session)
+    monkeypatch.setattr(service, "run_scan_graph", _async_return([]))
+
+    db = FakeScannerDB()
+    db.connect(5, "arn:aws:iam::555555555555:role/slice-scanner/r", external_id="ext-5")
+    result = await service.run_scan_for_account(db, None, 5, run_id="r1")
+
+    assert result.status == "ok"
+    assert calls == [("arn:aws:iam::555555555555:role/slice-scanner/r", "ext-5")]
+    # Findings stored under account 5, not the own (None) scope.
+    assert db.runs["r1"][0] == 5
+
+
+async def test_scan_not_connected_writes_nothing(monkeypatch):
+    called = []
+    monkeypatch.setattr(service, "run_scan_graph", lambda s: called.append(s) or _async_return([])(s))
+    db = FakeScannerDB()  # account 7 has no connection
+    result = await service.run_scan_for_account(db, None, 7, run_id="r1")
+    assert result.status == "not_connected"
+    assert db.runs == {}  # nothing scanned or stored
+    assert called == []  # the graph never ran
+
+
+async def test_assume_failure_marks_error_no_fallback(monkeypatch):
+    """An assume failure marks the connection errored, stores a visible error finding for THAT
+    account, and never falls back to scanning slice's own account."""
+    graph_calls = []
+
+    def boom(role_arn=None, external_id=None):
+        raise _client_error("AccessDenied", "role trust does not allow slice")
+
+    async def graph_spy(session):
+        graph_calls.append(session)
+        return [Finding(check=CHECK_SG_OPEN, resource_id="own", severity=SEVERITY_HIGH, summary="own infra")]
+
+    monkeypatch.setattr(service, "make_session", boom)
+    monkeypatch.setattr(service, "run_scan_graph", graph_spy)
+
+    db = FakeScannerDB()
+    db.connect(5, "arn:aws:iam::555555555555:role/slice-scanner/r", external_id="ext-5")
+    result = await service.run_scan_for_account(db, None, 5, run_id="r1")
+
+    assert result.status == "error" and "AccessDenied" in result.error
+    assert graph_calls == []  # no fallback own-account scan happened
+    # The connection is marked error, and a visible error finding is stored under account 5.
+    assert db.connections[5]["status"] == "error"
+    acct, findings_stored = db.runs["r1"]
+    assert acct == 5
+    assert [f.check for f in findings_stored] == [CHECK_CONNECTION]
+    assert findings_stored[0].severity == SEVERITY_HIGH
+
+
+async def test_daily_one_account_failure_does_not_block_others(monkeypatch):
+    import fakeredis.aioredis
+
+    redis = fakeredis.aioredis.FakeRedis()
+    scanned_sessions = []
+
+    def make_session_spy(role_arn=None, external_id=None):
+        if role_arn and "bad" in role_arn:
+            raise _client_error("AccessDenied", "bad role")
+        return ("session", role_arn)
+
+    async def graph_spy(session):
+        scanned_sessions.append(session)
+        return []
+
+    monkeypatch.setattr(service, "make_session", make_session_spy)
+    monkeypatch.setattr(service, "run_scan_graph", graph_spy)
+    # Cost pull would call boto; make it a no-op report.
+    monkeypatch.setattr(service, "fetch_costs", lambda session, now=None: cost.CostReport())
+
+    db = FakeScannerDB()
+    db.connect(2, "arn:aws:iam::222222222222:role/slice-scanner/good", external_id="e2")
+    db.connect(3, "arn:aws:iam::333333333333:role/slice-scanner/bad", external_id="e3")
+
+    await service.run_daily_once(db, redis)
+
+    # Own account (None role) + the good account (2) both scanned; the bad one (3) did not.
+    assert ("session", None) in scanned_sessions  # operator own
+    assert ("session", "arn:aws:iam::222222222222:role/slice-scanner/good") in scanned_sessions
+    assert db.connections[3]["status"] == "error"  # the bad one recorded its failure
+    # Account 3 has only the connection-error finding; account 2 ran clean.
+    assert any(v[0] == 3 and v[1] and v[1][0].check == CHECK_CONNECTION for v in db.runs.values())
+
+
+# --- verify_connection persists status --------------------------------------
+
+
+async def test_verify_connection_good_marks_connected(monkeypatch):
+    db = FakeScannerDB()
+    monkeypatch.setattr(service, "test_role", lambda role, ext: (True, "444444444444"))
+    ok, info = await service.verify_connection(db, 5, "arn:aws:iam::444444444444:role/slice-scanner/r")
+    assert ok is True and info == "444444444444"
+    assert db.connections[5]["status"] == "connected"
+    assert db.connections[5]["role_arn"] == "arn:aws:iam::444444444444:role/slice-scanner/r"
+
+
+async def test_verify_connection_bad_marks_error(monkeypatch):
+    db = FakeScannerDB()
+    monkeypatch.setattr(service, "test_role", lambda role, ext: (False, "AccessDenied: nope"))
+    ok, info = await service.verify_connection(db, 5, "arn:aws:iam::444444444444:role/slice-scanner/r")
+    assert ok is False
+    assert db.connections[5]["status"] == "error" and db.connections[5]["status"] != "connected"
+
+
+# --- Endpoints: connect flow -------------------------------------------------
+
+
+async def test_connect_get_returns_external_id_and_quick_create_url(client, monkeypatch, set_db):
+    monkeypatch.setattr(
+        config, "SCANNER_TEMPLATE_URL",
+        "https://raw.githubusercontent.com/x/slice/main/infra/user-onboarding/slice-readonly-role.yaml",
+    )
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    set_db(FakeScannerDB())
+
+    r = await client.get("/scanner/connect")
     body = r.json()
-    assert body["run_id"] == "run1"
-    assert len(body["findings"]) == 1
-    finding = body["findings"][0]
-    assert set(finding) == {"check", "resource_id", "severity", "summary", "detail", "created_at"}
-    assert finding["check"] == CHECK_S3_PUBLIC and finding["detail"]["kind"] == "public_acl"
+    ext = body["external_id"]
+    assert ext and len(ext) == 32
+    assert body["slice_aws_account_id"] == "194133064379"
+    assert body["template_path"] == TEMPLATE_FILE
+    assert ext in body["quick_create_url"]  # external id prefilled
+    assert quote_plus(config.SCANNER_TEMPLATE_URL) in body["quick_create_url"]  # template location
+
+    # A second call returns the SAME external id (issued once).
+    r2 = await client.get("/scanner/connect")
+    assert r2.json()["external_id"] == ext
 
 
-async def test_findings_endpoint_no_db_is_empty(client):
-    previous = getattr(app.state, "db", None)
-    app.state.db = None
-    try:
-        r = await client.get("/scanner/findings")
-    finally:
-        app.state.db = previous
-    assert r.status_code == 200 and r.json() == {"run_id": None, "findings": []}
+async def test_connect_get_operator_needs_no_connection(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    set_db(FakeScannerDB())
+    r = await client.get("/scanner/connect")
+    body = r.json()
+    assert body["status"] == "operator" and body["external_id"] is None
 
 
-async def test_run_endpoint_returns_run_id_without_blocking(client, monkeypatch):
+async def test_connect_post_good_assume(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    db = set_db(FakeScannerDB())
+    monkeypatch.setattr(service, "test_role", lambda role, ext: (True, "444444444444"))
+
+    r = await client.post(
+        "/scanner/connect", json={"role_arn": "arn:aws:iam::444444444444:role/slice-scanner/r"}
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "connected" and r.json()["aws_account_id"] == "444444444444"
+    assert db.connections[5]["status"] == "connected"
+
+
+async def test_connect_post_bad_assume_400_and_not_connected(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    db = set_db(FakeScannerDB())
+    monkeypatch.setattr(service, "test_role", lambda role, ext: (False, "AccessDenied: no trust"))
+
+    r = await client.post(
+        "/scanner/connect", json={"role_arn": "arn:aws:iam::444444444444:role/slice-scanner/r"}
+    )
+    assert r.status_code == 400
+    assert db.connections[5]["status"] == "error"
+    assert db.connections[5]["status"] != "connected"
+
+
+async def test_connect_post_rejects_bad_arn(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    set_db(FakeScannerDB())
+    r = await client.post("/scanner/connect", json={"role_arn": "not-an-arn"})
+    assert r.status_code == 400
+
+
+async def test_disconnect_keeps_external_id(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    db = set_db(FakeScannerDB())
+    db.connect(5, "arn:aws:iam::444444444444:role/slice-scanner/r", external_id="reserved-ext")
+
+    r = await client.delete("/scanner/connect")
+    assert r.status_code == 200 and r.json()["status"] == "disconnected"
+    assert db.connections[5]["status"] == "pending"
+    assert db.connections[5]["role_arn"] is None
+    assert db.connections[5]["external_id"] == "reserved-ext"  # reserved
+
+
+# --- Endpoints: run / findings / cost, per account ---------------------------
+
+
+async def test_run_not_connected_account_is_refused(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=9, login="u")))
+    set_db(FakeScannerDB())  # account 9 has no connection
+    r = await client.post("/scanner/run")
+    assert r.status_code == 409 and r.json()["status"] == "not_connected"
+
+
+async def test_run_connected_account_kicks_scan(client, monkeypatch, set_db):
     started = {}
 
-    async def fake_run_scan(session, db, redis, *, run_id=None, alert=True):
+    async def fake_run_scan_for_account(db, redis, account_id, *, run_id=None, alert=True):
+        started["account_id"] = account_id
         started["run_id"] = run_id
 
-    monkeypatch.setattr(service, "run_scan", fake_run_scan)
-    # No real boto3 session needed; make_session is not called until run_scan, which we faked
-    # — but the route builds the session before run_scan, so stub it to something cheap.
-    monkeypatch.setattr("app.scanner.routes.make_session", lambda: object())
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    db = set_db(FakeScannerDB())
+    db.connect(5, "arn:aws:iam::555555555555:role/slice-scanner/r")
+    monkeypatch.setattr(service, "run_scan_for_account", fake_run_scan_for_account)
 
     r = await client.post("/scanner/run")
     assert r.status_code == 202
-    body = r.json()
-    assert "run_id" in body and body["status"] == "started"
-    # Let the detached task run.
     import asyncio
 
     await asyncio.sleep(0)
     await asyncio.sleep(0)
-    assert started.get("run_id") == body["run_id"]
+    assert started == {"account_id": 5, "run_id": r.json()["run_id"]}
 
 
-async def test_cost_endpoint_shape(client):
-    class CostDB:
-        enabled = True
+async def test_run_operator_scans_own(client, monkeypatch, set_db):
+    started = {}
 
-        async def aws_cost_rows_since(self, since):
-            return [
-                {"date": date(2026, 8, 22), "amount_usd": Decimal("2.00"),
-                 "fetched_at": datetime(2026, 8, 23, 1, tzinfo=timezone.utc)},
-                {"date": date(2026, 8, 21), "amount_usd": Decimal("1.50"),
-                 "fetched_at": datetime(2026, 8, 22, 1, tzinfo=timezone.utc)},
-            ]
+    async def fake(db, redis, account_id, *, run_id=None, alert=True):
+        started["account_id"] = account_id
 
-    previous = getattr(app.state, "db", None)
-    app.state.db = CostDB()
-    try:
-        r = await client.get("/scanner/cost")
-    finally:
-        app.state.db = previous
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    set_db(FakeScannerDB())
+    monkeypatch.setattr(service, "run_scan_for_account", fake)
+    r = await client.post("/scanner/run")
+    assert r.status_code == 202
+    import asyncio
 
-    body = r.json()
-    assert body["yesterday"] == "2.00"  # newest day first
-    assert body["month_to_date"] == "3.50"
-    assert body["currency"] == "USD"
-    assert len(body["daily"]) == 2
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert started["account_id"] == 1
+
+
+async def test_findings_isolation_between_accounts(client, monkeypatch, set_db):
+    db = set_db(FakeScannerDB())
+    await db.record_findings(
+        2, "runA",
+        [Finding(check=CHECK_SG_OPEN, resource_id="x", severity=SEVERITY_HIGH, summary="s")],
+    )
+
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=2, login="a")))
+    r2 = await client.get("/scanner/findings")
+    assert r2.json()["run_id"] == "runA" and len(r2.json()["findings"]) == 1
+
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=3, login="b")))
+    r3 = await client.get("/scanner/findings")
+    assert r3.json() == {"run_id": None, "findings": []}  # B sees nothing of A's
+
+
+async def test_operator_findings_are_own_scope(client, monkeypatch, set_db):
+    db = set_db(FakeScannerDB())
+    await db.record_findings(
+        None, "own1",
+        [Finding(check=CHECK_S3_PUBLIC, resource_id="b", severity=SEVERITY_HIGH, summary="public")],
+    )
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    r = await client.get("/scanner/findings")
+    assert r.json()["run_id"] == "own1" and len(r.json()["findings"]) == 1
+
+
+async def test_cost_isolation_between_accounts(client, monkeypatch, set_db):
+    db = set_db(FakeScannerDB())
+    await db.record_aws_costs(2, [(date(2026, 8, 22), Decimal("5.00"))])
+
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=2, login="a")))
+    r2 = await client.get("/scanner/cost")
+    assert r2.json()["month_to_date"] == "5.00"
+
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=3, login="b")))
+    r3 = await client.get("/scanner/cost")
+    assert r3.json()["month_to_date"] == "0"  # B sees only its own (empty) costs, never A's
+    assert r3.json()["daily"] == []
+
+
+async def test_findings_endpoint_no_db_is_empty(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    set_db(None)
+    r = await client.get("/scanner/findings")
+    assert r.status_code == 200 and r.json() == {"run_id": None, "findings": []}
 
 
 async def test_scanner_endpoints_require_auth(client, monkeypatch):
     """With auth on and no slice key, every /scanner path is a 401."""
     monkeypatch.setattr(config, "AUTH_ENABLED", True)
-    for method, path in [("GET", "/scanner/findings"), ("GET", "/scanner/cost"), ("POST", "/scanner/run")]:
+    calls = [
+        ("GET", "/scanner/findings"), ("GET", "/scanner/cost"), ("POST", "/scanner/run"),
+        ("GET", "/scanner/connect"), ("POST", "/scanner/connect"), ("DELETE", "/scanner/connect"),
+    ]
+    for method, path in calls:
         r = await client.request(method, path)
         assert r.status_code == 401, (method, path)
+
+
+# --- CloudFormation template -------------------------------------------------
+
+
+def test_cloudformation_template_valid_and_matches_part_a():
+    text = pathlib.Path(TEMPLATE_FILE).read_text()
+    doc = yaml.safe_load(text)  # parses as valid YAML
+
+    role = doc["Resources"]["SliceScannerRole"]["Properties"]
+    trust = role["AssumeRolePolicyDocument"]["Statement"][0]
+    # Principal is slice's account; the External ID condition guards the assume.
+    assert trust["Principal"]["AWS"] == "arn:aws:iam::194133064379:root"
+    assert trust["Action"] == "sts:AssumeRole"
+    assert trust["Condition"]["StringEquals"]["sts:ExternalId"] == {"Ref": "ExternalId"}
+
+    # The permission set matches part A's scanner policy actions exactly.
+    cfn_actions = set(role["Policies"][0]["PolicyDocument"]["Statement"][0]["Action"])
+
+    tf = pathlib.Path("infra/ec2/main.tf").read_text()
+    start = tf.index('data "aws_iam_policy_document" "scanner"')
+    end = tf.index('data "aws_iam_policy_document" "scanner_assume"')
+    scanner_doc = tf[start:end]
+    tf_actions = set(re.findall(r'"([a-z0-9]+:[A-Za-z]+)"', scanner_doc))
+
+    assert cfn_actions == tf_actions
+    assert "sts:AssumeRole" not in cfn_actions  # that lives in the box's own policy, not the role
+
+
+def test_cloudformation_template_has_role_path_and_external_id_param():
+    doc = yaml.safe_load(pathlib.Path(TEMPLATE_FILE).read_text())
+    assert doc["Parameters"]["ExternalId"]["Type"] == "String"
+    # The fixed path lets the box scope sts:AssumeRole to arn:aws:iam::*:role/slice-scanner/*.
+    assert doc["Resources"]["SliceScannerRole"]["Properties"]["Path"] == "/slice-scanner/"
+
+
+def test_box_assume_policy_is_scoped_to_slice_scanner_path():
+    tf = pathlib.Path("infra/ec2/main.tf").read_text()
+    assert "arn:aws:iam::*:role/slice-scanner/*" in tf
+    assert '"sts:AssumeRole"' in tf
 
 
 # --- Lazy boto3 import ------------------------------------------------------

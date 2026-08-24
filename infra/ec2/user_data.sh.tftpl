@@ -56,6 +56,13 @@ GITHUB_OAUTH_CLIENT_ID="$(echo "$SECRET_JSON" | jq -r '.GITHUB_OAUTH_CLIENT_ID /
 # Phase 17: Grafana admin password. Read from the same app secret; falls back to
 # "admin" if the key is absent so a fresh deploy still boots (change it via the secret).
 GRAFANA_ADMIN_PASSWORD="$(echo "$SECRET_JSON" | jq -r '.GRAFANA_ADMIN_PASSWORD // "admin"')"
+# Phase 11 alerts + phase 18b scanner template URL. Each defaults to "" so a missing key
+# writes nothing; the conditional appends below skip empty values entirely.
+RESEND_API_KEY="$(echo "$SECRET_JSON" | jq -r '.RESEND_API_KEY // ""')"
+ALERT_EMAIL_TO="$(echo "$SECRET_JSON" | jq -r '.ALERT_EMAIL_TO // ""')"
+ALERT_FROM="$(echo "$SECRET_JSON" | jq -r '.ALERT_FROM // ""')"
+ALERTS_ENABLED="$(echo "$SECRET_JSON" | jq -r '.ALERTS_ENABLED // ""')"
+SCANNER_TEMPLATE_URL="$(echo "$SECRET_JSON" | jq -r '.SCANNER_TEMPLATE_URL // ""')"
 
 # --- Stack config in /opt/slice --------------------------------------------
 install -d /opt/slice
@@ -70,6 +77,13 @@ ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 JWT_SECRET=$JWT_SECRET
 GITHUB_OAUTH_CLIENT_ID=$GITHUB_OAUTH_CLIENT_ID
 EOF
+# Optional alert + scanner settings: appended only when present in the secret, so an
+# unset key leaves the gateway on its own defaults instead of writing an empty override.
+[ -n "$RESEND_API_KEY" ] && echo "RESEND_API_KEY=$RESEND_API_KEY" >> /opt/slice/.env
+[ -n "$ALERT_EMAIL_TO" ] && echo "ALERT_EMAIL_TO=$ALERT_EMAIL_TO" >> /opt/slice/.env
+[ -n "$ALERT_FROM" ] && echo "ALERT_FROM=$ALERT_FROM" >> /opt/slice/.env
+[ -n "$ALERTS_ENABLED" ] && echo "ALERTS_ENABLED=$ALERTS_ENABLED" >> /opt/slice/.env
+[ -n "$SCANNER_TEMPLATE_URL" ] && echo "SCANNER_TEMPLATE_URL=$SCANNER_TEMPLATE_URL" >> /opt/slice/.env
 chmod 600 /opt/slice/.env
 
 # grafana.env (phase 17) — kept SEPARATE from the app .env so the gateway's
