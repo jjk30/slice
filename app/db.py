@@ -80,6 +80,44 @@ WHERE ($1::bigint IS NULL OR account_id = $1)
 ORDER BY id DESC
 """
 
+# --- AWS scanner (phase 18a) --------------------------------------------------
+# scan_findings and aws_costs are written fire-and-forget from the detached scanner
+# task, like every other write here. "check" is quoted because CHECK is a SQL keyword.
+INSERT_FINDING = """
+INSERT INTO scan_findings (run_id, "check", resource_id, severity, summary, detail)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+"""
+SELECT_FINDINGS_FOR_RUN = """
+SELECT run_id, "check", resource_id, severity, summary, detail, created_at
+FROM scan_findings WHERE run_id = $1 ORDER BY id
+"""
+# The most recent run's id (the findings endpoint's default when no run_id is given).
+SELECT_LATEST_RUN_ID = "SELECT run_id FROM scan_findings ORDER BY id DESC LIMIT 1"
+# The newest run that is not the one passed in — the "previous run" the alert compares
+# against. MIN(id) per run orders runs by when they first landed.
+SELECT_PREVIOUS_RUN_ID = """
+SELECT run_id FROM scan_findings
+WHERE run_id <> $1
+GROUP BY run_id
+ORDER BY MAX(id) DESC
+LIMIT 1
+"""
+SELECT_HIGH_RESOURCE_IDS = (
+    "SELECT DISTINCT resource_id FROM scan_findings WHERE run_id = $1 AND severity = 'high'"
+)
+# One row per completed day, upserted so a re-fetch refreshes the amount and timestamp.
+UPSERT_AWS_COST = """
+INSERT INTO aws_costs (date, amount_usd, fetched_at)
+VALUES ($1, $2, now())
+ON CONFLICT (date) DO UPDATE SET amount_usd = EXCLUDED.amount_usd, fetched_at = now()
+"""
+# The current month's rows, newest first — the endpoint derives yesterday and MTD from these.
+SELECT_AWS_COSTS_SINCE = """
+SELECT date, amount_usd, fetched_at FROM aws_costs
+WHERE date >= $1 ORDER BY date DESC
+"""
+
+
 # --- Accounts and slice keys (phase 12) ---------------------------------------
 # One account per GitHub user, upserted on every login (the login/email refresh; the
 # id is stable). A slice key row holds only the SHA-256 of the key.
@@ -640,6 +678,86 @@ class Database:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(SELECT_ALERT_ROWS, account_id)
         return summarize_alert_rows([dict(row) for row in rows])
+
+    # --- AWS scanner (phase 18a) -------------------------------------------
+    # record_findings and record_aws_costs mirror the other writers: fire-and-forget,
+    # every failure swallowed. The scanner task is already detached from any request, so a
+    # down database must never propagate up into it. The reads (findings_for_run,
+    # latest_run_id, previous_run_id, high_resource_ids, aws_cost_rows_since) back the
+    # /scanner/* endpoints and the alert comparison; they raise on failure like the other
+    # reads, and their callers decide how to fail open around them.
+
+    async def record_findings(self, run_id: str, findings) -> None:
+        """Write one scan run's findings. Fire-and-forget: every failure is swallowed."""
+        if self._pool is None:
+            return
+        rows = [
+            (
+                run_id,
+                f.check,
+                f.resource_id,
+                f.severity,
+                f.summary,
+                json.dumps(f.detail or {}, default=str),
+            )
+            for f in findings
+        ]
+        if not rows:
+            return
+        try:
+            async with self._pool.acquire() as connection:
+                await connection.executemany(INSERT_FINDING, rows)
+        except Exception as exc:  # noqa: BLE001 — the scan is off the request path already.
+            logger.warning(
+                json.dumps({"event": "db_unavailable", "stage": "finding_write", "error": str(exc)})
+            )
+
+    async def findings_for_run(self, run_id: str) -> list[dict]:
+        """One run's findings, oldest first. Raises if the pool is unavailable."""
+        return await self._fetch(SELECT_FINDINGS_FOR_RUN, run_id)
+
+    async def latest_run_id(self) -> str | None:
+        """The most recent scan run's id, or None when there are no findings yet."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            value = await connection.fetchval(SELECT_LATEST_RUN_ID)
+        return value
+
+    async def previous_run_id(self, current_run_id: str) -> str | None:
+        """The newest run other than ``current_run_id`` — what a new scan compares against."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            value = await connection.fetchval(SELECT_PREVIOUS_RUN_ID, current_run_id)
+        return value
+
+    async def high_resource_ids(self, run_id: str) -> set[str]:
+        """The set of resource_ids with a HIGH finding in ``run_id`` (empty set if none)."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(SELECT_HIGH_RESOURCE_IDS, run_id)
+        return {row["resource_id"] for row in rows}
+
+    async def record_aws_costs(self, rows) -> None:
+        """Upsert per-day (date, amount) cost rows. Fire-and-forget: failures swallowed."""
+        if self._pool is None:
+            return
+        rows = [(d, a) for d, a in rows]
+        if not rows:
+            return
+        try:
+            async with self._pool.acquire() as connection:
+                await connection.executemany(UPSERT_AWS_COST, rows)
+        except Exception as exc:  # noqa: BLE001 — cost logging is never worth a crash.
+            logger.warning(
+                json.dumps({"event": "db_unavailable", "stage": "cost_write", "error": str(exc)})
+            )
+
+    async def aws_cost_rows_since(self, since) -> list[dict]:
+        """Cost rows on or after ``since`` (the month start), newest day first. Raises if unavailable."""
+        return await self._fetch(SELECT_AWS_COSTS_SINCE, since)
 
     # --- Dashboard reads (phase 10) ----------------------------------------
     # Reads for the /dashboard endpoints. Like the other reads they raise when the

@@ -176,6 +176,80 @@ resource "aws_iam_role_policy" "secrets" {
   policy = data.aws_iam_policy_document.secrets.json
 }
 
+# ---------------------------------------------------------------------------
+# Phase 18a: read-only permissions for the AWS security scanner. slice scans the
+# account it runs in — public S3, world-open security groups, unencrypted storage,
+# old IAM keys / direct AdministratorAccess — and pulls Cost Explorer spend.
+#
+# Least privilege: every action is a read, scoped to exactly what the four checks and
+# the cost pull call. No writes, no wildcards. Resources are "*" only because these
+# describe/list/get calls are account-wide by nature (you cannot enumerate buckets,
+# security groups, volumes, or users without a list over the whole account); the actions
+# themselves are strictly read-only, so "*" here grants visibility, never mutation.
+#
+# The two beyond the base list — sts:GetCallerIdentity and s3control:GetPublicAccessBlock
+# — back the *account-level* S3 Block Public Access check (it needs the account id, then
+# the account-level BPA setting). That check fails open if they are denied, so they are a
+# clean addition rather than a hard requirement.
+data "aws_iam_policy_document" "scanner" {
+  statement {
+    sid    = "S3ReadForScanner"
+    effect = "Allow"
+    actions = [
+      "s3:ListAllMyBuckets",
+      "s3:GetBucketAcl",
+      "s3:GetBucketPolicy",
+      "s3:GetBucketPolicyStatus",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:GetAccountPublicAccessBlock",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "STSIdentityForScanner"
+    effect    = "Allow"
+    actions   = ["sts:GetCallerIdentity"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "EC2ReadForScanner"
+    effect = "Allow"
+    actions = [
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeVolumes",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "IAMReadForScanner"
+    effect = "Allow"
+    actions = [
+      "iam:ListUsers",
+      "iam:ListAccessKeys",
+      "iam:ListAttachedUserPolicies",
+      "iam:GetAccessKeyLastUsed",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "CostExplorerReadForScanner"
+    effect    = "Allow"
+    actions   = ["ce:GetCostAndUsage"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "scanner" {
+  name   = "${var.project_name}-ec2-scanner-readonly"
+  role   = aws_iam_role.instance.id
+  policy = data.aws_iam_policy_document.scanner.json
+}
+
 resource "aws_iam_instance_profile" "instance" {
   name = "${var.project_name}-ec2-profile"
   role = aws_iam_role.instance.name

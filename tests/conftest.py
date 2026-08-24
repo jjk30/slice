@@ -84,6 +84,23 @@ def alerts_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def scanner_off_by_default(monkeypatch):
+    """Phase-18a scanner is opt-in per test, same pattern as the flags above.
+
+    Production defaults ``SCANNER_ENABLED`` to true, which starts the daily background task
+    in lifespan — a task that would import boto3 and try to reach AWS. Force the switch off
+    so a lifespan-running test never starts it, and clear any task a prior test left on
+    ``app.state``. The scanner tests drive the checks and service directly with stubbed
+    boto3 and fakes; they never need the daily loop.
+    """
+    monkeypatch.setattr(config, "SCANNER_ENABLED", False)
+    previous = getattr(app.state, "scanner_task", None)
+    app.state.scanner_task = None
+    yield
+    app.state.scanner_task = previous
+
+
+@pytest.fixture(autouse=True)
 def rag_off_by_default(monkeypatch):
     """Phase-6 RAG is opt-in per test, same pattern as the flags below.
 

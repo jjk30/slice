@@ -29,6 +29,10 @@ logger = logging.getLogger("slice.gateway")
 
 KIND_WARN = "warn"
 KIND_BLOCK = "block"
+# Phase 18a: the AWS security scanner fires this kind when a scan surfaces new HIGH-risk
+# findings. Its copy is built from a different detail shape (a count and a list of
+# summaries) than the budget kinds, so subject_for/body_for branch on it.
+KIND_SCAN = "aws_scan"
 
 RESEND_EMAILS_URL = "https://api.resend.com/emails"
 RESEND_TIMEOUT_SECONDS = 10.0
@@ -212,14 +216,61 @@ def _fields(alert: Alert) -> dict:
     }
 
 
+# --- Scanner alert copy (phase 18a) -------------------------------------------
+# The scanner's detail carries ``count`` (how many high-risk issues are new) and
+# ``summaries`` (the top plain-sentence summaries, already trimmed by the caller). The
+# copy needs neither budget numbers nor the team's spend, so it is formatted on its own.
+SCAN_SUBJECT = "slice found {count} high-risk AWS issue{plural}"
+
+
+def _scan_count(alert: Alert) -> int:
+    try:
+        return max(0, int((alert.detail or {}).get("count", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _scan_subject(alert: Alert) -> str:
+    count = _scan_count(alert)
+    return SCAN_SUBJECT.format(count=count, plural="" if count == 1 else "s")
+
+
+def _scan_body(alert: Alert) -> str:
+    detail = alert.detail or {}
+    count = _scan_count(alert)
+    summaries = detail.get("summaries") or []
+    lines = [
+        f"slice's AWS security scan found {count} new high-risk issue"
+        f"{'' if count == 1 else 's'} in the account it runs in.",
+        "",
+    ]
+    if summaries:
+        lines.append("Top issues:")
+        lines.extend(f"  - {s}" for s in summaries)
+        lines.append("")
+    lines.append(
+        "See GET /scanner/findings for the full list. This alerts only on issues that are "
+        "new since the previous scan, at most once per cooldown window."
+    )
+    run_id = detail.get("run_id")
+    if run_id:
+        lines += ["", f"Run: {run_id}"]
+    lines += ["", f"Sent {format_time(alert.ts)}", "", "Best regards,", "— slice gateway"]
+    return "\n".join(lines)
+
+
 def subject_for(alert: Alert) -> str:
-    """``slice: team-a has used 80% of its monthly AI budget`` / ``slice: team-a hit its budget cap. AI requests are blocked``."""
+    """``slice: team-a has used 80% ...`` / ``slice: team-a hit its budget cap ...`` / ``slice found N high-risk AWS issues``."""
+    if alert.kind == KIND_SCAN:
+        return _scan_subject(alert)
     template = BLOCK_SUBJECT if alert.kind == KIND_BLOCK else WARN_SUBJECT
     return template.format(**_fields(alert))
 
 
 def body_for(alert: Alert) -> str:
-    """The plain-text body for the alert's kind: team, spend of cap, local timestamp, next steps."""
+    """The plain-text body for the alert's kind: budget copy for warn/block, the issue list for a scan."""
+    if alert.kind == KIND_SCAN:
+        return _scan_body(alert)
     template = BLOCK_BODY if alert.kind == KIND_BLOCK else WARN_BODY
     return template.format(**_fields(alert))
 

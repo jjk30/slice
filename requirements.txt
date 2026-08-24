@@ -32,6 +32,11 @@ langsmith==0.11.0
 # only under `extra == "all"`, so ragas is unaffected. The rails LLM is wired through the
 # already-pinned langchain-anthropic. See the phase-9 notes in the README.
 nemoguardrails==0.23.0
+# --- AWS security scanner (phase 18a) ---
+# boto3 for the read-only AWS checks and Cost Explorer. Imported lazily by the scanner
+# (only when a scan actually runs), so it never slows gateway startup; unpinned like the
+# rest of the runtime deps. botocore comes with it and provides the test-time Stubber.
+boto3
 pytest
 pytest-asyncio
 respx

@@ -31,6 +31,8 @@ from app import guardrails
 from app.guardrails import GUARDRAIL_HEADER
 from app.rag import retriever as rag_retriever
 from app.rag.prompt import extract_prompt_text
+from app.scanner import router as scanner_router
+from app.scanner import service as scanner_service
 from app.redis_layer import CACHE_HEADER
 from app.router import RAG_HEADER, ROUTED_HEADER, route
 from app.rules import RulesCache
@@ -138,7 +140,22 @@ async def lifespan(app: FastAPI):
         alerts.build_engine(redis=app.state.redis, database=app.state.db)
     )
 
+    # Phase 18a: the AWS security scanner's daily background task, or None when the scanner
+    # is disabled. It wakes on a timer, and on a fresh calendar day (a Redis day-latch so a
+    # restart never double-runs) runs a scan and pulls Cost Explorer. All fire-and-forget,
+    # off the request path; boto3 is imported lazily inside the task, never at startup.
+    app.state.scanner_task = scanner_service.start_daily_task(app)
+
     yield
+
+    # Stop the scanner's daily loop before its clients (redis/db) go away.
+    scanner_task = getattr(app.state, "scanner_task", None)
+    if scanner_task is not None:
+        scanner_task.cancel()
+        try:
+            await scanner_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 — shutdown never trips here.
+            pass
 
     # Give any in-flight alert a moment to finish before the clients it uses go away.
     # Bounded: a hung channel can't hold shutdown (its own timeout is 10s anyway).
@@ -183,6 +200,7 @@ app.add_middleware(
 app.include_router(admin_router)
 app.include_router(dashboard_router)
 app.include_router(auth_router)
+app.include_router(scanner_router)
 
 
 def get_client(app: FastAPI) -> httpx.AsyncClient:

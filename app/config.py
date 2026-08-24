@@ -284,3 +284,33 @@ def _csv(name: str, default: str) -> list[str]:
 
 
 CORS_ORIGINS = _csv("CORS_ORIGINS", "http://localhost:5173")
+
+# --- AWS security scanner (phase 18a): scan the account slice itself runs in. ---
+# All scanner work is fire-and-forget — a detached background task, never on the request
+# path — and every boto3 call fails open: a missing credential, a denied permission, or a
+# raised check contributes nothing (no finding) rather than crashing the run. boto3 is
+# imported lazily (only when a scan actually runs), so the scanner never slows startup.
+#
+# SCANNER_ENABLED is the whole switch. On (the default) the daily background task runs
+# and the /scanner/* endpoints work; off means the daily task never starts and a scan
+# only ever runs when explicitly kicked. On the live box the instance role grants the
+# read-only permissions the checks need (see infra/ec2); locally, with no credentials,
+# every check simply finds nothing.
+SCANNER_ENABLED = _bool("SCANNER_ENABLED", True)
+
+# The region the scanner's boto3 session targets. Unset lets boto3's own resolution
+# chain decide (env, shared config, or the instance's IMDS region) — the right default on
+# the box. Cost Explorer is global and is always addressed in us-east-1 regardless.
+AWS_REGION = os.getenv("AWS_REGION") or None
+
+# An IAM access key older than this many days is flagged. 90 is the common rotation line.
+SCANNER_IAM_KEY_MAX_AGE_DAYS = int(os.getenv("SCANNER_IAM_KEY_MAX_AGE_DAYS", "90"))
+
+# How often the daily background task wakes to check its Redis latch. The latch is keyed
+# by calendar day, so a short interval just means "notice the new day sooner"; the scan
+# and the (billable) Cost Explorer call still run at most once per day. Also bounds how
+# soon after a restart the first scan of the day happens.
+SCANNER_DAILY_INTERVAL_SECONDS = int(os.getenv("SCANNER_DAILY_INTERVAL_SECONDS", "3600"))
+
+# How many finding summaries the "new high-risk issues" alert lists in its body.
+SCANNER_ALERT_TOP_N = int(os.getenv("SCANNER_ALERT_TOP_N", "5"))

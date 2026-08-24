@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from app.alerts.channels import (
     KIND_BLOCK,
+    KIND_SCAN,
     KIND_WARN,
     Alert,
     AlertChannel,
@@ -40,6 +41,7 @@ from app.alerts.whatsapp import TwilioWhatsAppChannel, send_whatsapp_message
 
 __all__ = [
     "KIND_BLOCK",
+    "KIND_SCAN",
     "KIND_WARN",
     "Alert",
     "AlertChannel",

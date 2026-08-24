@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from app import config
 from app.alerts.channels import (  # noqa: F401 — KIND_* re-exported for the wire-in sites.
     KIND_BLOCK,
+    KIND_SCAN,
     KIND_WARN,
     Alert,
     AlertChannel,
