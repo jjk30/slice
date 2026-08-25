@@ -298,10 +298,11 @@ CORS_ORIGINS = _csv("CORS_ORIGINS", "http://localhost:5173")
 # every check simply finds nothing.
 SCANNER_ENABLED = _bool("SCANNER_ENABLED", True)
 
-# The region the scanner's boto3 session targets. Unset lets boto3's own resolution
-# chain decide (env, shared config, or the instance's IMDS region) — the right default on
-# the box. Cost Explorer is global and is always addressed in us-east-1 regardless.
-AWS_REGION = os.getenv("AWS_REGION") or None
+# The region the scanner's boto3 session targets. Defaults to us-east-1 so region-needing
+# checks work on a box that never set it (an unset value used to fail open silently and
+# hide the breakage); the AWS_REGION env var still overrides. Cost Explorer is global and
+# is always addressed in us-east-1 regardless.
+AWS_REGION = os.getenv("AWS_REGION") or "us-east-1"
 
 # An IAM access key older than this many days is flagged. 90 is the common rotation line.
 SCANNER_IAM_KEY_MAX_AGE_DAYS = int(os.getenv("SCANNER_IAM_KEY_MAX_AGE_DAYS", "90"))

@@ -1,0 +1,18 @@
+# Terminate HTTPS and reverse-proxy to the gateway container.
+# Phase 17: the api host blocks the /metrics path publicly (Prometheus scrapes the
+# gateway internally over the compose network, never through Caddy), and a second
+# site serves Grafana. The hostnames are read from the environment ({$API_DOMAIN} /
+# {$GRAFANA_DOMAIN}), passed to the caddy container by compose — so this file is static.
+{$API_DOMAIN} {
+    # /metrics is internal-only: return 404 to the public internet so the gateway's
+    # Prometheus endpoint is never exposed here. The internal scrape hits
+    # gateway:8080/metrics directly and bypasses Caddy entirely.
+    @metrics path /metrics /metrics/*
+    respond @metrics 404
+
+    reverse_proxy gateway:8080
+}
+
+{$GRAFANA_DOMAIN} {
+    reverse_proxy grafana:3000
+}

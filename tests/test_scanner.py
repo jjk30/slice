@@ -38,18 +38,27 @@ from app.auth.resolver import Account
 from app.scanner import checks, cost, graph, routes, service
 from app.scanner import session as sess
 from app.scanner.checks import (
+    check_ebs_waste,
+    check_eip_waste,
     check_iam_risk,
+    check_idle_instances,
     check_s3_public,
     check_sg_open,
+    check_snapshot_waste,
     check_unencrypted,
 )
 from app.scanner.models import (
     CHECK_CONNECTION,
+    CHECK_EBS_WASTE,
+    CHECK_EIP_WASTE,
     CHECK_IAM_RISK,
+    CHECK_IDLE_INSTANCES,
     CHECK_S3_PUBLIC,
     CHECK_SG_OPEN,
+    CHECK_SNAPSHOT_WASTE,
     CHECK_UNENCRYPTED,
     SEVERITY_HIGH,
+    SEVERITY_LOW,
     SEVERITY_MED,
     Finding,
 )
@@ -1002,7 +1011,7 @@ async def test_findings_isolation_between_accounts(client, monkeypatch, set_db):
 
     monkeypatch.setattr(routes, "read_account", _as_account(Account(id=3, login="b")))
     r3 = await client.get("/scanner/findings")
-    assert r3.json() == {"run_id": None, "findings": []}  # B sees nothing of A's
+    assert r3.json() == {"run_id": None, "findings": [], "estimated_monthly_waste_usd": 0.0}  # B sees nothing of A's
 
 
 async def test_operator_findings_are_own_scope(client, monkeypatch, set_db):
@@ -1034,7 +1043,7 @@ async def test_findings_endpoint_no_db_is_empty(client, monkeypatch, set_db):
     monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
     set_db(None)
     r = await client.get("/scanner/findings")
-    assert r.status_code == 200 and r.json() == {"run_id": None, "findings": []}
+    assert r.status_code == 200 and r.json() == {"run_id": None, "findings": [], "estimated_monthly_waste_usd": 0.0}
 
 
 async def test_scanner_endpoints_require_auth(client, monkeypatch):
@@ -1074,6 +1083,13 @@ def test_cloudformation_template_valid_and_matches_part_a():
 
     assert cfn_actions == tf_actions
     assert "sts:AssumeRole" not in cfn_actions  # that lives in the box's own policy, not the role
+    # Phase 18c cost-waste checks are present in lockstep on both sides.
+    new_cost_actions = {
+        "ec2:DescribeAddresses", "ec2:DescribeSnapshots", "ec2:DescribeInstances",
+        "cloudwatch:GetMetricStatistics",
+    }
+    assert new_cost_actions <= cfn_actions
+    assert new_cost_actions <= tf_actions
 
 
 def test_cloudformation_template_has_role_path_and_external_id_param():
@@ -1087,6 +1103,234 @@ def test_box_assume_policy_is_scoped_to_slice_scanner_path():
     tf = pathlib.Path("infra/ec2/main.tf").read_text()
     assert "arn:aws:iam::*:role/slice-scanner/*" in tf
     assert '"sts:AssumeRole"' in tf
+
+
+# --- Cost-waste checks (phase 18c) ------------------------------------------
+
+
+async def test_ebs_waste_unattached_gp2_and_gp2_to_gp3():
+    ec2 = _client("ec2")
+    stub = Stubber(ec2)
+    stub.add_response(
+        "describe_volumes",
+        {"Volumes": [
+            {"VolumeId": "vol-idle", "VolumeType": "gp2", "Size": 100, "State": "available"},
+            {"VolumeId": "vol-gp2", "VolumeType": "gp2", "Size": 200, "State": "in-use"},
+            {"VolumeId": "vol-gp3", "VolumeType": "gp3", "Size": 50, "State": "in-use"},
+        ]},
+    )
+    stub.activate()
+    findings = check_ebs_waste(FakeSession({"ec2": ec2}))
+    stub.assert_no_pending_responses()
+
+    by_id = {f.resource_id: f for f in findings}
+    assert set(by_id) == {"vol-idle", "vol-gp2"}  # the attached gp3 is fine
+    # Unattached 100 GiB gp2: full monthly cost 100 * $0.10 = $10.00 -> high.
+    assert by_id["vol-idle"].detail["est_monthly_usd"] == 10.0
+    assert by_id["vol-idle"].severity == SEVERITY_HIGH
+    assert by_id["vol-idle"].detail["kind"] == "unattached"
+    # Attached gp2 -> gp3 suggestion: 200 * $0.02 = $4.00, capped at med.
+    assert by_id["vol-gp2"].detail["est_monthly_usd"] == 4.0
+    assert by_id["vol-gp2"].severity == SEVERITY_MED
+    assert by_id["vol-gp2"].detail["kind"] == "gp2_to_gp3"
+
+
+async def test_ebs_gp2_to_gp3_capped_at_med_even_for_large_volume():
+    ec2 = _client("ec2")
+    stub = Stubber(ec2)
+    # 1000 GiB gp2 -> gp3 saving is $20/mo, which would be "high" by the raw rule; the
+    # gp2->gp3 suggestion is capped at med.
+    stub.add_response(
+        "describe_volumes",
+        {"Volumes": [{"VolumeId": "vol-big", "VolumeType": "gp2", "Size": 1000, "State": "in-use"}]},
+    )
+    stub.activate()
+    findings = check_ebs_waste(FakeSession({"ec2": ec2}))
+    assert findings[0].detail["est_monthly_usd"] == 20.0
+    assert findings[0].severity == SEVERITY_MED
+
+
+async def test_eip_waste_flags_unassociated_not_associated():
+    ec2 = _client("ec2")
+    stub = Stubber(ec2)
+    stub.add_response(
+        "describe_addresses",
+        {"Addresses": [
+            {"PublicIp": "1.2.3.4", "AllocationId": "eipalloc-idle"},
+            {"PublicIp": "5.6.7.8", "AllocationId": "eipalloc-used", "AssociationId": "eipassoc-1"},
+        ]},
+    )
+    stub.activate()
+    findings = check_eip_waste(FakeSession({"ec2": ec2}))
+    stub.assert_no_pending_responses()
+
+    assert [f.resource_id for f in findings] == ["eipalloc-idle"]
+    assert findings[0].detail["est_monthly_usd"] == 3.6
+    assert findings[0].severity == SEVERITY_MED
+
+
+async def test_snapshot_waste_single_old_snapshot_upper_bound_wording():
+    ec2 = _client("ec2")
+    stub = Stubber(ec2)
+    old = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    stub.add_response(
+        "describe_snapshots",
+        {"Snapshots": [
+            {"SnapshotId": "snap-old", "VolumeSize": 100, "StartTime": old, "State": "completed", "OwnerId": "1"},
+            {"SnapshotId": "snap-new", "VolumeSize": 100, "StartTime": datetime.now(timezone.utc), "State": "completed", "OwnerId": "1"},
+        ]},
+        {"OwnerIds": ["self"]},
+    )
+    stub.activate()
+    findings = check_snapshot_waste(FakeSession({"ec2": ec2}))
+    stub.assert_no_pending_responses()
+
+    assert [f.resource_id for f in findings] == ["snap-old"]  # the recent one is not flagged
+    assert findings[0].detail["est_monthly_usd"] == 5.0  # 100 * $0.05 upper bound
+    assert "upper bound" in findings[0].summary
+    assert findings[0].detail["kind"] == "snapshot"
+
+
+async def test_snapshot_waste_collapses_when_many():
+    ec2 = _client("ec2")
+    stub = Stubber(ec2)
+    old = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    snaps = [
+        {"SnapshotId": f"snap-{i}", "VolumeSize": 10, "StartTime": old, "State": "completed", "OwnerId": "1"}
+        for i in range(11)  # > 10 -> grouped
+    ]
+    stub.add_response("describe_snapshots", {"Snapshots": snaps}, {"OwnerIds": ["self"]})
+    stub.activate()
+    findings = check_snapshot_waste(FakeSession({"ec2": ec2}))
+    stub.assert_no_pending_responses()
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.detail["kind"] == "grouped" and f.detail["count"] == 11
+    assert f.detail["est_monthly_usd"] == 5.5  # 110 GiB * $0.05
+    assert "upper bound" in f.summary and "11" in f.summary
+
+
+async def test_idle_instances_flags_low_cpu_priced_and_unknown_type():
+    ec2 = _client("ec2")
+    ec2_stub = Stubber(ec2)
+    ec2_stub.add_response(
+        "describe_instances",
+        {"Reservations": [{"Instances": [
+            {"InstanceId": "i-known", "InstanceType": "t3.large", "State": {"Name": "running"}},
+            {"InstanceId": "i-unknown", "InstanceType": "x9.mega", "State": {"Name": "running"}},
+        ]}]},
+    )
+    ec2_stub.activate()
+
+    cw = _client("cloudwatch")
+    cw_stub = Stubber(cw)
+    for _ in range(2):  # one metrics call per instance, in order
+        cw_stub.add_response(
+            "get_metric_statistics",
+            {"Label": "CPUUtilization", "Datapoints": [
+                {"Timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc), "Average": 2.0, "Unit": "Percent"},
+            ]},
+        )
+    cw_stub.activate()
+
+    findings = check_idle_instances(FakeSession({"ec2": ec2, "cloudwatch": cw}))
+    ec2_stub.assert_no_pending_responses()
+    cw_stub.assert_no_pending_responses()
+
+    by_id = {f.resource_id: f for f in findings}
+    assert set(by_id) == {"i-known", "i-unknown"}  # both idle, both flagged
+    # t3.large priced from the map: 0.0832 * 730 = $60.74/mo -> high.
+    assert by_id["i-known"].detail["est_monthly_usd"] == 60.74
+    assert by_id["i-known"].severity == SEVERITY_HIGH
+    assert by_id["i-known"].detail["avg_cpu_percent"] == 2.0
+    # Unknown type: still flagged, but no price -> est null, severity low.
+    assert by_id["i-unknown"].detail["est_monthly_usd"] is None
+    assert by_id["i-unknown"].severity == SEVERITY_LOW
+
+
+async def test_idle_instances_busy_instance_not_flagged():
+    ec2 = _client("ec2")
+    ec2_stub = Stubber(ec2)
+    ec2_stub.add_response(
+        "describe_instances",
+        {"Reservations": [{"Instances": [
+            {"InstanceId": "i-busy", "InstanceType": "t3.large", "State": {"Name": "running"}},
+        ]}]},
+    )
+    ec2_stub.activate()
+    cw = _client("cloudwatch")
+    cw_stub = Stubber(cw)
+    cw_stub.add_response(
+        "get_metric_statistics",
+        {"Datapoints": [{"Timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc), "Average": 42.0, "Unit": "Percent"}]},
+    )
+    cw_stub.activate()
+    findings = check_idle_instances(FakeSession({"ec2": ec2, "cloudwatch": cw}))
+    assert findings == []  # 42% CPU is not idle
+
+
+# --- Waste estimate in the findings response ---------------------------------
+
+
+async def test_findings_response_sums_estimated_waste(client, monkeypatch, set_db):
+    db = set_db(FakeScannerDB())
+    await db.record_findings(
+        None, "run-w",
+        [
+            Finding(check=CHECK_EBS_WASTE, resource_id="vol-1", severity=SEVERITY_HIGH,
+                    summary="unattached", detail={"kind": "unattached", "est_monthly_usd": 10.0}),
+            Finding(check=CHECK_EIP_WASTE, resource_id="eip-1", severity=SEVERITY_MED,
+                    summary="idle eip", detail={"kind": "unassociated_eip", "est_monthly_usd": 3.6}),
+            # A security finding with no est counts as 0 toward the sum.
+            Finding(check=CHECK_S3_PUBLIC, resource_id="b", severity=SEVERITY_HIGH,
+                    summary="public", detail={"kind": "public_acl"}),
+        ],
+    )
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    r = await client.get("/scanner/findings")
+    body = r.json()
+    assert body["estimated_monthly_waste_usd"] == 13.6
+    assert len(body["findings"]) == 3
+
+
+async def test_findings_response_waste_is_zero_when_empty(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    set_db(FakeScannerDB())
+    r = await client.get("/scanner/findings")
+    assert r.json()["estimated_monthly_waste_usd"] == 0
+
+
+# --- Supervisor graph now has eight nodes ------------------------------------
+
+
+def test_registry_has_all_eight_checks():
+    names = [n for n, _ in checks.CHECKS]
+    assert names == [
+        CHECK_S3_PUBLIC, CHECK_SG_OPEN, CHECK_UNENCRYPTED, CHECK_IAM_RISK,
+        CHECK_EBS_WASTE, CHECK_EIP_WASTE, CHECK_SNAPSHOT_WASTE, CHECK_IDLE_INSTANCES,
+    ]
+
+
+async def test_supervisor_runs_all_eight_nodes(monkeypatch):
+    names = list("abcdefgh")
+    monkeypatch.setattr(graph, "CHECKS", _fake_checks({n: [] for n in names}))
+    g = graph._build_graph()
+    final = await g.ainvoke({"session": object(), "findings": [], "ran": [], "errors": []})
+    assert set(final["ran"]) == set(names) and len(final["ran"]) == 8
+
+
+async def test_one_of_eight_raising_kills_nothing(monkeypatch):
+    survivor = Finding(check="h", resource_id="r", severity="med", summary="s")
+    behaviors = {n: [] for n in list("abcdefgh")}
+    behaviors["c"] = RuntimeError("c exploded")
+    behaviors["h"] = [survivor]
+    monkeypatch.setattr(graph, "CHECKS", _fake_checks(behaviors))
+    g = graph._build_graph()
+    final = await g.ainvoke({"session": object(), "findings": [], "ran": [], "errors": []})
+    assert len(final["ran"]) == 8
+    assert final["findings"] == [survivor]
+    assert [e["check"] for e in final["errors"]] == ["c"]
 
 
 # --- Lazy boto3 import ------------------------------------------------------

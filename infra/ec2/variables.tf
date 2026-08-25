@@ -46,6 +46,12 @@ variable "app_secret_name" {
   default     = "slice/app"
 }
 
+variable "db_secret_name" {
+  description = "Name of the Secrets Manager secret (created by this stack) holding the local Postgres password as {\"POSTGRES_PASSWORD\": ...}."
+  type        = string
+  default     = "slice/ec2-db"
+}
+
 variable "ecr_registry" {
   description = "ECR registry host the gateway image is pulled from."
   type        = string

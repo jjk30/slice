@@ -1,0 +1,104 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - slice_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  gateway:
+    image: ${GATEWAY_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+
+  # --- Phase 17 monitoring ---------------------------------------------------
+  # Prometheus scrapes the gateway and node_exporter over the internal compose
+  # network only (no published port). 7-day / ~1GB retention on a small box.
+  prometheus:
+    image: prom/prometheus
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--storage.tsdb.retention.size=1GB"
+    volumes:
+      - /opt/slice/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    mem_limit: 400m
+
+  # Host CPU/RAM/disk metrics. Reads the host rootfs read-only; no published port.
+  node_exporter:
+    image: prom/node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - "/:/host:ro,rslave"
+    mem_limit: 64m
+
+  # Grafana behind Caddy at the grafana host. Datasource + dashboard are
+  # provisioned from files (no UI clicking); admin password + signup policy come
+  # from grafana.env. No published port — Caddy reverse-proxies grafana:3000.
+  grafana:
+    image: grafana/grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    env_file: grafana.env
+    volumes:
+      - /opt/slice/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    mem_limit: 300m
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - gateway
+      - grafana
+    # The api/grafana hostnames reach Caddy as env vars (the Caddyfile reads them
+    # with {$API_DOMAIN} / {$GRAFANA_DOMAIN}); compose fills them from the shell
+    # environment exported in user_data.
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /opt/slice/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  slice_pgdata:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+  grafana_data:

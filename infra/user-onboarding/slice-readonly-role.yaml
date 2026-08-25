@@ -63,6 +63,11 @@ Resources:
                   - "sts:GetCallerIdentity"
                   - "ec2:DescribeSecurityGroups"
                   - "ec2:DescribeVolumes"
+                  # Cost-waste checks: unassociated EIPs, stale snapshots, idle instances.
+                  - "ec2:DescribeAddresses"
+                  - "ec2:DescribeSnapshots"
+                  - "ec2:DescribeInstances"
+                  - "cloudwatch:GetMetricStatistics"
                   - "iam:ListUsers"
                   - "iam:ListAccessKeys"
                   - "iam:ListAttachedUserPolicies"

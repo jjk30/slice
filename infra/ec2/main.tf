@@ -127,11 +127,45 @@ resource "aws_security_group" "instance" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
+# ---------------------------------------------------------------------------
+# Private S3 bucket for the box's static stack config (docker-compose.yml,
+# Caddyfile, prometheus.yml, the grafana provisioning tree). These used to be
+# inlined in user_data, which pushed it toward AWS's 16KB limit; the box now
+# `aws s3 sync`s them at boot. Everything here is non-secret config — secrets are
+# still fetched from Secrets Manager and written into the env files at boot.
+# ---------------------------------------------------------------------------
+resource "aws_s3_bucket" "config" {
+  bucket = "${var.project_name}-ec2-config-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_public_access_block" "config" {
+  bucket                  = aws_s3_bucket.config.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Upload every file under files/ preserving its relative path as the object key, so
+# `aws s3 sync s3://<bucket>/ /opt/slice/` reproduces the tree the compose file expects
+# (docker-compose.yml, Caddyfile, prometheus.yml, grafana/provisioning/...). The
+# filemd5 etag makes Terraform re-upload only files whose content actually changed.
+resource "aws_s3_object" "config" {
+  for_each = fileset("${path.module}/files", "**")
+
+  bucket = aws_s3_bucket.config.id
+  key    = each.value
+  source = "${path.module}/files/${each.value}"
+  etag   = filemd5("${path.module}/files/${each.value}")
+}
+
 # ---------------------------------------------------------------------------
 # IAM: instance role + profile.
 #   - AmazonSSMManagedInstanceCore    -> Session Manager access (replaces SSH)
 #   - AmazonEC2ContainerRegistryReadOnly -> pull the gateway image from ECR
-#   - inline policy                   -> read only the slice/app secret
+#   - inline policies                 -> read the app + db secrets, and the config bucket
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "ec2_assume" {
   statement {
@@ -163,10 +197,27 @@ data "aws_secretsmanager_secret" "app" {
   name = var.app_secret_name
 }
 
+# The Postgres password lives in its OWN secret (not inlined into user_data or the
+# compose file, and not written into the shared app secret — which Terraform doesn't
+# own and would clobber). Terraform generates it (random_password.postgres) and stores
+# it here; the box reads it at boot and hands it to compose via the environment.
+resource "aws_secretsmanager_secret" "ec2_db" {
+  name        = var.db_secret_name
+  description = "slice cheap EC2 box: local Postgres password (managed by Terraform)."
+}
+
+resource "aws_secretsmanager_secret_version" "ec2_db" {
+  secret_id     = aws_secretsmanager_secret.ec2_db.id
+  secret_string = jsonencode({ POSTGRES_PASSWORD = random_password.postgres.result })
+}
+
 data "aws_iam_policy_document" "secrets" {
   statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [data.aws_secretsmanager_secret.app.arn]
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      data.aws_secretsmanager_secret.app.arn,
+      aws_secretsmanager_secret.ec2_db.arn,
+    ]
   }
 }
 
@@ -174,6 +225,27 @@ resource "aws_iam_role_policy" "secrets" {
   name   = "${var.project_name}-ec2-app-secret"
   role   = aws_iam_role.instance.id
   policy = data.aws_iam_policy_document.secrets.json
+}
+
+# Read-only access to the config bucket only (GetObject + ListBucket), so the box can
+# `aws s3 sync` its stack config at boot. Scoped to this one bucket — nothing else.
+data "aws_iam_policy_document" "config_bucket" {
+  statement {
+    sid       = "ListConfigBucket"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.config.arn]
+  }
+  statement {
+    sid       = "GetConfigObjects"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.config.arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "config_bucket" {
+  name   = "${var.project_name}-ec2-config-bucket"
+  role   = aws_iam_role.instance.id
+  policy = data.aws_iam_policy_document.config_bucket.json
 }
 
 # ---------------------------------------------------------------------------
@@ -220,7 +292,19 @@ data "aws_iam_policy_document" "scanner" {
     actions = [
       "ec2:DescribeSecurityGroups",
       "ec2:DescribeVolumes",
+      # Phase 18c cost-waste checks: unassociated EIPs, stale snapshots, idle instances.
+      "ec2:DescribeAddresses",
+      "ec2:DescribeSnapshots",
+      "ec2:DescribeInstances",
     ]
+    resources = ["*"]
+  }
+
+  statement {
+    # Phase 18c: idle-instance detection reads CPUUtilization from CloudWatch.
+    sid       = "CloudWatchReadForScanner"
+    effect    = "Allow"
+    actions   = ["cloudwatch:GetMetricStatistics"]
     resources = ["*"]
   }
 
@@ -285,8 +369,9 @@ resource "aws_iam_instance_profile" "instance" {
 }
 
 # ---------------------------------------------------------------------------
-# Local Postgres password. Stored ONLY in local state (which is gitignored) and
-# handed to the instance via user data — this is accepted for this cheap stack.
+# Local Postgres password. Generated by Terraform and stored in its own Secrets
+# Manager secret (aws_secretsmanager_secret.ec2_db above); the box reads it at boot.
+# It is no longer inlined into user_data or the compose file.
 # ---------------------------------------------------------------------------
 resource "random_password" "postgres" {
   length  = 32
@@ -306,15 +391,16 @@ resource "aws_instance" "app" {
   iam_instance_profile   = aws_iam_instance_profile.instance.name
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    aws_region        = var.aws_region
-    ecr_registry      = var.ecr_registry
-    gateway_image     = var.gateway_image
-    app_secret_name   = var.app_secret_name
-    api_domain        = var.api_subdomain
-    grafana_domain    = var.grafana_subdomain
-    db_name           = var.db_name
-    db_username       = var.db_username
-    postgres_password = random_password.postgres.result
+    aws_region      = var.aws_region
+    ecr_registry    = var.ecr_registry
+    gateway_image   = var.gateway_image
+    app_secret_name = var.app_secret_name
+    db_secret_name  = var.db_secret_name
+    config_bucket   = aws_s3_bucket.config.bucket
+    api_domain      = var.api_subdomain
+    grafana_domain  = var.grafana_subdomain
+    db_name         = var.db_name
+    db_username     = var.db_username
   })
 
   # Re-run user data if the template's rendered output changes.

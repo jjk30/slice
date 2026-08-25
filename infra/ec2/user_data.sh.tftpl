@@ -1,16 +1,24 @@
 #!/bin/bash
 # ===========================================================================
-# slice cheap always-on box bootstrap.
+# slice cheap always-on box bootstrap (small: config lives in S3, not inline).
 #
 # Rendered by Terraform (templatefile): the dollar-brace tokens below are
 # Terraform template vars, substituted at render time. Bash variables are
 # written WITHOUT braces (e.g. $ANTHROPIC_API_KEY) so Terraform leaves them
 # alone and the shell expands them at boot.
 #
-# Idempotent and safe to re-run: it re-writes /opt/slice config and runs
-# `docker compose up -d`. The named Postgres volume survives restarts, and the
-# gateway image self-applies DB migrations on startup (app/db.py) exactly like
-# the phase 15 docker-compose.yml at the repo root — so no separate schema step.
+# The bulky, static config (docker-compose.yml, Caddyfile, prometheus.yml, the
+# grafana provisioning tree) lives in a private S3 bucket and is pulled with
+# `aws s3 sync` — this keeps the rendered user_data well under AWS's 16KB limit.
+# Secrets are NEVER in S3: they are fetched from Secrets Manager here and written
+# into /opt/slice/.env and /opt/slice/grafana.env at boot. The Postgres password
+# is its own secret (slice/ec2-db), so it is never inlined into the rendered
+# user_data or the compose file — it is fetched here and passed to compose via the
+# shell environment (compose interpolates $${POSTGRES_PASSWORD} from it).
+#
+# Idempotent and safe to re-run: it re-syncs config, re-writes the env files, and
+# runs `docker compose up -d`. The named Postgres volume survives restarts, and the
+# gateway image self-applies DB migrations on startup (app/db.py).
 # ===========================================================================
 set -euxo pipefail
 exec > >(tee -a /var/log/slice-bootstrap.log) 2>&1
@@ -18,6 +26,8 @@ exec > >(tee -a /var/log/slice-bootstrap.log) 2>&1
 REGION="${aws_region}"
 ECR_REGISTRY="${ecr_registry}"
 SECRET_NAME="${app_secret_name}"
+DB_SECRET_NAME="${db_secret_name}"
+CONFIG_BUCKET="${config_bucket}"
 
 # --- Docker + jq -----------------------------------------------------------
 dnf install -y docker jq
@@ -46,9 +56,16 @@ aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
 # --- Pull secrets from Secrets Manager -------------------------------------
+# Two secrets: the app secret (Anthropic key, JWT, optional alert/scanner config)
+# and the DB secret (just the Postgres password, so it is never in git or state's
+# user_data).
 SECRET_JSON="$(aws secretsmanager get-secret-value \
   --region "$REGION" --secret-id "$SECRET_NAME" \
   --query SecretString --output text)"
+DB_SECRET_JSON="$(aws secretsmanager get-secret-value \
+  --region "$REGION" --secret-id "$DB_SECRET_NAME" \
+  --query SecretString --output text)"
+
 ANTHROPIC_API_KEY="$(echo "$SECRET_JSON" | jq -r '.ANTHROPIC_API_KEY')"
 JWT_SECRET="$(echo "$SECRET_JSON" | jq -r '.JWT_SECRET')"
 # Default to "" so a missing key writes an empty value instead of failing.
@@ -63,19 +80,45 @@ ALERT_EMAIL_TO="$(echo "$SECRET_JSON" | jq -r '.ALERT_EMAIL_TO // ""')"
 ALERT_FROM="$(echo "$SECRET_JSON" | jq -r '.ALERT_FROM // ""')"
 ALERTS_ENABLED="$(echo "$SECRET_JSON" | jq -r '.ALERTS_ENABLED // ""')"
 SCANNER_TEMPLATE_URL="$(echo "$SECRET_JSON" | jq -r '.SCANNER_TEMPLATE_URL // ""')"
+POSTGRES_PASSWORD="$(echo "$DB_SECRET_JSON" | jq -r '.POSTGRES_PASSWORD')"
 
-# --- Stack config in /opt/slice --------------------------------------------
+# --- Config from S3 --------------------------------------------------------
+# docker-compose.yml, Caddyfile, prometheus.yml, and the grafana/ provisioning
+# tree. No --delete, so the env files written below are never removed.
 install -d /opt/slice
+aws s3 sync "s3://$CONFIG_BUCKET/" /opt/slice/
 
-# .env — exact env var names the gateway expects (mirrored from the phase 15
-# docker-compose.yml), adjusted so DATABASE_URL/REDIS_URL point at the compose
-# services on this box.
+# Values the S3-synced files need at `docker compose up`: compose interpolates
+# $${POSTGRES_PASSWORD}/$${DB_USERNAME}/$${DB_NAME}/$${GATEWAY_IMAGE} in docker-compose.yml,
+# and passes API_DOMAIN/GRAFANA_DOMAIN into the caddy container (its Caddyfile reads
+# them with {$...}). Exported so `docker compose` sees them in the environment.
+export POSTGRES_PASSWORD
+export DB_USERNAME="${db_username}"
+export DB_NAME="${db_name}"
+export GATEWAY_IMAGE="${gateway_image}"
+export API_DOMAIN="${api_domain}"
+export GRAFANA_DOMAIN="${grafana_domain}"
+
+# --- Secret env files (never in S3) ----------------------------------------
+# .env — the env vars the gateway expects, DATABASE_URL embedding the Postgres password
+# fetched above (never rendered into user_data or the compose file). It ALSO carries the
+# six compose-interpolation vars (POSTGRES_PASSWORD/DB_USERNAME/DB_NAME/GATEWAY_IMAGE/
+# API_DOMAIN/GRAFANA_DOMAIN) plus AWS_REGION: the boot shell exports them (below/above),
+# but a later manual `docker compose` over SSM has no such exports — compose auto-reads
+# this .env, so those runs resolve $${...} too instead of failing with "no image specified".
 cat > /opt/slice/.env <<EOF
-DATABASE_URL=postgresql://${db_username}:${postgres_password}@postgres:5432/${db_name}
+DATABASE_URL=postgresql://$DB_USERNAME:$POSTGRES_PASSWORD@postgres:5432/$DB_NAME
 REDIS_URL=redis://redis:6379
 ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 JWT_SECRET=$JWT_SECRET
 GITHUB_OAUTH_CLIENT_ID=$GITHUB_OAUTH_CLIENT_ID
+AWS_REGION=$REGION
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+DB_USERNAME=$DB_USERNAME
+DB_NAME=$DB_NAME
+GATEWAY_IMAGE=$GATEWAY_IMAGE
+API_DOMAIN=$API_DOMAIN
+GRAFANA_DOMAIN=$GRAFANA_DOMAIN
 EOF
 # Optional alert + scanner settings: appended only when present in the secret, so an
 # unset key leaves the gateway on its own defaults instead of writing an empty override.
@@ -86,379 +129,15 @@ EOF
 [ -n "$SCANNER_TEMPLATE_URL" ] && echo "SCANNER_TEMPLATE_URL=$SCANNER_TEMPLATE_URL" >> /opt/slice/.env
 chmod 600 /opt/slice/.env
 
-# grafana.env (phase 17) — kept SEPARATE from the app .env so the gateway's
-# secrets (Anthropic key, JWT secret) never enter the Grafana container. Only the
-# GF_* config Grafana reads directly. Unquoted heredoc: $GRAFANA_ADMIN_PASSWORD is
-# a shell var expanded at boot, ${grafana_domain} is a Terraform template var.
+# grafana.env — kept SEPARATE from the app .env so the gateway's secrets never enter
+# the Grafana container. Only the GF_* config Grafana reads directly.
 cat > /opt/slice/grafana.env <<EOF
 GF_SECURITY_ADMIN_USER=admin
 GF_SECURITY_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
 GF_USERS_ALLOW_SIGN_UP=false
-GF_SERVER_ROOT_URL=https://${grafana_domain}
+GF_SERVER_ROOT_URL=https://$GRAFANA_DOMAIN
 EOF
 chmod 600 /opt/slice/grafana.env
-
-# docker-compose.yml — postgres 16 + redis 7 + gateway (ECR) + caddy 2.
-# The gateway runs migrations itself on startup (baked into the image), so the
-# schema is set up the same way the phase 15 compose does it.
-cat > /opt/slice/docker-compose.yml <<'EOF'
-services:
-  postgres:
-    image: postgres:16
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${db_username}
-      POSTGRES_PASSWORD: ${postgres_password}
-      POSTGRES_DB: ${db_name}
-    volumes:
-      - slice_pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${db_username} -d ${db_name}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  gateway:
-    image: ${gateway_image}
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    env_file: .env
-
-  # --- Phase 17 monitoring ---------------------------------------------------
-  # Prometheus scrapes the gateway and node_exporter over the internal compose
-  # network only (no published port). 7-day / ~1GB retention on a small box.
-  prometheus:
-    image: prom/prometheus
-    restart: unless-stopped
-    depends_on:
-      - gateway
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=7d"
-      - "--storage.tsdb.retention.size=1GB"
-    volumes:
-      - /opt/slice/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    mem_limit: 400m
-
-  # Host CPU/RAM/disk metrics. Reads the host rootfs read-only; no published port.
-  node_exporter:
-    image: prom/node-exporter
-    restart: unless-stopped
-    command:
-      - "--path.rootfs=/host"
-    pid: host
-    volumes:
-      - "/:/host:ro,rslave"
-    mem_limit: 64m
-
-  # Grafana behind Caddy at the grafana host. Datasource + dashboard are
-  # provisioned from files (no UI clicking); admin password + signup policy come
-  # from grafana.env. No published port — Caddy reverse-proxies grafana:3000.
-  grafana:
-    image: grafana/grafana
-    restart: unless-stopped
-    depends_on:
-      - prometheus
-    env_file: grafana.env
-    volumes:
-      - /opt/slice/grafana/provisioning:/etc/grafana/provisioning:ro
-      - grafana_data:/var/lib/grafana
-    mem_limit: 300m
-
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    depends_on:
-      - gateway
-      - grafana
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /opt/slice/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-
-volumes:
-  slice_pgdata:
-  caddy_data:
-  caddy_config:
-  prometheus_data:
-  grafana_data:
-EOF
-
-# Caddyfile — terminate HTTPS and reverse-proxy to the gateway container.
-# Phase 17: the api host blocks the /metrics path publicly (Prometheus scrapes the
-# gateway internally over the compose network, never through Caddy), and a second
-# site serves Grafana.
-cat > /opt/slice/Caddyfile <<'EOF'
-${api_domain} {
-    # /metrics is internal-only: return 404 to the public internet so the gateway's
-    # Prometheus endpoint is never exposed here. The internal scrape hits
-    # gateway:8080/metrics directly and bypasses Caddy entirely.
-    @metrics path /metrics /metrics/*
-    respond @metrics 404
-
-    reverse_proxy gateway:8080
-}
-
-${grafana_domain} {
-    reverse_proxy grafana:3000
-}
-EOF
-
-# --- Phase 17: Prometheus + Grafana provisioning ---------------------------
-# prometheus.yml — scrape the gateway and node_exporter over the compose network
-# every 15s. No Terraform template tokens here, so the quoted heredoc content
-# survives Terraform templating and bash untouched.
-cat > /opt/slice/prometheus.yml <<'EOF'
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  - job_name: slice-gateway
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["gateway:8080"]
-
-  - job_name: node
-    static_configs:
-      - targets: ["node_exporter:9100"]
-EOF
-
-# Grafana provisioning tree: datasource + dashboard provider + the dashboard model.
-install -d /opt/slice/grafana/provisioning/datasources
-install -d /opt/slice/grafana/provisioning/dashboards
-
-cat > /opt/slice/grafana/provisioning/datasources/datasource.yml <<'EOF'
-apiVersion: 1
-datasources:
-  - name: Prometheus
-    type: prometheus
-    uid: prometheus
-    access: proxy
-    url: http://prometheus:9090
-    isDefault: true
-    editable: false
-EOF
-
-cat > /opt/slice/grafana/provisioning/dashboards/dashboards.yml <<'EOF'
-apiVersion: 1
-providers:
-  - name: slice
-    orgId: 1
-    type: file
-    disableDeletion: false
-    updateIntervalSeconds: 30
-    allowUiUpdates: true
-    options:
-      path: /etc/grafana/provisioning/dashboards
-      foldersFromFilesStructure: false
-EOF
-
-# The "slice ops" dashboard model. Every target pins the datasource by uid
-# "prometheus" (matches the datasource above). Uses $__rate_interval (no braces)
-# and {{label}} legends so nothing collides with Terraform templating.
-cat > /opt/slice/grafana/provisioning/dashboards/slice-ops.json <<'EOF'
-{
-  "uid": "slice-ops",
-  "title": "slice ops",
-  "tags": ["slice"],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 1,
-  "refresh": "30s",
-  "time": { "from": "now-6h", "to": "now" },
-  "templating": { "list": [] },
-  "annotations": { "list": [] },
-  "panels": [
-    {
-      "id": 1,
-      "type": "timeseries",
-      "title": "Requests / min by provider",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "fieldConfig": { "defaults": { "unit": "reqpm" }, "overrides": [] },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (provider) (rate(slice_requests_total[$__rate_interval])) * 60",
-          "legendFormat": "{{provider}}"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "type": "stat",
-      "title": "Error rate (4xx/5xx)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
-      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(slice_requests_total{status=~\"[45]..\"}[$__rate_interval])) / clamp_min(sum(rate(slice_requests_total[$__rate_interval])), 0.0000001)",
-          "legendFormat": "error rate"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "type": "stat",
-      "title": "Cache hit rate",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
-      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(slice_cache_events_total{result=\"hit\"}[$__rate_interval])) / clamp_min(sum(rate(slice_cache_events_total[$__rate_interval])), 0.0000001)",
-          "legendFormat": "hit rate"
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "type": "timeseries",
-      "title": "Latency p50 / p95 (s)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(slice_request_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p50"
-        },
-        {
-          "refId": "B",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(slice_request_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p95"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "type": "timeseries",
-      "title": "Spend rate (USD / hour)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (provider) (rate(slice_cost_usd_total[$__rate_interval])) * 3600",
-          "legendFormat": "{{provider}}"
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "type": "timeseries",
-      "title": "Budget events (warn / block)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (kind) (increase(slice_budget_events_total[$__rate_interval]))",
-          "legendFormat": "{{kind}}"
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "type": "timeseries",
-      "title": "Router decisions / min",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (decision) (rate(slice_router_decisions_total[$__rate_interval])) * 60",
-          "legendFormat": "{{decision}}"
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "type": "timeseries",
-      "title": "Box CPU %",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100)",
-          "legendFormat": "cpu"
-        }
-      ]
-    },
-    {
-      "id": 9,
-      "type": "timeseries",
-      "title": "Box RAM %",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))",
-          "legendFormat": "ram"
-        }
-      ]
-    },
-    {
-      "id": 10,
-      "type": "timeseries",
-      "title": "Box disk % (root)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 - (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\"} * 100)",
-          "legendFormat": "disk"
-        }
-      ]
-    }
-  ]
-}
-EOF
 
 # --- Launch ----------------------------------------------------------------
 cd /opt/slice

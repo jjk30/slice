@@ -225,19 +225,19 @@ async def findings(request: Request, run_id: str | None = None):
         return _error(401, "Missing slice key. Send it as 'Authorization: Bearer slk_...'.")
     db = _get_db(request)
     if not _db_ready(db):
-        return {"run_id": None, "findings": []}
+        return _findings_response(None, [])
 
     scope = _storage_scope(account.id)
     try:
         if run_id is None:
             run_id = await db.latest_run_id(scope)
         if run_id is None:
-            return {"run_id": None, "findings": []}
+            return _findings_response(None, [])
         rows = await db.findings_for_run(scope, run_id)
     except Exception:  # noqa: BLE001 — a read failure degrades to empty, not a 500.
-        return {"run_id": run_id, "findings": []}
+        return _findings_response(run_id, [])
 
-    return {"run_id": run_id, "findings": [_finding_json(row) for row in rows]}
+    return _findings_response(run_id, [_finding_json(row) for row in rows])
 
 
 @router.get("/cost")
@@ -275,6 +275,29 @@ def _quick_create_url(external_id: str | None) -> str:
     if external_id:
         params["param_ExternalId"] = external_id
     return f"{base}?{urlencode(params)}"
+
+
+def _findings_response(run_id: str | None, findings: list[dict]) -> dict:
+    """The findings payload plus the total estimated monthly waste across these findings.
+
+    Phase 18c: cost-waste findings carry ``est_monthly_usd`` in their detail; security
+    findings do not (counted as 0). The sum lets a client show "you're wasting ~$X/mo".
+    """
+    return {
+        "run_id": run_id,
+        "findings": findings,
+        "estimated_monthly_waste_usd": _waste_sum(findings),
+    }
+
+
+def _waste_sum(findings: list[dict]) -> float:
+    total = 0.0
+    for finding in findings:
+        detail = finding.get("detail")
+        est = detail.get("est_monthly_usd") if isinstance(detail, dict) else None
+        if isinstance(est, (int, float)):
+            total += est
+    return round(total, 2)
 
 
 def _finding_json(row: dict) -> dict:
