@@ -1,6 +1,6 @@
 # slice
 
-slice is an AI cost gateway. Your apps point at slice instead of straight at the AI provider, and slice cuts the bill. It routes easy requests to cheaper models, caches repeats, caps spend per team, rate limits abuse, and shows everything on a live dashboard.
+slice is an AI and Cloud cost gateway. Your apps point at slice instead of straight at the AI provider, and slice cuts the bill. It routes easy requests to cheaper models, caches repeats, caps spend per team, rate limits abuse, and shows everything on a live dashboard.
 
 This is v2: a full rebuild in Python around agents, RAG, and evaluation. v1 (Node and TypeScript) proved the idea on real traffic. v2 rebuilds the brain.
 
