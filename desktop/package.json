@@ -1,0 +1,38 @@
+{
+  "name": "slice",
+  "productName": "slice",
+  "version": "0.1.0",
+  "description": "slice desktop. Get your AI bill under control.",
+  "author": "slice",
+  "main": "main.js",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron .",
+    "build": "electron-builder --mac --arm64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.sliceapp.desktop",
+    "productName": "slice",
+    "files": [
+      "main.js",
+      "preload.js",
+      "dashboard-preload.js",
+      "renderer/**/*",
+      "dashboard/**/*"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "identity": null
+    }
+  }
+}

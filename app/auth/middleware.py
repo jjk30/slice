@@ -32,7 +32,8 @@ from app.auth.resolver import Account, Authenticator, AuthUnavailable
 # Exact (method, path) pairs and path prefixes that need a slice key.
 LOCKED_ROUTES = {("POST", "/v1/messages"), ("POST", "/v1/chat/completions")}
 # Phase 18a adds /scanner/*: the AWS scanner endpoints need a valid slice key too.
-LOCKED_PREFIXES = ("/admin/", "/dashboard/", "/scanner/")
+# Phase 20 adds /account/*: the account profile read/write is per-account, key-required.
+LOCKED_PREFIXES = ("/admin/", "/dashboard/", "/scanner/", "/account/")
 
 # The single tenant everything runs under when AUTH_ENABLED is off (local dev mode).
 # Its id is None on purpose: the proxy writes every local row with a NULL account_id

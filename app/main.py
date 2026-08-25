@@ -33,6 +33,7 @@ from app.rag import retriever as rag_retriever
 from app.rag.prompt import extract_prompt_text
 from app.scanner import router as scanner_router
 from app.scanner import service as scanner_service
+from app.account.routes import router as account_router
 from app.redis_layer import CACHE_HEADER
 from app.router import RAG_HEADER, ROUTED_HEADER, route
 from app.rules import RulesCache
@@ -201,6 +202,7 @@ app.include_router(admin_router)
 app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(scanner_router)
+app.include_router(account_router)
 
 
 def get_client(app: FastAPI) -> httpx.AsyncClient:

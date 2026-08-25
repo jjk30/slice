@@ -178,7 +178,17 @@ ON CONFLICT (github_id) DO UPDATE
         email        = COALESCE(EXCLUDED.email, accounts.email)
 RETURNING id, github_id, github_login, email, created_at
 """
-SELECT_ACCOUNT = "SELECT id, github_id, github_login, email, created_at FROM accounts WHERE id = $1"
+SELECT_ACCOUNT = "SELECT id, github_id, github_login, email, whatsapp_number, created_at FROM accounts WHERE id = $1"
+# Phase 20: partial profile update. A NULL argument leaves that column untouched
+# (COALESCE), so PUT /account/profile can set email and/or whatsapp_number without
+# clobbering the other. Scoped to one account id — the caller's own.
+UPDATE_ACCOUNT_PROFILE = """
+UPDATE accounts
+SET email           = COALESCE($2, email),
+    whatsapp_number = COALESCE($3, whatsapp_number)
+WHERE id = $1
+RETURNING id, github_id, github_login, email, whatsapp_number, created_at
+"""
 INSERT_KEY = """
 INSERT INTO slice_keys (account_id, key_hash, key_prefix, name)
 VALUES ($1, $2, $3, $4)
@@ -948,6 +958,22 @@ class Database:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
             row = await connection.fetchrow(SELECT_ACCOUNT, int(account_id))
+        return dict(row) if row is not None else None
+
+    async def update_account_profile(
+        self, account_id: int, email: str | None = None, whatsapp_number: str | None = None
+    ) -> dict | None:
+        """Set the account's email and/or whatsapp_number (phase 20); returns the new row.
+
+        A None argument leaves that column unchanged, so a partial PUT never clobbers the
+        field it did not send. Returns None when no such account row exists.
+        """
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                UPDATE_ACCOUNT_PROFILE, int(account_id), email, whatsapp_number
+            )
         return dict(row) if row is not None else None
 
     async def create_key(
