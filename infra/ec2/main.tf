@@ -89,6 +89,25 @@ resource "aws_route53_record" "grafana" {
   records = [aws_eip.api.public_ip]
 }
 
+# Marketing site on the same box, same Elastic IP. Caddy serves the static website/
+# folder on the apex, and redirects www -> apex. Both are A records to the EIP so
+# Caddy's automatic HTTPS (Let's Encrypt) can complete the ACME challenge on each host.
+resource "aws_route53_record" "root" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = var.domain_name
+  type    = "A"
+  ttl     = 300
+  records = [aws_eip.api.public_ip]
+}
+
+resource "aws_route53_record" "www" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = "www.${var.domain_name}"
+  type    = "A"
+  ttl     = 300
+  records = [aws_eip.api.public_ip]
+}
+
 # ---------------------------------------------------------------------------
 # Security group: HTTP/HTTPS in from anywhere (Caddy needs 80 for ACME and 443
 # for traffic), everything out. No port 22 — access is via SSM Session Manager.

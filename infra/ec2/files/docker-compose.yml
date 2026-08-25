@@ -93,6 +93,10 @@ services:
       - "443:443"
     volumes:
       - /opt/slice/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The static marketing site. index.html + favicon.png are placed on the host at
+      # /opt/slice/website (pulled straight onto the box during deploy, not via the S3
+      # config sync); Caddy serves them read-only on sliceapp.dev.
+      - /opt/slice/website:/srv/slice-site:ro
       - caddy_data:/data
       - caddy_config:/config
 

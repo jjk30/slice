@@ -17,3 +17,13 @@ output "grafana_url" {
   description = "Phase 17: Grafana URL (behind Caddy; admin password from the GRAFANA_ADMIN_PASSWORD key in the app secret)."
   value       = "https://${var.grafana_subdomain}"
 }
+
+output "config_bucket" {
+  description = "Private S3 bucket holding the box's stack config (docker-compose.yml, Caddyfile, ...). Used by the website deploy to sync the updated Caddyfile/compose, and as the transfer bucket when the repo is private."
+  value       = aws_s3_bucket.config.bucket
+}
+
+output "website_url" {
+  description = "Public URL of the marketing site once the root A record and Caddy site block are live."
+  value       = "https://${var.domain_name}"
+}

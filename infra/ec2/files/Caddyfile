@@ -16,3 +16,19 @@
 {$GRAFANA_DOMAIN} {
     reverse_proxy grafana:3000
 }
+
+# Marketing site on the apex domain. The static website/ folder is mounted into this
+# container at /srv/slice-site (see docker-compose.yml); Caddy serves it and gets a
+# Let's Encrypt cert automatically once the root A record points here. The apex is the
+# product's own fixed domain, so it is written literally rather than read from the
+# environment (unlike the api/grafana hosts, which are reused across deploys).
+sliceapp.dev {
+    root * /srv/slice-site
+    file_server
+    encode zstd gzip
+}
+
+# Send www to the bare apex, keeping the path and query, as a permanent redirect.
+www.sliceapp.dev {
+    redir https://sliceapp.dev{uri} permanent
+}
