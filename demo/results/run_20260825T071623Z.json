@@ -1,0 +1,8 @@
+{
+  "stamp": "20260825T071623Z",
+  "baseline_model": "claude-sonnet-4-6",
+  "slice_base_url": "https://api.sliceapp.dev",
+  "aborted": "smoke failed: slice smoke failed: HTTP 401",
+  "direct": [],
+  "slice": []
+}
