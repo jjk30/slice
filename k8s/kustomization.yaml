@@ -1,0 +1,41 @@
+# Top-level kustomization for the slice stack, in the `slice` namespace.
+#
+# It lives at k8s/ (not k8s/base/) so the secretGenerator can read secrets.env,
+# which sits right here: kustomize refuses to read files above a kustomization's
+# own directory. The actual manifests are the plain YAML under base/.
+#
+# Deploy with:   kubectl apply -k k8s
+# Render only:   kubectl kustomize k8s
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: slice
+
+resources:
+  - base/namespace.yaml
+  - base/gateway-config.yaml
+  - base/postgres.yaml
+  - base/redis.yaml
+  - base/gateway.yaml
+  - base/gateway-hpa.yaml
+
+# The Secret is generated from k8s/secrets.env, which is gitignored — nothing real
+# is ever committed. Copy k8s/secrets.env.example to k8s/secrets.env and fill it in
+# before deploying. The generated name gets a content hash suffix so any change to
+# the secret rolls the gateway pods; kustomize rewrites the references in the
+# gateway Deployment and the postgres StatefulSet to the hashed name automatically.
+secretGenerator:
+  - name: slice-secrets
+    envs:
+      - secrets.env
+
+# Local image loaded into the cluster by `make kind-load`. Override newName /
+# newTag in an overlay to deploy the ECR image instead, e.g.
+#   images:
+#     - name: slice-gateway
+#       newName: <acct>.dkr.ecr.us-east-1.amazonaws.com/slice-gateway
+#       newTag: latest
+images:
+  - name: slice-gateway
+    newName: slice-gateway
+    newTag: local

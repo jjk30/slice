@@ -1,0 +1,99 @@
+# Postgres: the gateway's request log / rules / auth store. One replica, its data
+# on a PersistentVolumeClaim so a pod restart keeps the data.
+#
+# A StatefulSet (not a Deployment) because the pod owns a piece of durable state:
+# it gets a stable name (postgres-0) and its own PVC from volumeClaimTemplates,
+# and the StatefulSet never runs two pods against the same volume.
+#
+# The gateway self-applies migrations on startup (app/db.py), so there is no
+# migration Job here — a fresh empty database is enough.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: slice
+  labels:
+    app: postgres
+spec:
+  # Headless (clusterIP: None): required backing service for the StatefulSet, and
+  # the name `postgres` still resolves to the pod, so DATABASE_URL can point at
+  # postgresql://...@postgres:5432/slice.
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: slice
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            # User and database name are not secret; the password is.
+            - name: POSTGRES_USER
+              value: slice
+            - name: POSTGRES_DB
+              value: slice
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: slice-secrets
+                  key: POSTGRES_PASSWORD
+            # Postgres refuses to init a data directory that already has a
+            # lost+found (some volumes do); a subdir sidesteps that.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "slice", "-d", "slice"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "slice", "-d", "slice"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # No storageClassName: use the cluster default. On kind that is the
+        # built-in `standard` (local-path) provisioner.
+        resources:
+          requests:
+            storage: 1Gi

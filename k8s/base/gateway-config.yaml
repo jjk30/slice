@@ -1,0 +1,21 @@
+# Non-secret gateway configuration. Everything here is safe to read in `git` and
+# safe to print in `kubectl describe`. Secrets (API keys, JWT signing key, the
+# DATABASE_URL that carries the db password) live in the generated Secret instead
+# — see kustomization.yaml's secretGenerator and secrets.env.example.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slice-config
+  namespace: slice
+data:
+  # Point at the in-cluster services, not localhost.
+  REDIS_URL: redis://redis:6379
+  # AWS region for the phase-18 cost scanner (Cost Explorer is global; this is the
+  # region its resource calls use).
+  AWS_REGION: us-east-1
+  # From-address for alert emails (Resend). Overridden per-deploy as needed.
+  ALERT_FROM: onboarding@resend.dev
+  # Public base URL the gateway advertises (OAuth callback, links in alerts).
+  # Change to your real hostname in an overlay; localhost is fine behind
+  # `make port-forward`.
+  SLICE_BASE_URL: http://localhost:8080

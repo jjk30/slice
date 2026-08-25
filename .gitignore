@@ -10,3 +10,4 @@ dist/
 .claude/
 pipeline/
 rag_store/
+k8s/secrets.env

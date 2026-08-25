@@ -1,0 +1,59 @@
+# Redis: the gateway's cache, budget counters, and rate-limit counters. All of it
+# is disposable — if Redis is unreachable every check fails open and the gateway
+# keeps serving — so this is a plain Deployment with no volume. A restart starts
+# it empty and the gateway refills it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: slice
+  labels:
+    app: redis
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: slice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7
+          ports:
+            - containerPort: 6379
+              name: redis
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+              cpu: 250m

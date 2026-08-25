@@ -1,0 +1,16 @@
+# A single-node kind cluster is plenty for the slice stack. One node runs the
+# control plane and the workloads together.
+#
+# The extraPortMappings expose the node's port 30080 on the host, so if you swap
+# the gateway Service to a NodePort on 30080 you can reach it at localhost:30080
+# without a port-forward. The default deploy uses ClusterIP + `make port-forward`
+# instead, so this mapping is optional convenience.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: slice
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP

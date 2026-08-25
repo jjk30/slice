@@ -1,0 +1,6 @@
+# Everything slice runs in its own namespace so it is easy to see and easy to
+# delete as a unit (`kubectl delete namespace slice`).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: slice
