@@ -15,6 +15,10 @@ import LoginScreen from './components/LoginScreen.vue'
 // Phase 12: the dashboard is locked. Until a key is entered (or if the gateway rejects
 // it) the login screen is shown instead of the dashboard. ``authed`` reactively tracks
 // whether we currently hold a key; a 401 anywhere clears it (see api.js) and flips back.
+// The header logo. Built from Vite's BASE_URL ('./' — see vite.config.js) so it stays
+// relative: under the desktop app's file:// origin a root-absolute '/favicon.png' 404s.
+const logoSrc = import.meta.env.BASE_URL + 'favicon.png'
+
 const authed = computed(() => hasKey())
 const accountLogin = computed(() => summary.value?.account?.login ?? teams.value?.budget?.account ?? null)
 
@@ -233,7 +237,7 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
   <div v-else class="page">
     <header class="header">
       <div class="brand">
-        <img class="brand-logo" src="/favicon.png" alt="" width="24" height="24" />
+        <img class="brand-logo" :src="logoSrc" alt="" width="24" height="24" />
         <h1 class="brand-name">slice</h1>
         <span class="brand-path">/ dashboard</span>
       </div>

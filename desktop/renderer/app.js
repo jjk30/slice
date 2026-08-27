@@ -13,7 +13,7 @@ const MOCK = {
   },
   async devicePoll () { return { status: 'pending', interval: 5 } },
   async profileGet () {
-    return { ok: true, profile: { login: params.get('login') || 'jjk30', email: params.get('email') || '', whatsapp_number: '', aws_connected: params.get('aws') === '1' } }
+    return { ok: true, profile: { login: params.get('login') || 'jjk30', email: params.get('email') || '', whatsapp_number: params.get('whatsapp') || '', aws_connected: params.get('aws') === '1' } }
   },
   async profilePut (patch) { return { ok: true, profile: patch } },
   async awsConnect () { return { ok: true } },
@@ -100,10 +100,31 @@ async function enterSetup () {
     $('hello-line').textContent = `Good ${tod}, ${state.login}.`
     $('email').value = res.profile.email || ''
     $('whatsapp').value = res.profile.whatsapp_number || ''
+    initReach(res.profile)
     reflectAws(res.profile.aws_connected)
   }
   show('setup')
 }
+
+// The "Reach me by" checkboxes. A channel with a saved value defaults checked; a fresh
+// account (no values yet) defaults to email only. Unchecking hides that field, and its
+// value is left out of the save (see save()), so it is never sent.
+function initReach (profile) {
+  const hasEmail = Boolean(profile.email)
+  const hasWhatsapp = Boolean(profile.whatsapp_number)
+  const fresh = !hasEmail && !hasWhatsapp
+  $('use-email').checked = hasEmail || fresh
+  $('use-whatsapp').checked = hasWhatsapp
+  syncReach()
+}
+
+function syncReach () {
+  $('email-field').classList.toggle('hidden', !$('use-email').checked)
+  $('whatsapp-field').classList.toggle('hidden', !$('use-whatsapp').checked)
+}
+
+$('use-email').addEventListener('change', syncReach)
+$('use-whatsapp').addEventListener('change', syncReach)
 
 function reflectAws (connected) {
   const btn = $('aws-btn')
@@ -129,16 +150,22 @@ const E164_RE = /^\+[1-9]\d{1,14}$/
 
 async function save () {
   setErr('')
-  const email = $('email').value.trim()
-  const whatsapp = $('whatsapp').value.trim()
   const patch = {}
-  if (email) {
-    if (!EMAIL_RE.test(email)) { setErr('That email does not look right.'); return }
-    patch.email = email
+  // Only a checked channel is saved. Unchecked ones are omitted from the patch, so a
+  // partial PUT never sends (or clobbers) a hidden field.
+  if ($('use-email').checked) {
+    const email = $('email').value.trim()
+    if (email) {
+      if (!EMAIL_RE.test(email)) { setErr('That email does not look right.'); return }
+      patch.email = email
+    }
   }
-  if (whatsapp) {
-    if (!E164_RE.test(whatsapp)) { setErr('Use an international number, like +14155552671.'); return }
-    patch.whatsapp_number = whatsapp
+  if ($('use-whatsapp').checked) {
+    const whatsapp = $('whatsapp').value.trim()
+    if (whatsapp) {
+      if (!E164_RE.test(whatsapp)) { setErr('Use an international number, like +14155552671.'); return }
+      patch.whatsapp_number = whatsapp
+    }
   }
   if (Object.keys(patch).length === 0) { finish(); return }
 

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip } from 'chart.js'
-import { money, integer } from '../format.js'
+import { money, integer, providerOf, providerLabel } from '../format.js'
 
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip)
 
@@ -15,6 +15,8 @@ const props = defineProps({
 const models = computed(() => (props.data ? props.data.models || [] : null))
 const rows = computed(() => (models.value || []).map((m) => ({
   label: m.model === null || m.model === undefined ? '(no model)' : m.model,
+  provider: providerOf(m.model),
+  providerName: providerLabel(m.model),
   requests: m.requests,
   spend: m.spend_usd,
   // Served requests on this model whose price is unknown: their spend is NOT in
@@ -208,7 +210,9 @@ onBeforeUnmount(() => {
           </thead>
           <tbody>
             <tr v-for="r in rows" :key="r.label">
-              <td class="mono model-cell" :title="r.label">{{ r.label }}</td>
+              <td class="mono model-cell" :title="r.label">
+                <span class="pdot" :class="`pdot--${r.provider}`" :title="r.providerName" aria-hidden="true"></span>{{ r.label }}
+              </td>
               <td class="num mono">{{ integer(r.requests) }}</td>
               <td class="num mono">
                 {{ money(r.spend) }}

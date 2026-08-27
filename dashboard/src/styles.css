@@ -36,6 +36,13 @@
   --tint-amber: #F6ECD9;
   --tint-amber-line: #E9D6B4;
   --muted-on-tint: #5E574E;
+  /* Provider identity dots (Recent calls, Spend by model). Distinct hues, not
+     brand logos; deliberately apart from the status-pill teal/amber/cherry. */
+  --prov-anthropic: #C6603D;
+  --prov-openai: #10876E;
+  --prov-google: #3B7BC4;
+  --prov-nvidia: #6FA800;
+  --prov-other: #9A8F7E;
 
   --display: 'Bricolage Grotesque', sans-serif;
   --body: 'Inter', sans-serif;
@@ -75,6 +82,12 @@ html.dark {
   --tint-amber: #332A1C;
   --tint-amber-line: #4E3E24;
   --muted-on-tint: #B5ADA1;
+  /* Lifted a touch so the dots keep their identity on the ink background. */
+  --prov-anthropic: #E0805C;
+  --prov-openai: #2CB89A;
+  --prov-google: #6AA6E6;
+  --prov-nvidia: #97C93B;
+  --prov-other: #B5AB99;
 }
 
 *,
@@ -460,6 +473,28 @@ a {
   background: var(--surface);
   border-color: transparent;
 }
+
+/* ---------- provider dots ---------- */
+
+/* A small colour dot prefixing a model name to signal its provider at a glance
+   (Recent calls, Spend by model). Colour only carries identity; the provider name
+   is always in the dot's title and the model id sits right beside it. */
+.pdot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+  flex: 0 0 auto;
+  vertical-align: baseline;
+  background: var(--prov-other);
+}
+
+.pdot--anthropic { background: var(--prov-anthropic); }
+.pdot--openai { background: var(--prov-openai); }
+.pdot--google { background: var(--prov-google); }
+.pdot--nvidia { background: var(--prov-nvidia); }
+.pdot--other { background: var(--prov-other); }
 
 .badge-cached {
   display: inline-block;

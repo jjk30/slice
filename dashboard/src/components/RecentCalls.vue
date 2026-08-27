@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { money, time, integer } from '../format.js'
+import { money, time, integer, providerOf, providerLabel } from '../format.js'
 
 // `rows` are normalized {key, created_at, team, model, routed_from, status,
 // cost, cached}; null while loading. Newest first, already capped by the parent.
@@ -53,6 +53,12 @@ function statusTone(s) {
             <td class="mono muted" :title="r.created_at ?? ''">{{ time(r.created_at) }}</td>
             <td class="mono">{{ r.team ?? '—' }}</td>
             <td class="mono">
+              <span
+                class="pdot"
+                :class="`pdot--${providerOf(r.model)}`"
+                :title="providerLabel(r.model)"
+                aria-hidden="true"
+              ></span>
               <template v-if="r.routed_from">
                 <span class="muted">{{ r.routed_from }}</span>
                 <span class="arrow" aria-hidden="true">→</span>

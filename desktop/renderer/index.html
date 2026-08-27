@@ -38,11 +38,17 @@
     <p class="sub">So slice can reach you when it matters.</p>
 
     <div class="card">
-      <div class="field">
+      <div class="reach">
+        <span class="reach-label">Reach me by:</span>
+        <label class="check"><input type="checkbox" id="use-email"> Email</label>
+        <label class="check"><input type="checkbox" id="use-whatsapp"> WhatsApp</label>
+      </div>
+
+      <div class="field" id="email-field">
         <label for="email">Email</label>
         <input type="email" id="email" placeholder="you@company.com" autocomplete="off" spellcheck="false">
       </div>
-      <div class="field">
+      <div class="field" id="whatsapp-field">
         <label for="whatsapp">WhatsApp number</label>
         <input type="text" id="whatsapp" placeholder="+14155552671" autocomplete="off" spellcheck="false">
         <p class="note">WhatsApp alerts are coming soon, saved for when they arrive.</p>
@@ -50,7 +56,14 @@
 
       <div class="aws-row">
         <div class="t">
-          <b>Connect AWS</b>
+          <div class="aws-head">
+            <svg class="aws-mark" viewBox="0 0 72 44" role="img" aria-label="AWS">
+              <text class="aws-word" x="36" y="22" text-anchor="middle">aws</text>
+              <path class="aws-smile" d="M10 32 C 26 41, 46 41, 60 31" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+              <path class="aws-arrow" d="M55 27.5 L63 30 L57.5 35.5 Z" fill="currentColor"/>
+            </svg>
+            <b>Connect AWS</b>
+          </div>
           <span id="aws-sub">Watch cloud spend and mistakes, read only.</span>
         </div>
         <button class="btn ghost" id="aws-btn">

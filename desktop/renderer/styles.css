@@ -147,6 +147,39 @@ p.sub { font-size: 14.5px; color: var(--muted); margin-top: 8px; }
 }
 .field { margin-bottom: 18px; }
 .field:last-child { margin-bottom: 0; }
+.field.hidden { display: none; }
+
+/* "Reach me by" channel toggles, above the two fields. */
+.reach {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed var(--rule);
+}
+.reach-label {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--teal);
+  cursor: pointer;
+}
 label {
   display: block;
   font-family: var(--mono);
@@ -185,6 +218,17 @@ input:focus { border-color: var(--teal); }
 .aws-row .t { font-size: 14px; }
 .aws-row .t b { font-weight: 600; }
 .aws-row .t span { display: block; font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+.aws-head { display: flex; align-items: center; gap: 9px; }
+/* Monochrome "aws" wordmark: ink letters + the signature smile, in currentColor.
+   Not the full-colour trademark art, just a small identifying mark. */
+.aws-mark { width: 30px; height: 18px; display: block; color: var(--ink); flex: 0 0 auto; }
+.aws-word {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: -.02em;
+  fill: currentColor;
+}
 .aws-ok { font-family: var(--mono); font-size: 12.5px; color: var(--teal); }
 
 .actions { margin-top: 24px; display: flex; flex-direction: column; align-items: center; gap: 4px; }

@@ -8,7 +8,7 @@
 // authenticated /account and /scanner calls. The renderer talks to this over a tiny,
 // explicit IPC bridge (see preload.js) and never sees the key.
 
-const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, nativeImage } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -87,6 +87,20 @@ function errorMessage (payload, fallback) {
   if (e && typeof e === 'object' && e.message) return e.message
   if (typeof e === 'string') return e
   return fallback
+}
+
+// --- dock icon (dev only) -----------------------------------------------------------
+
+// Running `npm run dev` launches unpackaged Electron, whose Dock icon is the default
+// Electron atom. Swap in the slice cake so the dev run looks like the product. macOS
+// only — app.dock is undefined on Windows/Linux, so this is a no-op there. The packaged
+// .app is unaffected: electron-builder bakes build/icon.icns into the bundle instead.
+function setDevDockIcon () {
+  if (process.platform !== 'darwin' || !app.dock) return
+  try {
+    const icon = nativeImage.createFromPath(path.join(__dirname, 'renderer', 'cake.png'))
+    if (!icon.isEmpty()) app.dock.setIcon(icon)
+  } catch { /* best effort: keep the default icon */ }
 }
 
 // --- windows ------------------------------------------------------------------------
@@ -231,6 +245,7 @@ ipcMain.on('get-slice-key', (event) => { event.returnValue = sliceKey() })
 // --- lifecycle ----------------------------------------------------------------------
 
 app.whenReady().then(() => {
+  setDevDockIcon()
   createFlowWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createFlowWindow()
