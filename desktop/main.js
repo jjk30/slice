@@ -92,13 +92,16 @@ function errorMessage (payload, fallback) {
 // --- dock icon (dev only) -----------------------------------------------------------
 
 // Running `npm run dev` launches unpackaged Electron, whose Dock icon is the default
-// Electron atom. Swap in the slice cake so the dev run looks like the product. macOS
-// only — app.dock is undefined on Windows/Linux, so this is a no-op there. The packaged
-// .app is unaffected: electron-builder bakes build/icon.icns into the bundle instead.
+// Electron atom. Swap in the native-style slice tile so the dev run looks like the
+// product. It uses build/icon-1024.png — the same rounded-rectangle master the packaged
+// build/icon.icns is generated from — so the dev Dock matches the shipped icon (rounded
+// tile, not a hard-edged square). macOS only: app.dock is undefined on Windows/Linux, so
+// this is a no-op there. The packaged .app is unaffected: electron-builder bakes
+// build/icon.icns into the bundle instead.
 function setDevDockIcon () {
   if (process.platform !== 'darwin' || !app.dock) return
   try {
-    const icon = nativeImage.createFromPath(path.join(__dirname, 'renderer', 'cake.png'))
+    const icon = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon-1024.png'))
     if (!icon.isEmpty()) app.dock.setIcon(icon)
   } catch { /* best effort: keep the default icon */ }
 }
