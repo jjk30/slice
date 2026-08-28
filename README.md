@@ -87,13 +87,16 @@ Routing plus cache reconcile exactly to the $0.117186 saved. Reproduce it with [
 
 ### Path 1: point an existing tool at the hosted gateway
 
-Get a key by logging in through the GitHub device flow. The console script is installed by `pip install -e .`; if it is not on your PATH, use the module form.
+Install the CLI and log in through the GitHub device flow:
 
 ```bash
-python -m app.cli login
+pip install slice-gateway
+slice login
 ```
 
-That mints a slice key (`slk_live_...`) and saves it to `~/.slice/config.json`. Point Claude Code, or any Anthropic client, at slice with three variables:
+Inside a clone of this repo you can run the module form instead: `python -m app.cli login`.
+
+Login mints a slice key (`slk_live_...`) and saves it to `~/.slice/config.json`. Point Claude Code, or any Anthropic client, at slice with three variables:
 
 ```bash
 export ANTHROPIC_BASE_URL=https://api.sliceapp.dev
@@ -113,7 +116,7 @@ curl https://api.sliceapp.dev/v1/messages \
   -d '{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
-Run `python -m app.cli use anthropic` (or `openai`, `curl`, `claude-code`) to print the exact lines for your tool.
+Run `slice use anthropic` (or `openai`, `curl`, `claude-code`) to print the exact lines for your tool. In a repo clone, `python -m app.cli use ...` works the same way.
 
 ### Path 2: self-host
 

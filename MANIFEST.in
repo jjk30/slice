@@ -1,0 +1,25 @@
+# The slice-gateway distribution is the CLI only. Keep the sdist to the CLI module,
+# its PyPI readme, the license, and build metadata. Nothing from the server repo.
+prune tests
+prune app
+prune infra
+prune k8s
+prune dashboard
+prune desktop
+prune website
+prune migrations
+prune demo
+prune scripts
+prune guardrails
+prune docs
+prune mcp_server
+prune gateway
+prune pipeline
+prune rag_store
+exclude README.md
+exclude requirements.txt
+exclude docker-compose.yml
+exclude Dockerfile
+exclude pytest.ini
+global-exclude *.pyc
+global-exclude .DS_Store

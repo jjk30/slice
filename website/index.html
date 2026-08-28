@@ -380,7 +380,7 @@
 <div class="wrap">
   <section class="block" id="how">
     <div class="h-mark">get started</div>
-    <h2>From clone to first request.</h2>
+    <h2>From install to first request.</h2>
     <p class="say">About three minutes. You sign in once with GitHub, then point your tools at slice.</p>
 
     <p class="legend"><span class="sw">(like&nbsp;this)</span> &nbsp;means a value you fill in with your own. Everything else you can copy as-is.</p>
@@ -391,10 +391,10 @@
         <div class="no">01</div>
         <div class="gb">
           <h4>Install slice</h4>
-          <p>slice is a small open-source package. Clone the repo and install it, and the <code>slice</code> command lands on your path.</p>
+          <p>The slice CLI is a small package on PyPI. Install it and the <code>slice</code> command lands on your path.</p>
           <div class="term">
             <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span></div>
-<pre><span class="dim">$</span> git clone https://github.com/jjk30/slice.git &amp;&amp; cd slice &amp;&amp; pip install -e .</pre>
+<pre><span class="dim">$</span> pip install slice-gateway</pre>
           </div>
         </div>
       </div>
@@ -426,11 +426,14 @@
         <div class="no">03</div>
         <div class="gb">
           <h4>Point your tools at slice</h4>
-          <p>Set one environment variable so your AI tools send their calls through slice. From here slice routes, caches, and meters every request. No key to paste, your login already set that up.</p>
+          <p>Set three environment variables so your AI tools send their calls through slice. From here slice routes, caches, and meters every request.</p>
           <div class="term">
             <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span></div>
-<pre><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span></pre>
+<pre><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
+<span class="kw">export</span> ANTHROPIC_API_KEY=<span class="ph">(your Anthropic key)</span>
+<span class="kw">export</span> ANTHROPIC_AUTH_TOKEN=<span class="ph">(your slice key)</span></pre>
           </div>
+          <p style="font-size:13.5px;color:var(--muted);margin-top:10px;line-height:1.5"><code>ANTHROPIC_AUTH_TOKEN</code> goes out as <code>Authorization: Bearer</code>, which is where slice reads its key. <code>ANTHROPIC_API_KEY</code> stays your own Anthropic key in <code>x-api-key</code>, and slice forwards it upstream.</p>
         </div>
       </div>
 
@@ -444,7 +447,7 @@
 
     </div>
 
-    <p class="conn-note"><b>Open source.</b> slice is yours to read line by line, or to run on your own box. It only reads the calls passing through it, never your codebase.</p>
+    <p class="conn-note"><b>Open source.</b> slice is yours to read line by line, or to <a href="https://github.com/jjk30/slice" target="_blank" rel="noopener">run on your own box</a>. It only reads the calls passing through it, never your codebase.</p>
   </section>
 
   <!-- WHAT IT DOES -->
@@ -546,7 +549,7 @@
 <div class="wrap">
   <section class="final">
     <h2>Try it. Decide for yourself.</h2>
-    <p>Free and open source. Three commands from clone to your first metered request.</p>
+    <p>Free and open source. Three commands from install to your first metered request.</p>
     <div class="act" style="margin-bottom:0">
       <a class="btn" href="#how">
         <svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>Read the quickstart
