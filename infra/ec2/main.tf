@@ -320,6 +320,36 @@ resource "aws_iam_role_policy" "backups" {
 }
 
 # ---------------------------------------------------------------------------
+# Access to the CLI-created nightly dump bucket `slice-db-backups-jjk30`. That
+# bucket is NOT managed by Terraform (created out of band, kept that way), so it
+# is referenced here by its literal ARN rather than a resource attribute. The
+# box's nightly cron dumps compose Postgres and uploads slice-YYYY-MM-DD.sql.gz
+# here; the hand-run pipeline failed only on AccessDenied because the instance
+# role could not PutObject. Scope: read/write objects in this one bucket and list
+# it — nothing broader.
+# ---------------------------------------------------------------------------
+data "aws_iam_policy_document" "db_backups" {
+  statement {
+    sid       = "RwDbBackupObjects"
+    effect    = "Allow"
+    actions   = ["s3:PutObject", "s3:GetObject"]
+    resources = ["arn:aws:s3:::slice-db-backups-jjk30/*"]
+  }
+  statement {
+    sid       = "ListDbBackupBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = ["arn:aws:s3:::slice-db-backups-jjk30"]
+  }
+}
+
+resource "aws_iam_role_policy" "db_backups" {
+  name   = "${var.project_name}-ec2-db-backups-jjk30"
+  role   = aws_iam_role.instance.id
+  policy = data.aws_iam_policy_document.db_backups.json
+}
+
+# ---------------------------------------------------------------------------
 # Phase 18a: read-only permissions for the AWS security scanner. slice scans the
 # account it runs in — public S3, world-open security groups, unencrypted storage,
 # old IAM keys / direct AdministratorAccess — and pulls Cost Explorer spend.
