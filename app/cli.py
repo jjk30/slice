@@ -3,13 +3,13 @@
 Installed as a console entry point via pyproject.toml, so ``pip install -e .`` gives the
 ``slice`` command. Three subcommands:
 
-- ``slice login`` — runs the GitHub device flow against the gateway's ``/auth/device/*``
+- ``slice login``, runs the GitHub device flow against the gateway's ``/auth/device/*``
   endpoints (the gateway holds the OAuth client id and talks to GitHub; the CLI never
   does). It shows the user code and URL, opens the browser, polls on the interval, and on
   success saves the slice key and JWT to ``~/.slice/config.json`` (chmod 600).
-- ``slice init`` — confirms the saved config, records the default base URL, and prints
+- ``slice init``, confirms the saved config, records the default base URL, and prints
   the current account status (a ``/auth/me`` call with the saved key).
-- ``slice use <tool>`` — prints the env lines that point a tool at slice. For tools where
+- ``slice use <tool>``, prints the env lines that point a tool at slice. For tools where
   the caller controls headers (SDK, curl) that is the whole story; for ``claude-code`` it
   prints the three variables (base URL, your Anthropic key in ANTHROPIC_API_KEY, your slice
   key in ANTHROPIC_AUTH_TOKEN) that run it end to end through slice.
@@ -30,7 +30,7 @@ from pathlib import Path
 import httpx
 import typer
 
-app = typer.Typer(add_completion=False, help="slice — log in and point your tools at the gateway.")
+app = typer.Typer(add_completion=False, help="slice. Log in and point your tools at the gateway.")
 
 CONFIG_DIR = Path.home() / ".slice"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -98,7 +98,7 @@ def login(
         if open_browser:
             try:
                 webbrowser.open(verification_uri)
-            except Exception:  # noqa: BLE001 — a headless box just shows the URL above.
+            except Exception:  # noqa: BLE001, a headless box just shows the URL above.
                 pass
 
         typer.echo("Waiting for you to authorize in the browser…")

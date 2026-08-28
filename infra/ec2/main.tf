@@ -268,6 +268,58 @@ resource "aws_iam_role_policy" "config_bucket" {
 }
 
 # ---------------------------------------------------------------------------
+# Nightly Postgres backup bucket. The box runs infra/ec2/scripts/backup.sh from
+# cron, dumps the compose Postgres, and uploads slice-YYYY-MM-DD.dump here. All
+# public access is blocked, and objects expire after 30 days. The bucket name
+# carries no secret (project name plus account id, same scheme as the config
+# bucket).
+# ---------------------------------------------------------------------------
+resource "aws_s3_bucket" "backups" {
+  bucket = "${var.project_name}-ec2-backups-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_public_access_block" "backups" {
+  bucket                  = aws_s3_bucket.backups.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Expire backups after 30 days. The empty filter applies the rule to every object.
+resource "aws_s3_bucket_lifecycle_configuration" "backups" {
+  bucket = aws_s3_bucket.backups.id
+
+  rule {
+    id     = "expire-after-30-days"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = 30
+    }
+  }
+}
+
+# Let the box write backup objects to this one bucket, nothing else. Attached to
+# the instance's existing role (the one with SSM), so no new role is created.
+data "aws_iam_policy_document" "backups" {
+  statement {
+    sid       = "PutBackupObjects"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.backups.arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "backups" {
+  name   = "${var.project_name}-ec2-backups-put"
+  role   = aws_iam_role.instance.id
+  policy = data.aws_iam_policy_document.backups.json
+}
+
+# ---------------------------------------------------------------------------
 # Phase 18a: read-only permissions for the AWS security scanner. slice scans the
 # account it runs in — public S3, world-open security groups, unencrypted storage,
 # old IAM keys / direct AdministratorAccess — and pulls Cost Explorer spend.
@@ -422,8 +474,10 @@ resource "aws_instance" "app" {
     db_username     = var.db_username
   })
 
-  # Re-run user data if the template's rendered output changes.
-  user_data_replace_on_change = true
+  # Replacement guard: a change to the rendered user_data updates the instance in
+  # place and never replaces it. This protects the live box, its Postgres volume,
+  # and its Elastic IP association from being destroyed by an edit to user_data.
+  user_data_replace_on_change = false
 
   root_block_device {
     volume_type = "gp3"

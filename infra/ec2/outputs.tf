@@ -27,3 +27,8 @@ output "website_url" {
   description = "Public URL of the marketing site once the root A record and Caddy site block are live."
   value       = "https://${var.domain_name}"
 }
+
+output "backup_bucket" {
+  description = "Private S3 bucket that the nightly Postgres backup script uploads slice-YYYY-MM-DD.dump into. Use this name in the cron line's SLICE_BACKUP_BUCKET."
+  value       = aws_s3_bucket.backups.bucket
+}
