@@ -11,8 +11,8 @@ Installed as a console entry point via pyproject.toml, so ``pip install -e .`` g
   the current account status (a ``/auth/me`` call with the saved key).
 - ``slice use <tool>`` — prints the env lines that point a tool at slice. For tools where
   the caller controls headers (SDK, curl) that is the whole story; for ``claude-code`` it
-  prints the base URL and says plainly that full end-to-end needs the provider-key vault,
-  which is the next step — it does not pretend to be complete.
+  prints the three variables (base URL, your Anthropic key in ANTHROPIC_API_KEY, your slice
+  key in ANTHROPIC_AUTH_TOKEN) that run it end to end through slice.
 
 The CLI talks only to the gateway over HTTP; it holds no secrets of its own. The saved
 slice key is a bearer credential, so the config file is written 0600.
@@ -206,15 +206,12 @@ def use(tool: str = typer.Argument(..., help="Which tool: anthropic | openai | c
         typer.echo('  -d \'{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}\'')
     elif name in {"claude-code", "claudecode", "cc"}:
         typer.echo(f"export ANTHROPIC_BASE_URL={target}")
-        typer.echo("")
-        typer.secho(
-            "Note: pointing Claude Code fully through slice needs the provider-key vault, "
-            "which is the next step. Today slice identifies you by your slice key but does "
-            "not yet hold your Anthropic key, so Claude Code cannot authenticate to the "
-            "provider through slice end-to-end. The base URL above is set; the rest lands "
-            "with the vault.",
-            fg=typer.colors.YELLOW,
-        )
+        typer.echo("export ANTHROPIC_API_KEY=sk-ant-api...     # your own Anthropic key")
+        typer.echo(f"export ANTHROPIC_AUTH_TOKEN={key}   # your slice key, from slice login")
+        typer.echo("# ANTHROPIC_AUTH_TOKEN goes out as Authorization: Bearer, where slice reads its key.")
+        typer.echo("# ANTHROPIC_API_KEY stays your own Anthropic key in x-api-key; slice forwards it.")
+        typer.echo("# Claude Code notes that env auth takes precedence over your claude.ai login while")
+        typer.echo("# these are set, which is expected; unset the three variables to go back to normal.")
     else:
         _fail(f"Unknown tool {tool!r}. Try: anthropic | openai | curl | claude-code")
 
