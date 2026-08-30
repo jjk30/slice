@@ -426,10 +426,12 @@
         <div class="no">03</div>
         <div class="gb">
           <h4>Point your tools at slice</h4>
-          <p>Set three environment variables so your AI tools send their calls through slice. From here slice routes, caches, and meters every request.</p>
+          <p>Run <code>slice use claude-code</code>. It prints three environment variables. Set them so your AI tools send their calls through slice, which routes, caches, and meters every request.</p>
           <div class="term">
             <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span></div>
-<pre><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
+<pre><span class="dim">$</span> slice use claude-code
+
+<span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
 <span class="kw">export</span> ANTHROPIC_API_KEY=<span class="ph">(your Anthropic key)</span>
 <span class="kw">export</span> ANTHROPIC_AUTH_TOKEN=<span class="ph">(your slice key)</span></pre>
           </div>
