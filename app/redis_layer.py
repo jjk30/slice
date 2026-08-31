@@ -44,7 +44,12 @@ CACHE_HEADER = "x-slice-cache"
 _RATE_PREFIX = "slice:ratelimit"
 _BUDGET_PREFIX = "slice:budget"
 _WARNED_PREFIX = "slice:budget:warned"
-_CACHE_PREFIX = "slice:cache"
+_CACHE_PREFIX = "slice:cache:v2"
+
+# Fields that never change the answer, so they are stripped before hashing a
+# request into a cache key: stream only picks the transport, and metadata is
+# caller bookkeeping the provider echoes back untouched.
+_CACHE_IGNORED_FIELDS = ("stream", "metadata")
 
 # Budget and warn keys carry the month in their name, so a new month starts
 # fresh on its own. This TTL just stops last month's keys from lingering; it is
@@ -256,8 +261,10 @@ def cache_key(team: str, payload: dict, *, account_id: int | None = None) -> str
 
     Phase 12: the account id is folded into the hash, so one account's cache can never
     serve another's — that is the tenant boundary. The team label is folded in too
-    (a sub-partition inside the account, as before phase 12). Only the fields that
-    change the answer go in: model, the full messages array, and max_tokens.
+    (a sub-partition inside the account, as before phase 12). Every field in the request
+    body changes the answer and so goes into the hash, except ``stream`` (transport only)
+    and ``metadata`` (caller bookkeeping the provider echoes back): change the system
+    prompt, the tools, the temperature, or anything else and the key changes with it.
     ``sort_keys`` makes the encoding stable while preserving message order (a list is
     never reordered).
     """
@@ -265,9 +272,9 @@ def cache_key(team: str, payload: dict, *, account_id: int | None = None) -> str
         {
             "account": account_id,
             "team": team,
-            "model": payload.get("model"),
-            "messages": payload.get("messages"),
-            "max_tokens": payload.get("max_tokens"),
+            "body": {
+                k: v for k, v in payload.items() if k not in _CACHE_IGNORED_FIELDS
+            },
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -279,20 +286,21 @@ def cache_key(team: str, payload: dict, *, account_id: int | None = None) -> str
 def openai_cache_key(team: str, body: dict, *, account_id: int | None = None) -> str:
     """Cache key for the OpenAI-compatible endpoint.
 
-    Same recipe as ``cache_key`` — account, team plus model, messages, and max_tokens —
-    but read from the raw OpenAI request body and tagged ``openai`` in the hash.
-    The tag keeps this key space disjoint from the native one, so a request with
-    identical fields on the two endpoints never collides: each stores its own
-    response shape (OpenAI here, Anthropic there) and can only serve its own.
+    Same recipe as ``cache_key`` (account and team plus the full request body with
+    ``stream`` and ``metadata`` stripped) but read from the raw OpenAI request body and
+    tagged ``openai`` in the hash. The tag keeps this key space disjoint from the native
+    one, so a request with identical fields on the two endpoints never collides: each
+    stores its own response shape (OpenAI here, Anthropic there) and can only serve its
+    own.
     """
     material = json.dumps(
         {
             "api": "openai",
             "account": account_id,
             "team": team,
-            "model": body.get("model"),
-            "messages": body.get("messages"),
-            "max_tokens": body.get("max_tokens"),
+            "body": {
+                k: v for k, v in body.items() if k not in _CACHE_IGNORED_FIELDS
+            },
         },
         sort_keys=True,
         separators=(",", ":"),

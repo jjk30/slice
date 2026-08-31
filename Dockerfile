@@ -27,6 +27,10 @@ RUN pip install -r requirements.txt
 # .venv, .git, .env, rag_store etc. are kept out by .dockerignore.
 COPY app/ ./app/
 COPY migrations/ ./migrations/
+# GUARDRAILS_CONFIG_DIR defaults to the relative "guardrails" path, so the config
+# tree must ship in the image or RailsConfig.from_path fails and build_engine
+# returns None (guardrails silently off) in every container.
+COPY guardrails/ ./guardrails/
 COPY pyproject.toml ./
 
 # Drop privileges: run as a non-root user that owns the app dir.

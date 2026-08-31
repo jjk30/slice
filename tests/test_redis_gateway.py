@@ -133,6 +133,28 @@ async def test_cache_is_per_team(client, gate_redis):
 
 
 @respx.mock
+async def test_different_system_prompt_is_not_a_cache_hit(client, gate_redis):
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=RESPONSE))
+
+    # Same messages, no system prompt: primes the cache.
+    first = await client.post("/v1/messages", json=REQUEST)
+    assert first.status_code == 200
+    assert first.headers.get(redis_layer.CACHE_HEADER) is None
+
+    # Same messages, different system prompt: must forward, not serve the first body.
+    second = await client.post("/v1/messages", json={**REQUEST, "system": "be terse"})
+    assert second.status_code == 200
+    assert second.headers.get(redis_layer.CACHE_HEADER) is None
+    assert route.call_count == 2
+
+    # A third request identical to the second now hits its own cache entry.
+    third = await client.post("/v1/messages", json={**REQUEST, "system": "be terse"})
+    assert third.status_code == 200
+    assert third.headers[redis_layer.CACHE_HEADER] == "hit"
+    assert route.call_count == 2
+
+
+@respx.mock
 async def test_non_200_is_not_cached(client, gate_redis):
     error_body = {"type": "error", "error": {"type": "authentication_error", "message": "no"}}
     respx.post(MESSAGES_URL).mock(return_value=httpx.Response(401, json=error_body))

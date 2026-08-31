@@ -67,21 +67,49 @@ def test_cache_key_differs_by_team():
     assert redis_layer.cache_key("teamA", BASE) != redis_layer.cache_key("teamB", BASE)
 
 
-def test_cache_key_depends_only_on_model_messages_max_tokens():
-    # An unrelated field (temperature) does not change the key...
-    assert redis_layer.cache_key("t", {**BASE, "temperature": 0.9}) == redis_layer.cache_key(
-        "t", BASE
-    )
-    # ...but each of the three keyed fields does.
-    assert redis_layer.cache_key("t", {**BASE, "max_tokens": 128}) != redis_layer.cache_key(
-        "t", BASE
-    )
-    assert redis_layer.cache_key("t", {**BASE, "model": "claude-opus-5"}) != redis_layer.cache_key(
+def test_cache_key_changes_with_every_body_field():
+    # Every field in the body is part of the answer, so each one moves the key:
+    # the three that were always keyed, plus system, tools, and temperature.
+    for field, value in [
+        ("max_tokens", 128),
+        ("model", "claude-opus-5"),
+        ("messages", [{"role": "user", "content": "bye"}]),
+        ("system", "you are a helpful assistant"),
+        ("tools", [{"name": "get_weather", "description": "weather"}]),
+        ("temperature", 0.9),
+    ]:
+        assert redis_layer.cache_key("t", {**BASE, field: value}) != redis_layer.cache_key(
+            "t", BASE
+        ), f"{field} must change the key"
+
+
+def test_cache_key_ignores_stream_and_metadata():
+    # stream picks the transport and metadata is caller bookkeeping; neither
+    # changes the answer, so neither may change the key.
+    assert redis_layer.cache_key("t", {**BASE, "stream": True}) == redis_layer.cache_key(
         "t", BASE
     )
     assert redis_layer.cache_key(
-        "t", {**BASE, "messages": [{"role": "user", "content": "bye"}]}
-    ) != redis_layer.cache_key("t", BASE)
+        "t", {**BASE, "metadata": {"user_id": "abc"}}
+    ) == redis_layer.cache_key("t", BASE)
+
+
+def test_openai_cache_key_changes_with_tools_and_temperature():
+    assert redis_layer.openai_cache_key(
+        "t", {**BASE, "tools": [{"type": "function", "function": {"name": "f"}}]}
+    ) != redis_layer.openai_cache_key("t", BASE)
+    assert redis_layer.openai_cache_key(
+        "t", {**BASE, "temperature": 0.9}
+    ) != redis_layer.openai_cache_key("t", BASE)
+
+
+def test_openai_cache_key_ignores_stream_and_metadata():
+    assert redis_layer.openai_cache_key(
+        "t", {**BASE, "stream": True}
+    ) == redis_layer.openai_cache_key("t", BASE)
+    assert redis_layer.openai_cache_key(
+        "t", {**BASE, "metadata": {"user_id": "abc"}}
+    ) == redis_layer.openai_cache_key("t", BASE)
 
 
 # --- Rate limit math -------------------------------------------------------
