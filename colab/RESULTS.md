@@ -4,9 +4,8 @@ Numbers below are from the executed Colab run on a free T4 (the source notebook
 exported from Colab). They are transcribed from that run's cell outputs.
 
 Important: the repo notebook was ported from that run (install fix folded in,
-outputs stripped, fresh eval section added). It has not yet been re-run top to
-bottom after porting. Re-run it to regenerate these numbers before trusting them
-as reproducible.
+outputs stripped, fresh eval section added). Re-run top to bottom from the
+committed file on 2026-08-30, identical results, predictions file produced.
 
 ## Model and LoRA settings
 
@@ -43,6 +42,36 @@ Scored with the merged model. This is the reported generalization number.
 - Confusion (true -> pred): easy->easy 51, easy->hard 3, hard->easy 5, hard->hard 41
 - Where template_category agrees with label: 94.8% (91/96)
 - Where template_category disagrees with label: 25.0% (1/4)
+
+## Rung 2: RAGAS answer-quality comparison (100 fresh prompts)
+
+Does the LoRA judge's routing produce answers as good as the live router's? Rung 1
+showed 92.0% agreement on tier; this scores actual answer quality. Every fresh
+prompt is answered by the model the LoRA judge would route it to (pred), and each of
+the 8 disagreement rows is also answered by the model the router served (label).
+Answers are scored with the same RAGAS answer-relevancy metric slice uses in phase 8.
+Generated once at max_tokens 300, then scored from cache. Produced by
+`scripts/judge_ragas_compare.py`.
+
+- Scoring coverage: pred answers 100/100, label answers 8/8
+- a. Mean answer relevancy, all LoRA-routed answers (n=100): 0.7244
+- e. Mean answer relevancy, router-routed answers, same prompts (n=100): 0.7252
+- Paired difference a minus e (n=100): -0.0009 (the LoRA judge's routing is even
+  with the router's on answer quality; the two differ on only 8 of 100 rows)
+- b. Mean answer relevancy, LoRA-routed cheap answers, pred easy (n=56): 0.6796.
+  Not comparable to the 0.892 headline (different prompt set and max_tokens 300);
+  a versus e is the like-for-like comparison.
+- c. Disagreement rows: 8
+  - Downgrades (label hard, pred easy), n=5: pred 0.8307, label 0.8457,
+    mean diff (pred minus label) -0.0149 (both-scored n=5)
+  - Upgrades (label easy, pred hard), n=3: pred 0.8776, label 0.8815,
+    mean diff (pred minus label) -0.0039 (both-scored n=3)
+- Generation cost: $0.243117 over 108 answers (100 pred + 8 label)
+
+Run notes: ragas telemetry stalled about 120 s per metric on macOS, which read as
+scoring timeouts; setting `RAGAS_DO_NOT_TRACK=true` before the ragas import fixes it.
+Scores are cached per answer, so the summary above regenerates from the caches with
+no API key and no network.
 
 ## Latency
 

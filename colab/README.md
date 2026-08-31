@@ -8,4 +8,5 @@ from `scripts/prepare_judge_data.py`, plus `judge_eval_fresh.jsonl` from
 `scripts/generate_fresh_eval.py` for the section 9 fresh eval (reported number).
 
 Outputs `judge_lora.zip` (adapter) and `judge_merged.zip` (merged model for
-TensorRT-LLM). See `RESULTS.md` for the latest run's metrics.
+TensorRT-LLM), plus `judge_fresh_predictions.jsonl` from section 9 for the RAGAS
+comparison step. See `RESULTS.md` for the latest run's metrics.

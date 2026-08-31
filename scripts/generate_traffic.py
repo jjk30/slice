@@ -4,8 +4,8 @@ for a LoRA routing judge.
 
 Every request asks for ``claude-sonnet-4-6`` with ``max_tokens=300`` so the
 gateway is the one that decides whether to route the call down to a cheaper
-model. That routing decision — surfaced as the ``model`` field in the response
-body — is the label we are collecting.
+model. That routing decision, surfaced as the ``model`` field in the response
+body, is the label we are collecting.
 
 Usage:
     python scripts/generate_traffic.py --dry-run        # print 10 sample prompts
@@ -207,7 +207,7 @@ def generate_prompts(n, rng):
 # ---------------------------------------------------------------------------
 def load_api_key():
     """Return the slice API key from the env, else ~/.slice/config.json. The key
-    is only ever returned to the caller — never printed or written."""
+    is only ever returned to the caller, never printed or written."""
     key = os.environ.get("SLICE_API_KEY")
     if key:
         return key
@@ -449,7 +449,7 @@ def main(argv=None):
 
     if args.dry_run:
         prompts = generate_prompts(max(args.n, 10), rng)
-        print(f"# dry-run (seed={seed}) — 10 sample prompts, no network:\n")
+        print(f"# dry-run (seed={seed}): 10 sample prompts, no network:\n")
         for i, (prompt, category) in enumerate(prompts[:10], 1):
             print(f"[{i:>2}] ({category})")
             for line in prompt.splitlines() or [""]:
