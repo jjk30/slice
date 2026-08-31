@@ -377,12 +377,18 @@ def test_dry_run_subprocess_from_temp_cwd(tmp_path):
     This is the regression guard for the ModuleNotFoundError: launched from a cwd
     that is not the repo root, the script must still import app.evaluation (the
     dry-run path imports RagasEvaluator) and print the call counts without network.
+
+    Self-contained: the predictions file is written into tmp_path from the _rows()
+    helper rather than pointing at the gitignored data/ fixture, so it runs on CI.
     """
+    predictions_path = tmp_path / "predictions.jsonl"
+    predictions_path.write_text("".join(json.dumps(row) + "\n" for row in _rows()))
+
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)  # dry run must not need a key
     result = subprocess.run(
         [sys.executable, str(SCRIPT_PATH), "--dry-run",
-         "--predictions", str(REPO_ROOT / "data" / "judge_fresh_predictions.jsonl")],
+         "--predictions", str(predictions_path)],
         cwd=str(tmp_path),
         capture_output=True,
         text=True,
@@ -390,4 +396,5 @@ def test_dry_run_subprocess_from_temp_cwd(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "DRY RUN" in result.stdout
-    assert "generation calls that would be made:" in result.stdout
+    # 4 rows -> 4 pred answers, plus a label answer for each of the 2 disagreements.
+    assert "generation calls that would be made: 6" in result.stdout
