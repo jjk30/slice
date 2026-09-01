@@ -1,4 +1,4 @@
--- Phase 20: the account profile the desktop app (and, later, the dashboard) lets a
+-- Phase 20: the account profile the dashboard's first-time setup screen lets a
 -- user set — an email and a WhatsApp number slice can reach them on. Both are
 -- nullable and edited through PUT /account/profile. `email` already exists on
 -- accounts (it is the GitHub email captured at login, migrations/010_auth.sql), so

@@ -31,7 +31,6 @@
   <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16" />
   <img src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white" alt="Redis 7" />
   <img src="https://img.shields.io/badge/Vue%203%20%2B%20Vite-SSE%20dashboard-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3 + Vite" />
-  <img src="https://img.shields.io/badge/Electron-Mac%20app-47848F?logo=electron&logoColor=white" alt="Electron" />
   <img src="https://img.shields.io/badge/MCP-server-000000?logo=modelcontextprotocol&logoColor=white" alt="MCP server" />
 </p>
 <p align="center">
