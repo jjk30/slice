@@ -1027,7 +1027,10 @@ async def test_operator_findings_are_own_scope(client, monkeypatch, set_db):
 
 async def test_cost_isolation_between_accounts(client, monkeypatch, set_db):
     db = set_db(FakeScannerDB())
-    await db.record_aws_costs(2, [(date(2026, 8, 22), Decimal("5.00"))])
+    # The /scanner/cost route sums the current UTC month, so anchor the cost to the
+    # first of this month on that same clock rather than a hardcoded calendar date.
+    first = datetime.now(timezone.utc).date().replace(day=1)
+    await db.record_aws_costs(2, [(first, Decimal("5.00"))])
 
     monkeypatch.setattr(routes, "read_account", _as_account(Account(id=2, login="a")))
     r2 = await client.get("/scanner/cost")
