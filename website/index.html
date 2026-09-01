@@ -236,9 +236,9 @@
   @media(max-width:760px){.hero .honest{justify-content:center}}
 
   /* 2.5D cake with clean knife-cut */
-  .stage{position:relative;display:flex;align-items:center;justify-content:center;min-height:min(60vh,540px);padding-top:56px;perspective:1000px}
-  @media(max-width:760px){.stage{order:-1;min-height:40vh;padding-top:40px}}
-  .tilt{position:relative;transform-style:preserve-3d;transition:transform .25s cubic-bezier(.2,.7,.2,1);will-change:transform;cursor:pointer;width:100%;display:flex;justify-content:center}
+  .stage{position:relative;display:flex;align-items:center;justify-content:flex-end;min-height:min(60vh,540px);padding-top:56px;perspective:1000px}
+  @media(max-width:760px){.stage{order:-1;min-height:40vh;padding-top:40px;justify-content:center}}
+  .tilt{position:relative;transform-style:preserve-3d;transition:transform .25s cubic-bezier(.2,.7,.2,1);will-change:transform;cursor:pointer;width:min(100%,340px);display:flex;justify-content:center}
   .glow{position:absolute;left:50%;top:48%;width:78%;padding-bottom:78%;transform:translate(-50%,-50%) translateZ(-90px);background:radial-gradient(circle at 50% 45%, rgba(242,161,190,.30), rgba(242,161,190,0) 62%);filter:blur(6px)}
   .plate{position:absolute;left:50%;top:53%;width:66%;padding-bottom:66%;transform:translate(-50%,-50%) translateZ(-50px);background:radial-gradient(circle at 50% 45%, rgba(255,255,255,.85), rgba(255,255,255,0) 66%);border-radius:50%}
   .contact{position:absolute;left:50%;bottom:14%;width:48%;height:5%;transform:translate(-50%,0) translateZ(-40px);background:radial-gradient(ellipse at center, rgba(28,24,21,.22), rgba(28,24,21,0) 70%);filter:blur(5px)}
