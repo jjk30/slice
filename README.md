@@ -344,7 +344,7 @@ Benchmarked, not deployed: the LoRA routing judge. Numbers above; the production
 Not yet verified in production:
 
 - WhatsApp alerts are wired through Twilio but not verified in production, because Twilio is still on a trial account.
-- The Mac app works and I can demo it, but it is not out yet. Apple wants the app signed, and that means paying for an Apple developer account, which I have not done. So there is no download link for now. Ask me and I will show it running.
+- The Mac app works and I can demo it, but it is not out yet. Apple wants the app signed, and my Apple developer account is waiting on approval. Once it clears, the download link goes up. Ask me and I will show it running.
 
 Coming next: the LoRA judge serving live, a signed Mac app, and Slack alerts.
 
