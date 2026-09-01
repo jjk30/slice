@@ -1,5 +1,6 @@
-# Phase 15 CI: install, apply migrations against a real Postgres, run the full
-# test suite. Tests only — no build-and-push / deploy / ECR step (that is phase 16).
+# CI: install, apply migrations against a real Postgres, run the full test
+# suite, then on a push to main build the Docker image and push it to ECR using
+# keyless OIDC auth (no long lived AWS keys).
 name: ci
 
 on:
@@ -77,3 +78,45 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  build-and-push:
+    needs: test
+    # Only build and push for commits landing on main, never for pull requests.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::194133064379:role/slice-gha-ecr-push
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Set up QEMU before buildx so linux/arm64 can build on the amd64 runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # The EC2 box is arm64 (Graviton), so build for that platform.
+          platforms: linux/arm64
+          push: true
+          tags: |
+            194133064379.dkr.ecr.us-east-1.amazonaws.com/slice-gateway:latest
+            194133064379.dkr.ecr.us-east-1.amazonaws.com/slice-gateway:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
