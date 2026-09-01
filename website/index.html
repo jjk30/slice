@@ -124,6 +124,17 @@
   .term .ok{color:#7FD3B0}
   .term .dim{color:rgba(251,248,241,.45)}
 
+  /* copy icon in the terminal bar, shown on hover */
+  .term .copy{margin:-6px 0 -6px auto;display:inline-flex;align-items:center;justify-content:center;width:26px;height:22px;color:rgba(251,248,241,.62);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:7px;cursor:pointer;opacity:0;transition:opacity .15s ease,color .14s ease,background .14s ease,border-color .14s ease}
+  .term:hover .copy,.term:focus-within .copy,.term .copy.done{opacity:1}
+  @media(hover:none){.term .copy{opacity:1}}
+  .term .copy:hover{color:var(--paper);background:rgba(255,255,255,.11);border-color:rgba(255,255,255,.22)}
+  .term .copy svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;display:block}
+  .term .copy .ic-done{display:none}
+  .term .copy.done{color:#7FD3B0;border-color:rgba(127,211,176,.45);background:rgba(127,211,176,.1)}
+  .term .copy.done .ic{display:none}
+  .term .copy.done .ic-done{display:block}
+
   /* ledger of features */
   .fledger{border-top:1.5px dashed var(--rule)}
   .frow{display:flex;align-items:baseline;gap:12px;padding:15px 0;border-bottom:1px solid var(--rule)}
@@ -401,7 +412,12 @@
           <h4>Install slice</h4>
           <p>The slice CLI is a small package on PyPI. Install it and the <code>slice</code> command lands on your path.</p>
           <div class="term">
-            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span></div>
+            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+              <button class="copy" type="button" data-copy="pip install slice-gateway" aria-label="Copy command">
+                <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+                <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+              </button>
+            </div>
 <pre><span class="dim">$</span> pip install slice-gateway</pre>
           </div>
         </div>
@@ -414,7 +430,12 @@
           <p>Run <code>slice login</code>. slice shows you a short code. Open <a href="https://github.com/login/device" target="_blank" rel="noopener">github.com/login/device</a>, sign in to GitHub, paste the code, and click Authorize. That is the whole login, no password typed in the terminal.</p>
           <p style="font-size:13.5px;color:var(--muted);margin-top:10px;line-height:1.5">Why GitHub? You already have it, slice never stores a password, and it signs you in right from the terminal, where slice lives.</p>
           <div class="term">
-            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span></div>
+            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+              <button class="copy" type="button" data-copy="slice login" aria-label="Copy command">
+                <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+                <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+              </button>
+            </div>
 <pre><span class="dim">$</span> slice login
 
   slice needs to connect to your GitHub account.
@@ -436,7 +457,12 @@
           <h4>Point your tools at slice</h4>
           <p>Run <code>slice use claude-code</code>. It prints three environment variables. Set them so your AI tools send their calls through slice, which routes, caches, and meters every request.</p>
           <div class="term">
-            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span></div>
+            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+              <button class="copy" type="button" data-copy="slice use claude-code" aria-label="Copy command">
+                <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+                <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+              </button>
+            </div>
 <pre><span class="dim">$</span> slice use claude-code
 
 <span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
@@ -602,6 +628,31 @@
   }
   tilt.addEventListener('click', cut);
   if(!reduce){ setTimeout(cut, 900); setInterval(function(){ if(!busy) cut(); }, 6000); }
+})();
+</script>
+<script>
+(function(){
+  function put(text){
+    if(navigator.clipboard && window.isSecureContext){ return navigator.clipboard.writeText(text); }
+    return new Promise(function(ok,fail){
+      var ta=document.createElement('textarea'); ta.value=text; ta.setAttribute('readonly','');
+      ta.style.position='fixed'; ta.style.top='-1000px'; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); ok(); }catch(e){ fail(e); }
+      document.body.removeChild(ta);
+    });
+  }
+  document.querySelectorAll('.term .copy').forEach(function(btn){
+    var timer;
+    btn.addEventListener('click',function(){
+      put(btn.getAttribute('data-copy')).then(function(){
+        btn.classList.add('done'); btn.setAttribute('aria-label','Copied');
+      }).catch(function(){
+        btn.setAttribute('aria-label','Copy failed');
+      });
+      clearTimeout(timer);
+      timer=setTimeout(function(){ btn.classList.remove('done'); btn.setAttribute('aria-label','Copy command'); },1600);
+    });
+  });
 })();
 </script>
 </body>
