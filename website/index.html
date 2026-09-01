@@ -169,7 +169,6 @@
   footer{border-top:1px solid var(--rule);padding:26px 0 54px;display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
   footer .fl{display:flex;gap:20px}
   footer a:hover{color:var(--ink)}
-  .btn .apple{width:16px;height:16px;fill:currentColor;stroke:none}
 
   /* view source secondary */
   .ghost2{display:inline-flex;align-items:center;gap:8px;font-size:14.5px;color:var(--ink);font-weight:500;border-bottom:1px solid var(--dot);padding-bottom:2px;transition:border-color .14s ease}
@@ -280,26 +279,6 @@
   .hint.gone{opacity:0}
   @media(prefers-reduced-motion:reduce){.hero .copy>*{opacity:1}.tilt{transition:none}.knife{transition:none}}
 
-  /* download modal */
-  .dl-overlay{position:fixed;inset:0;background:rgba(28,24,21,.5);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;padding:24px;z-index:50}
-  .dl-overlay.on{display:flex}
-  .dl-card{position:relative;background:var(--paper2);border:1px solid var(--edge);border-radius:16px;box-shadow:0 40px 80px -30px rgba(28,24,21,.55);max-width:420px;width:100%;padding:30px 30px 24px;animation:pop .18s ease}
-  @keyframes pop{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
-  .dl-x{position:absolute;top:15px;right:15px;background:none;border:none;cursor:pointer;color:var(--faint);font-size:15px;line-height:1;padding:4px}
-  .dl-x:hover{color:var(--ink)}
-  .dl-brand{display:flex;align-items:center;gap:8px;margin-bottom:16px}
-  .dl-brand img{width:26px;height:26px;object-fit:contain}
-  .dl-brand b{font-family:var(--display);font-weight:700;font-size:18px}
-  .dl-card h3{font-family:var(--display);font-weight:700;font-size:21px;letter-spacing:-.02em;margin-bottom:6px}
-  .dl-card>p{font-size:14px;color:var(--muted);line-height:1.5;margin-bottom:20px}
-  .dl-main{display:flex;align-items:center;gap:12px;background:var(--green);color:#fff;border-radius:12px;padding:15px 18px;transition:background .14s ease}
-  .dl-main:hover{background:var(--green-deep)}
-  .dl-main .apple{width:22px;height:22px;fill:#fff;flex:0 0 auto}
-  .dl-main span{font-weight:500;font-size:15.5px}
-  .dl-main em{font-style:normal;font-family:var(--mono);font-size:12.5px;color:rgba(255,255,255,.72);margin-left:auto}
-  .dl-alt{font-family:var(--mono);font-size:12px;color:var(--faint);text-align:center;margin-top:12px}
-  .dl-req{font-family:var(--mono);font-size:11.5px;color:var(--faint);text-align:center;margin-top:14px;border-top:1px dashed var(--rule);padding-top:14px}
-
   @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -325,7 +304,7 @@
         </a>
         <a class="os" href="https://github.com/jjk30/slice" target="_blank" rel="noopener">View on GitHub &rarr;</a>
       </div>
-      <div class="honest"><span class="hd"></span>Early. One person. The gateway is live. Coming soon as a Mac desktop app: ready to demo, waiting on Apple approval.</div>
+      <div class="honest"><span class="hd"></span>Early. One person. The gateway is live.</div>
     </div>
 
     <div class="stage" id="stage">
@@ -485,7 +464,8 @@
 
     </div>
 
-    <p class="conn-note"><b>Open source.</b> slice is yours to read line by line, or to <a href="https://github.com/jjk30/slice" target="_blank" rel="noopener">run on your own box</a>. It only reads the calls passing through it, never your codebase.</p>
+    <p class="conn-note"><b>Open source.</b> slice is yours to read line by line, or to <a href="https://github.com/jjk30/slice" target="_blank" rel="noopener">run on your own box</a>. It sees what your tools send to the model, the same text the provider already gets. It logs each call's model, tokens, cost, and status, keeps the first 4,000 characters of each prompt so the router learns, and caches answers for one hour. No other prompt or answer text is kept.</p>
+    <p class="conn-note"><b>What it never touches.</b> Your repo, your machine, your environment variables. Your provider key is forwarded and never stored. The AWS role is read-only: bucket settings, security groups, encryption, IAM policy attachments, and the bill. It cannot open a file, read a secret, or change anything, and you can revoke it any time.</p>
   </section>
 
   <!-- WHAT IT DOES -->

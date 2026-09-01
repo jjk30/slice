@@ -67,7 +67,6 @@ There was a second reason. I was learning agentic AI properly, working through t
 - **Live dashboard.** A Vue single-page app streams spend, routing, cache, and eval numbers over Server-Sent Events.
 - **MCP server.** A stdio MCP server exposes spend, rules, recent requests, and eval summaries to an MCP client.
 - **CLI.** A `slice` command logs you in through GitHub and prints the lines that point a tool at the gateway.
-- **Mac desktop app.** An Electron app that logs in and opens the bundled dashboard against the hosted gateway. Works, but not out yet, see Status.
 
 ## The number
 
@@ -163,6 +162,8 @@ Only auto-routed-down, non-streaming requests enter the loop. It tries the cheap
 - **Fail closed on auth, fail open on availability.** A bad, missing, or revoked key is a 401 and an unreadable key store is a 503. A down Redis is skipped and traffic flows.
 - **Writes need auth**, both on the API and through MCP, where write tools require a confirmation step.
 - **The AWS scanner** uses a read-only IAM role created by a one-click CloudFormation template in the user's account, and only ever reads.
+- **What slice sees.** What your tool sends to the model, the same text the provider gets. Per request it logs model, tokens, cost, status, latency, and team, keeps the first 4,000 characters of the prompt (`prompt_text`, for the RAG index), and caches responses for `CACHE_TTL_SECONDS` (3600 by default). Eval rows hold scores, not text. No other prompt or answer text is kept.
+- **What slice never touches.** Your repo, your machine, your environment variables. Provider keys are forwarded, never stored. The AWS role makes eleven read calls (`list_buckets`, `get_bucket_acl`, `get_bucket_policy_status`, `get_public_access_block`, `get_bucket_encryption`, `describe_security_groups`, `describe_volumes`, `describe_instances`, `list_users`, `list_attached_user_policies`, `get_cost_and_usage`) and never `get_object` or `list_objects`. It reads settings and the bill, not files or secrets.
 
 ### Where it runs
 
@@ -196,12 +197,11 @@ The same image runs on Kubernetes. [k8s/](k8s/) holds a kind cluster config and 
 | RAG | FAISS, sentence-transformers | Per-team index of past prompts gives the judge a semantic hint. Free, local, and the right size for this data. |
 | Judge | Haiku, NIM open models, LoRA Qwen2.5-0.5B | Swappable by config. Haiku in production, the LoRA judge benchmarked against it. |
 | Eval | RAGAS, LangChain | Scores a sample of routed-down answers for relevancy, out of band, and benchmarks judges against each other. |
-| Safety | NeMo Guardrails | Self-check input and output rails around the agent loop. |
+| Safety | NeMo Guardrails | Self-check rails around the agent loop, scoped to what a gateway faces: prompt injection against the routing judge and checker, and leaks of gateway internals. Content moderation stays with the provider. |
 | Tracing | LangSmith | Optional LangChain tracing, a no-op when unset. |
 | Data | PostgreSQL, Redis | Postgres logs every request and holds accounts and keys; Redis holds cache, budgets, and rate limits. |
 | Providers | Anthropic, OpenAI, Google Gemini, NVIDIA NIM | Anthropic is the wire format; the others translate. NIM adds open models with free credits. |
 | Dashboard | Vue 3, Vite, Chart.js | Single-page app fed by read endpoints and a live SSE stream. |
-| Desktop | Electron | Mac app wrapping GitHub login and the bundled dashboard. |
 | Alerts | Resend, Twilio | Email through Resend, WhatsApp through Twilio, both fire and forget. |
 | MCP | mcp (FastMCP) | Stdio server exposing spend, rules, recent requests, and eval over HTTP to the gateway. |
 | Fine-tuning | Hugging Face PEFT on a Colab T4 | Own judge trained on own logs, free GPU, honest benchmark. |
@@ -306,7 +306,6 @@ app/            FastAPI gateway: router, judge, agent loop, adapters, auth, cach
 adapters/       Provider adapters: Anthropic, OpenAI, Google Gemini, NVIDIA NIM (under app/)
 mcp_server/     Stdio MCP server exposing gateway reads and rule writes
 dashboard/      Vue 3 + Vite single-page dashboard
-desktop/        Electron Mac app wrapping login and the dashboard
 demo/           Fixed-batch cost demo: runner, prompts, results
 colab/          LoRA judge: training notebook, RAGAS comparison against the live router
 guardrails/     NeMo Guardrails config and slice-specific rail prompts
@@ -344,9 +343,8 @@ Benchmarked, not deployed: the LoRA routing judge. Numbers above; the production
 Not yet verified in production:
 
 - WhatsApp alerts are wired through Twilio but not verified in production, because Twilio is still on a trial account.
-- The Mac app works and I can demo it, but it is not out yet. Apple wants the app signed, and my Apple developer account is waiting on approval. Once it clears, the download link goes up. Ask me and I will show it running.
 
-Coming next: the LoRA judge serving live, a signed Mac app, and Slack alerts.
+Coming next: the LoRA judge serving live, GitHub sign-in for the dashboard in the browser, and Slack alerts.
 
 ## PS
 
