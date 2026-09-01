@@ -67,7 +67,7 @@ There was a second reason. I was learning agentic AI properly, working through t
 - **Live dashboard.** A Vue single-page app streams spend, routing, cache, and eval numbers over Server-Sent Events.
 - **MCP server.** A stdio MCP server exposes spend, rules, recent requests, and eval summaries to an MCP client.
 - **CLI.** A `slice` command logs you in through GitHub and prints the lines that point a tool at the gateway.
-- **Mac desktop app.** An Electron app that logs in and opens the bundled dashboard against the hosted gateway.
+- **Mac desktop app.** An Electron app that logs in and opens the bundled dashboard against the hosted gateway. Works, but not out yet, see Status.
 
 ## The number
 
@@ -344,7 +344,7 @@ Benchmarked, not deployed: the LoRA routing judge. Numbers above; the production
 Not yet verified in production:
 
 - WhatsApp alerts are wired through Twilio but not verified in production, because Twilio is still on a trial account.
-- The Mac desktop app ships unsigned for now, so macOS Gatekeeper will warn on first open.
+- The Mac app works and I can demo it, but it is not out yet. Apple wants the app signed, and that means paying for an Apple developer account, which I have not done. So there is no download link for now. Ask me and I will show it running.
 
 Coming next: the LoRA judge serving live, a signed Mac app, and Slack alerts.
 
