@@ -1,5 +1,15 @@
-# slice gateway image (phase 15).
-# FastAPI app run with uvicorn app.main:app on port 8080.
+# slice gateway image (phase 15; phase 21 bundles the built dashboard).
+#
+# Stage 1: build the Vue dashboard to static files. package*.json is copied first so the
+# npm install layer is cached and a source-only change never reinstalls node_modules.
+FROM node:22-alpine AS dashboard
+WORKDIR /dash
+COPY dashboard/package*.json ./
+RUN npm ci
+COPY dashboard/ ./
+RUN npm run build
+
+# Stage 2: the FastAPI app, run with uvicorn app.main:app on port 8080.
 FROM python:3.12-slim
 
 # Faster, quieter Python in a container: no .pyc files, unbuffered stdout/stderr
@@ -31,6 +41,9 @@ COPY migrations/ ./migrations/
 # tree must ship in the image or RailsConfig.from_path fails and build_engine
 # returns None (guardrails silently off) in every container.
 COPY guardrails/ ./guardrails/
+# The built dashboard from stage 1. The gateway serves it at "/" (DASHBOARD_DIST in
+# app/main.py looks for /app/dashboard/dist); the source never enters this stage.
+COPY --from=dashboard /dash/dist ./dashboard/dist
 COPY pyproject.toml ./
 
 # Drop privileges: run as a non-root user that owns the app dir.

@@ -24,10 +24,11 @@ import secrets
 import time
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app import config
 from app.auth import github as gh
+from app.auth import web
 from app.auth.keys import bearer_token, hash_key, is_slice_key, key_prefix, mint_key
 from app.auth.middleware import get_authenticator
 from app.auth.resolver import AuthUnavailable, account_from_row
@@ -40,10 +41,19 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # Redis key for one in-flight device login. TTL = GitHub's expires_in.
 SESSION_KEY = "slice:auth:device:{session_id}"
 
+# Phase 21: Redis key for one in-flight browser login. The value is the redirect_uri; the
+# key is deleted on first use, so a state is single-use. TTL is a plain 10 minutes.
+WEB_STATE_KEY = "slice:auth:web:{state}"
+WEB_STATE_TTL = 600
+
 # The name a key minted by the device flow gets, so it is recognisable in a key list.
 LOGIN_KEY_NAME = "slice login"
 
 LOGIN_OFF = "Login is not configured on this gateway (GITHUB_OAUTH_CLIENT_ID is unset)."
+WEB_LOGIN_OFF = (
+    "Web login is not configured on this gateway "
+    "(GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET must both be set)."
+)
 LOGIN_NO_DB = "Login is unavailable (database not connected)."
 LOGIN_NO_REDIS = "Login is unavailable (session store not reachable)."
 GITHUB_FAILED = "GitHub did not answer the login request."
@@ -82,8 +92,30 @@ def get_github_flow(app) -> gh.GitHubDeviceFlow | None:
     return flow
 
 
+def get_web_flow(app) -> web.GitHubWebFlow | None:
+    """The authorization-code client, or None when web login is not configured.
+
+    Created lazily on ``app.state.github_web`` (tests install a fake there). Requires
+    both the client id and the client secret; borrows the gateway's shared httpx client.
+    """
+    flow = getattr(app.state, "github_web", None)
+    if flow is not None:
+        return flow
+    if not (config.GITHUB_OAUTH_CLIENT_ID and config.GITHUB_OAUTH_CLIENT_SECRET):
+        return None
+    from app.main import get_client  # local import: app.main imports this module
+
+    flow = web.GitHubWebFlow(config.GITHUB_OAUTH_CLIENT_ID, get_client(app))
+    app.state.github_web = flow
+    return flow
+
+
 def session_key(session_id: str) -> str:
     return SESSION_KEY.format(session_id=session_id)
+
+
+def web_state_key(state: str) -> str:
+    return WEB_STATE_KEY.format(state=state)
 
 
 @router.post("/device/start")
@@ -228,16 +260,137 @@ async def _forget_session(redis, key: str) -> None:
         pass
 
 
+# Phase 21: the dashboard's browser GitHub sign-in (the authorization-code flow). The
+# browser goes to GitHub and back; the session lives in an httpOnly cookie the SSE stream
+# reads too. A failure never 500s; it redirects to "/" with a ?login= reason the login
+# screen shows. Keys stay a terminal thing: no slice key is ever minted here.
+
+# Where a callback lands the browser on failure/cancel. The dashboard reads ?login=.
+LOGIN_DENIED_REDIRECT = "/?login=denied"
+LOGIN_FAILED_REDIRECT = "/?login=failed"
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=config.SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=config.COOKIE_SECURE,
+        path="/",
+        max_age=config.JWT_TTL_SECONDS,
+    )
+
+
+@router.get("/github/login")
+async def github_login(request: Request):
+    """Start the browser flow: store an opaque state, then 302 the browser to GitHub."""
+    if get_web_flow(request.app) is None:
+        return _error(503, WEB_LOGIN_OFF)
+    if _db(request) is None:
+        return _error(503, LOGIN_NO_DB)
+    redis = _redis(request)
+    if redis is None:
+        return _error(503, LOGIN_NO_REDIS)
+
+    state = secrets.token_urlsafe(24)
+    redirect_uri = config.PUBLIC_BASE_URL + "/auth/github/callback"
+    try:
+        await redis.set(web_state_key(state), redirect_uri, ex=WEB_STATE_TTL)
+    except Exception as exc:  # noqa: BLE001 (no state store, no login).
+        logger.warning(json.dumps({"event": "auth_web_state_store_failed", "error": str(exc)}))
+        return _error(503, LOGIN_NO_REDIS)
+
+    return RedirectResponse(web.authorize_url(state, redirect_uri), status_code=302)
+
+
+@router.get("/github/callback")
+async def github_callback(request: Request):
+    """GitHub returns here with ?code&state (or ?error). Exchange, mint a JWT, set the cookie."""
+    params = request.query_params
+    if params.get("error") == "access_denied":
+        return RedirectResponse(LOGIN_DENIED_REDIRECT, status_code=302)
+
+    state = params.get("state")
+    code = params.get("code")
+    redis = _redis(request)
+    if not state or redis is None:
+        logger.warning(json.dumps({"event": "auth_web_bad_state", "reason": "missing state or redis"}))
+        return RedirectResponse(LOGIN_FAILED_REDIRECT, status_code=302)
+
+    try:
+        stored = await redis.get(web_state_key(state))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(json.dumps({"event": "auth_web_state_read_failed", "error": str(exc)}))
+        return RedirectResponse(LOGIN_FAILED_REDIRECT, status_code=302)
+    if not stored:
+        logger.warning(json.dumps({"event": "auth_web_bad_state", "reason": "unknown state"}))
+        return RedirectResponse(LOGIN_FAILED_REDIRECT, status_code=302)
+    # Single use: the state is spent whether or not the rest succeeds.
+    await _forget_session(redis, web_state_key(state))
+    redirect_uri = stored.decode() if isinstance(stored, bytes) else str(stored)
+
+    flow = get_web_flow(request.app)
+    db = _db(request)
+    if not code or flow is None or db is None:
+        logger.warning(json.dumps({"event": "auth_web_bad_state", "reason": "missing code or config"}))
+        return RedirectResponse(LOGIN_FAILED_REDIRECT, status_code=302)
+
+    try:
+        access_token = await flow.exchange(code, redirect_uri)
+        user = await flow.user(access_token)
+    except Exception as exc:  # noqa: BLE001 (a GitHub failure is a failed login, never a 500).
+        logger.warning(json.dumps({"event": "auth_web_github_failed", "error": str(exc)}))
+        return RedirectResponse(LOGIN_FAILED_REDIRECT, status_code=302)
+
+    try:
+        account_row = await db.upsert_account(user.id, user.login, user.email)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(json.dumps({"event": "auth_web_account_write_failed", "error": str(exc)}))
+        return RedirectResponse(LOGIN_FAILED_REDIRECT, status_code=302)
+
+    account = account_from_row(account_row)
+    token = mint_jwt(account.id)
+    if token is None:
+        logger.warning(json.dumps({"event": "jwt_not_minted", "reason": "JWT_SECRET is unset"}))
+        return RedirectResponse(LOGIN_FAILED_REDIRECT, status_code=302)
+
+    logger.info(json.dumps({"event": "web_login", "account_id": account.id, "login": account.login}))
+    response = RedirectResponse("/", status_code=302)
+    _set_session_cookie(response, token)
+    return response
+
+
+@router.post("/logout")
+async def logout():
+    """Clear the session cookie. 204, no body."""
+    response = Response(status_code=204)
+    response.set_cookie(
+        key=config.SESSION_COOKIE,
+        value="",
+        httponly=True,
+        samesite="lax",
+        secure=config.COOKIE_SECURE,
+        path="/",
+        max_age=0,
+    )
+    return response
+
+
 @router.get("/me")
 async def me(request: Request):
-    """Who am I: a slice key or a JWT in ``Authorization: Bearer``, the account back."""
+    """Who am I: a slice key or JWT in ``Authorization: Bearer``, or the session cookie."""
     token = bearer_token(request.headers)
     if token is None:
-        return JSONResponse(
-            status_code=401,
-            content={"error": {"message": "Send a slice key or session token as 'Authorization: Bearer ...'."}},
-            headers={"www-authenticate": "Bearer"},
-        )
+        # No bearer: fall back to the browser session cookie (the dashboard's path).
+        cookie = request.cookies.get(config.SESSION_COOKIE)
+        if not cookie:
+            return JSONResponse(
+                status_code=401,
+                content={"error": {"message": "Send a slice key or session token as 'Authorization: Bearer ...'."}},
+                headers={"www-authenticate": "Bearer"},
+            )
+        return await _me_from_jwt(request, cookie, via="cookie")
 
     if is_slice_key(token):
         try:
@@ -248,6 +401,11 @@ async def me(request: Request):
             return _unauthorized("Invalid or revoked slice key.")
         return {"account": {"login": account.login, "id": account.id}, "via": "slice_key"}
 
+    return await _me_from_jwt(request, token, via="jwt")
+
+
+async def _me_from_jwt(request: Request, token: str, *, via: str):
+    """Resolve a JWT (bearer or cookie) to its account for /auth/me, or a 401/503."""
     account_id = verify_jwt(token)
     if account_id is None:
         return _unauthorized("Invalid or expired session token.")
@@ -262,7 +420,7 @@ async def me(request: Request):
     if row is None:
         return _unauthorized("Session token does not belong to a known account.")
     account = account_from_row(row)
-    return {"account": {"login": account.login, "id": account.id}, "via": "jwt"}
+    return {"account": {"login": account.login, "id": account.id}, "via": via}
 
 
 def _unauthorized(message: str) -> JSONResponse:

@@ -1,5 +1,5 @@
 // Tiny fetch wrapper for the dashboard endpoints.
-import { authHeader, clearKey } from './auth.js'
+import { session } from './auth.js'
 
 // Empty/unset VITE_API_BASE_URL means same-origin (the gateway serving dist/).
 export function apiBase() {
@@ -19,7 +19,7 @@ export async function getJson(path) {
   let res
   try {
     res = await fetch(apiBase() + path, {
-      headers: { Accept: 'application/json', ...authHeader() },
+      headers: { Accept: 'application/json' },
     })
   } catch (e) {
     throw new Error(`Cannot reach the gateway at ${apiBase() || window.location.origin}.`)
@@ -31,8 +31,8 @@ export async function getJson(path) {
     body = null
   }
   if (res.status === 401) {
-    // The slice key is missing or rejected: forget it so the app shows the login screen.
-    clearKey()
+    // The session is missing or rejected: drop it so the app shows the login screen.
+    session.value = null
     const msg = body && body.error && body.error.message ? body.error.message : 'Not authorized.'
     throw new AuthError(msg)
   }

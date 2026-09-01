@@ -1,41 +1,37 @@
-// Phase 12: the plain slice-key bridge for the dashboard.
+// Phase 21: the dashboard's GitHub session, carried in an httpOnly cookie.
 //
-// The dashboard reads /admin and /dashboard, which are now locked. Until the full
-// GitHub web login lands (a later step), the dashboard just asks for a slice key,
-// keeps it in sessionStorage (so it is gone when the tab closes, never persisted),
-// and sends it as `Authorization: Bearer <key>` on every API and SSE call. A missing
-// or rejected key shows the login screen.
+// The old paste-a-slice-key bridge is gone. Sign-in is a full-page redirect to
+// /auth/github/login, GitHub and back, and the gateway sets a session cookie the browser
+// sends on its own with every same-origin API and SSE call: no header, no key in a URL.
+// `session` is the account ({login, id}) when signed in, null otherwise.
 import { ref } from 'vue'
+import { apiBase } from './api.js'
 
-const STORAGE_KEY = 'slice.key'
+export const session = ref(null)
 
-// Reactive so App.vue can react to login / logout / a 401.
-export const sliceKey = ref(sessionStorage.getItem(STORAGE_KEY) || '')
-
-export function setKey(key) {
-  const trimmed = (key || '').trim()
-  sliceKey.value = trimmed
-  if (trimmed) sessionStorage.setItem(STORAGE_KEY, trimmed)
-  else sessionStorage.removeItem(STORAGE_KEY)
+// Ask the gateway who we are (the cookie rides along). Sets `session` and returns it, or
+// null when there is no valid session. Never throws; a 401 is just "signed out".
+export async function loadSession() {
+  try {
+    const res = await fetch(apiBase() + '/auth/me', { headers: { Accept: 'application/json' } })
+    if (!res.ok) {
+      session.value = null
+      return null
+    }
+    const body = await res.json()
+    session.value = body && body.account ? body.account : null
+  } catch (e) {
+    session.value = null
+  }
+  return session.value
 }
 
-export function clearKey() {
-  setKey('')
-}
-
-export function hasKey() {
-  return Boolean(sliceKey.value)
-}
-
-// The Authorization header to attach, or an empty object when there is no key.
-export function authHeader() {
-  return sliceKey.value ? { Authorization: `Bearer ${sliceKey.value}` } : {}
-}
-
-// EventSource cannot set headers, so the SSE URL carries the key as a query param
-// instead (the gateway accepts it there for the events stream only).
-export function withKeyParam(url) {
-  if (!sliceKey.value) return url
-  const sep = url.includes('?') ? '&' : '?'
-  return `${url}${sep}slice_key=${encodeURIComponent(sliceKey.value)}`
+// Clear the session cookie on the gateway, then drop the local session.
+export async function logout() {
+  try {
+    await fetch(apiBase() + '/auth/logout', { method: 'POST' })
+  } catch (e) {
+    // A failed logout call still signs out locally; ignore.
+  }
+  session.value = null
 }

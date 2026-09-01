@@ -178,16 +178,19 @@ ON CONFLICT (github_id) DO UPDATE
         email        = COALESCE(EXCLUDED.email, accounts.email)
 RETURNING id, github_id, github_login, email, created_at
 """
-SELECT_ACCOUNT = "SELECT id, github_id, github_login, email, whatsapp_number, created_at FROM accounts WHERE id = $1"
+SELECT_ACCOUNT = "SELECT id, github_id, github_login, email, whatsapp_number, profile_confirmed_at, created_at FROM accounts WHERE id = $1"
 # Phase 20: partial profile update. A NULL argument leaves that column untouched
 # (COALESCE), so PUT /account/profile can set email and/or whatsapp_number without
-# clobbering the other. Scoped to one account id — the caller's own.
+# clobbering the other. Scoped to one account id, the caller's own. Phase 21: every
+# successful save also stamps profile_confirmed_at, so the first-time setup screen is
+# shown once and then never again.
 UPDATE_ACCOUNT_PROFILE = """
 UPDATE accounts
-SET email           = COALESCE($2, email),
-    whatsapp_number = COALESCE($3, whatsapp_number)
+SET email                = COALESCE($2, email),
+    whatsapp_number      = COALESCE($3, whatsapp_number),
+    profile_confirmed_at = now()
 WHERE id = $1
-RETURNING id, github_id, github_login, email, whatsapp_number, created_at
+RETURNING id, github_id, github_login, email, whatsapp_number, profile_confirmed_at, created_at
 """
 INSERT_KEY = """
 INSERT INTO slice_keys (account_id, key_hash, key_prefix, name)

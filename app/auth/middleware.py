@@ -27,7 +27,8 @@ import json
 
 from app import config
 from app.auth.keys import bearer_token
-from app.auth.resolver import Account, Authenticator, AuthUnavailable
+from app.auth.resolver import Account, Authenticator, AuthUnavailable, account_from_row
+from app.auth.tokens import verify_jwt
 
 # Exact (method, path) pairs and path prefixes that need a slice key.
 LOCKED_ROUTES = {("POST", "/v1/messages"), ("POST", "/v1/chat/completions")}
@@ -120,23 +121,23 @@ class AuthMiddleware:
         path = scope.get("path", "")
         headers = _lower_headers(scope.get("headers") or [])
         token = bearer_token(headers)
-        if token is None:
-            # EventSource cannot set an Authorization header, so the dashboard's live
-            # stream — and only that GET — may present the key as a ``slice_key`` query
-            # param instead. Every other locked path requires the header.
-            token = _token_from_query(scope, path)
-        if token is None:
-            await _reject(send, path, 401, MISSING_MESSAGE)
-            return
-
-        try:
-            account = await get_authenticator(scope["app"]).resolve(token)
-        except AuthUnavailable:
-            await _reject(send, path, 503, UNAVAILABLE_MESSAGE)
-            return
-        if account is None:
-            await _reject(send, path, 401, INVALID_MESSAGE)
-            return
+        if token is not None:
+            try:
+                account = await get_authenticator(scope["app"]).resolve(token)
+            except AuthUnavailable:
+                await _reject(send, path, 503, UNAVAILABLE_MESSAGE)
+                return
+            if account is None:
+                await _reject(send, path, 401, INVALID_MESSAGE)
+                return
+        else:
+            # No bearer: the dashboard authenticates with an httpOnly session cookie
+            # (its GitHub web login sets it; EventSource sends it on its own). Any
+            # failure (no cookie, a forged/expired/unknown one) is the same 401.
+            account = await _account_from_cookie(scope, headers)
+            if account is None:
+                await _reject(send, path, 401, MISSING_MESSAGE)
+                return
 
         # The slice key never goes upstream: strip the Authorization header from the
         # scope before any handler or adapter sees it, so a provider can't receive it
@@ -156,19 +157,39 @@ def _strip_authorization(raw: list[tuple[bytes, bytes]]) -> list[tuple[bytes, by
     return [(k, v) for k, v in raw if k.lower() != b"authorization"]
 
 
-# The one path where the key may ride in the query string (EventSource can't set headers).
-_QUERY_KEY_PATH = "/dashboard/events"
+async def _account_from_cookie(scope, headers: dict[str, str]) -> Account | None:
+    """The account a valid session cookie belongs to, or None on any failure.
 
-
-def _token_from_query(scope, path: str) -> str | None:
-    if scope.get("method", "").upper() != "GET" or path != _QUERY_KEY_PATH:
+    Reads the ``config.SESSION_COOKIE`` JWT, verifies it, and loads the account from the
+    database. A missing or malformed cookie, a forged/expired/wrong-secret token, an
+    unknown account, or a store that cannot be read all come back as None (a 401).
+    """
+    raw_cookie = headers.get("cookie")
+    if not raw_cookie:
         return None
-    from urllib.parse import parse_qs
+    from http.cookies import SimpleCookie
 
-    raw = scope.get("query_string") or b""
-    values = parse_qs(raw.decode("latin-1")).get("slice_key")
-    token = values[0].strip() if values else ""
-    return token or None
+    jar = SimpleCookie()
+    try:
+        jar.load(raw_cookie)
+    except Exception:  # noqa: BLE001 (a malformed Cookie header is just no cookie).
+        return None
+    morsel = jar.get(config.SESSION_COOKIE)
+    if morsel is None:
+        return None
+    account_id = verify_jwt(morsel.value)
+    if account_id is None:
+        return None
+    db = getattr(scope["app"].state, "db", None)
+    if db is None or not getattr(db, "enabled", False):
+        return None
+    try:
+        row = await db.get_account(account_id)
+    except Exception:  # noqa: BLE001 (a sick store is a closed door, never open).
+        return None
+    if row is None:
+        return None
+    return account_from_row(row)
 
 
 async def _reject(send, path: str, status: int, message: str) -> None:

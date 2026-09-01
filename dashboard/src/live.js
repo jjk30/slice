@@ -1,6 +1,6 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { apiBase } from './api.js'
-import { withKeyParam, hasKey } from './auth.js'
+import { session } from './auth.js'
 
 const BACKOFF_START_MS = 1000
 const BACKOFF_CAP_MS = 15000
@@ -49,16 +49,16 @@ export function useLiveEvents(onEvent, onOpen) {
 
   function connect() {
     if (stopped) return
-    // Phase 12: no key, no stream — the gateway would just 401 it into a reconnect loop.
-    if (!hasKey()) {
+    // Phase 21: no session, no stream (the gateway would just 401 it into a reconnect loop).
+    if (!session.value) {
       status.value = 'offline'
       return
     }
     if (es) es.close()
     // Status stays 'offline' until the first open; errors flip it to 'reconnecting'.
-    // EventSource can't set headers, so the slice key rides as a query param (the
-    // gateway accepts it there for this one GET only).
-    es = new EventSource(withKeyParam(apiBase() + '/dashboard/events'))
+    // The httpOnly session cookie rides along with the EventSource request on its own,
+    // so no key is ever put in the URL.
+    es = new EventSource(apiBase() + '/dashboard/events')
     es.addEventListener('open', () => {
       backoff = BACKOFF_START_MS
       status.value = 'live'

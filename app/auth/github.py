@@ -120,20 +120,29 @@ class GitHubDeviceFlow:
         raise GitHubError(f"github access token error: {error}")
 
     async def user(self, access_token: str) -> GitHubUser:
-        response = await self.http.get(
-            USER_URL,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {access_token}",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            timeout=TIMEOUT,
-        )
-        data = _json_or_error(response, "user")
-        try:
-            return GitHubUser(id=int(data["id"]), login=str(data["login"]), email=data.get("email") or None)
-        except (KeyError, TypeError, ValueError) as exc:
-            raise GitHubError(f"user response missing fields: {exc}") from exc
+        return await fetch_user(self.http, access_token)
+
+
+async def fetch_user(http: httpx.AsyncClient, access_token: str) -> GitHubUser:
+    """GET /user with a GitHub access token, as a ``GitHubUser``.
+
+    Shared by the device flow (``GitHubDeviceFlow.user``) and the phase-21 web flow
+    (``app.auth.web``): both turn an access token into the same identity, the same way.
+    """
+    response = await http.get(
+        USER_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {access_token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        timeout=TIMEOUT,
+    )
+    data = _json_or_error(response, "user")
+    try:
+        return GitHubUser(id=int(data["id"]), login=str(data["login"]), email=data.get("email") or None)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GitHubError(f"user response missing fields: {exc}") from exc
 
 
 def _json_or_error(response: httpx.Response, what: str) -> dict:

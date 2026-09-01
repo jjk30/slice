@@ -1,48 +1,38 @@
 <script setup>
-import { ref } from 'vue'
+import { computed } from 'vue'
+import { apiBase } from '../api.js'
 
-// Phase 12: the plain slice-key bridge. The full GitHub web login is a later step; for
-// now the dashboard just takes a slice key (from `slice login`) and holds it in
-// sessionStorage. Emits `login` with the trimmed key; App.vue stores it and loads.
-const emit = defineEmits(['login'])
-const key = ref('')
-const show = ref(false)
+// Phase 21: GitHub sign-in for the dashboard. The button is a full-page redirect to the
+// gateway's /auth/github/login, which sends the browser to GitHub and back and sets the
+// session cookie. If the browser came back from a cancelled or failed sign-in, the URL
+// carries ?login=denied or ?login=failed and we show one plain line about it.
+const loginError = computed(() => {
+  const reason = new URLSearchParams(window.location.search).get('login')
+  if (reason === 'denied') return 'Sign-in was cancelled on GitHub.'
+  if (reason === 'failed') return 'Sign-in did not complete. Try again.'
+  return ''
+})
 
-function submit() {
-  const trimmed = key.value.trim()
-  if (trimmed) emit('login', trimmed)
+function signIn() {
+  window.location.href = apiBase() + '/auth/github/login'
 }
 </script>
 
 <template>
   <div class="login">
-    <form class="login-card card" @submit.prevent="submit">
+    <div class="login-card card">
       <div class="brand">
         <img class="brand-logo" src="/favicon.png" alt="" width="28" height="28" />
         <h1 class="brand-name">slice</h1>
       </div>
-      <p class="lede">Sign in to your dashboard with a slice key.</p>
-      <label class="field">
-        <span class="label">slice key</span>
-        <div class="key-row">
-          <input
-            :type="show ? 'text' : 'password'"
-            v-model="key"
-            class="mono input"
-            placeholder="slk_live_…"
-            autocomplete="off"
-            spellcheck="false"
-            aria-label="slice key"
-          />
-          <button type="button" class="reveal" @click="show = !show">{{ show ? 'hide' : 'show' }}</button>
-        </div>
-      </label>
-      <button type="submit" class="submit" :disabled="!key.trim()">Continue</button>
+      <p class="lede">Sign in to your dashboard.</p>
+      <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
+      <button type="button" class="submit" @click="signIn">Sign in with GitHub</button>
       <p class="hint">
-        Run <code class="mono">slice login</code> in your terminal to get a key. It is kept only
-        for this browser tab. Full GitHub sign-in for the dashboard lands in a later step.
+        The terminal uses <code class="mono">slice login</code> instead, which hands out a
+        slice key for the CLI. This dashboard signs you in through GitHub.
       </p>
-    </form>
+    </div>
   </div>
 </template>
 
@@ -82,6 +72,12 @@ function submit() {
   margin: 0;
   color: var(--muted);
   font-size: 14px;
+}
+
+.login-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--cherry, #b3261e);
 }
 
 .field {

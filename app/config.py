@@ -248,9 +248,29 @@ ALERT_TIMEZONE = os.getenv("ALERT_TIMEZONE", "America/New_York")
 AUTH_ENABLED = _bool("AUTH_ENABLED", True)
 
 # The public client id of the GitHub OAuth App slice logs in through. Device flow needs
-# no client secret, so this is the only GitHub credential and it is not secret. Unset
-# means login is off: /auth/device/start answers 503 and nobody can mint a key.
+# no client secret, so this is the only GitHub credential the CLI login needs and it is
+# not secret. Unset means login is off: /auth/device/start answers 503 and nobody can
+# mint a key.
 GITHUB_OAUTH_CLIENT_ID = os.getenv("GITHUB_OAUTH_CLIENT_ID") or None
+
+# Phase 21: the dashboard's browser GitHub sign-in (the authorization-code flow) needs a
+# client secret too. Web login is configured only when BOTH GITHUB_OAUTH_CLIENT_ID and
+# GITHUB_OAUTH_CLIENT_SECRET are set; the device flow still needs only the id. Secret,
+# env only, never logged.
+GITHUB_OAUTH_CLIENT_SECRET = os.getenv("GITHUB_OAUTH_CLIENT_SECRET") or None
+
+# The public HTTPS (or http://localhost) origin the browser reaches slice at. The GitHub
+# OAuth redirect_uri is PUBLIC_BASE_URL + "/auth/github/callback", so it must match the
+# callback URL registered on the OAuth App. Trailing slash trimmed.
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "http://localhost:8080").rstrip("/")
+
+# The name of the httpOnly session cookie the dashboard's web login sets (the JWT rides
+# in it). The live SSE stream reads it too, which is why the key never rides in the URL.
+SESSION_COOKIE = "slice_session"
+
+# The cookie's Secure flag: on everywhere except a plain http://localhost dev origin,
+# where the browser would drop a Secure cookie sent over http.
+COOKIE_SECURE = not PUBLIC_BASE_URL.startswith("http://localhost")
 
 # The HMAC secret the dashboard-session JWTs are signed with. Env only, never in code.
 # Unset means no JWT is ever minted (login still hands out a slice key; the JWT comes back

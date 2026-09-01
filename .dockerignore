@@ -3,7 +3,10 @@
 .venv
 .git
 tests
-dashboard
+# Phase 21: the dashboard SOURCE must reach the build stage (it is compiled there), so
+# only keep the two build products out: the host's node_modules and any host build.
+dashboard/node_modules
+dashboard/dist
 .env
 *.pyc
 __pycache__

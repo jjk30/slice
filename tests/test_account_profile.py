@@ -29,7 +29,8 @@ class FakeAccountDB:
     def seed_account(self, account_id, *, login=None, email=None, whatsapp_number=None):
         self.accounts[int(account_id)] = {
             "id": int(account_id), "github_id": None, "github_login": login,
-            "email": email, "whatsapp_number": whatsapp_number, "created_at": None,
+            "email": email, "whatsapp_number": whatsapp_number,
+            "profile_confirmed_at": None, "created_at": None,
         }
 
     def seed_connection(self, account_id, *, status, role_arn):
@@ -47,12 +48,15 @@ class FakeAccountDB:
         row = self.accounts.setdefault(
             int(account_id),
             {"id": int(account_id), "github_id": None, "github_login": None,
-             "email": None, "whatsapp_number": None, "created_at": None},
+             "email": None, "whatsapp_number": None, "profile_confirmed_at": None,
+             "created_at": None},
         )
         if email is not None:
             row["email"] = email
         if whatsapp_number is not None:
             row["whatsapp_number"] = whatsapp_number
+        # Phase 21: every successful save confirms the profile, mirroring now() in SQL.
+        row["profile_confirmed_at"] = "2026-09-01T00:00:00Z"
         return dict(row)
 
     async def get_connection(self, account_id):
@@ -109,6 +113,7 @@ async def test_get_profile_returns_full_shape(client, monkeypatch, set_db):
         "email": "j@example.com",
         "whatsapp_number": "+14155552671",
         "aws_connected": True,
+        "profile_confirmed": False,
     }
 
 
@@ -225,3 +230,19 @@ async def test_cross_account_isolation(client, monkeypatch, set_db):
     assert alice.json()["email"] == "alice@example.com"
     assert db.accounts[9]["email"] == "bob@example.com"
     assert db.accounts[5]["email"] == "alice@example.com"
+
+
+# --- profile_confirmed flips on the first save (phase 21) --------------------
+
+async def test_profile_confirmed_false_before_save_true_after(client, monkeypatch, set_db):
+    monkeypatch.setattr(account_routes, "read_account", _as_account(Account(id=7, login="u")))
+    db = set_db(FakeAccountDB())
+    db.seed_account(7, login="u")
+
+    before = await client.get("/account/profile")
+    assert before.json()["profile_confirmed"] is False
+
+    await client.put("/account/profile", json={"email": "u@example.com"})
+
+    after = await client.get("/account/profile")
+    assert after.json()["profile_confirmed"] is True

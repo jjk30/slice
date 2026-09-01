@@ -73,6 +73,9 @@ async def get_profile(request: Request):
     email = account.email
     whatsapp = None
     aws_connected = False
+    # Phase 21: whether the first-time setup screen has been completed. False until the
+    # first profile save stamps profile_confirmed_at; the dashboard shows setup once.
+    profile_confirmed = False
     if _db_ready(db):
         try:
             row = await db.get_account(account.id)
@@ -81,6 +84,7 @@ async def get_profile(request: Request):
         if row is not None:
             email = row.get("email")
             whatsapp = row.get("whatsapp_number")
+            profile_confirmed = bool(row.get("profile_confirmed_at"))
         aws_connected = await _aws_connected(db, account.id)
 
     return {
@@ -88,6 +92,7 @@ async def get_profile(request: Request):
         "email": email,
         "whatsapp_number": whatsapp,
         "aws_connected": aws_connected,
+        "profile_confirmed": profile_confirmed,
     }
 
 

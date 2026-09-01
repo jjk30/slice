@@ -20,9 +20,12 @@ Layers, mirroring the earlier suites:
   to a dead database still never raises.
 """
 
+import asyncio
 import time
+from http.cookies import SimpleCookie
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import jwt as pyjwt
@@ -186,6 +189,13 @@ class FakeGitHub:
 
     async def user(self, access_token):
         return self.user_obj
+
+    # Phase 21: the web (authorization-code) flow's one extra call. Faked the same way
+    # the device calls are: a scripted return, no real GitHub.
+    async def exchange(self, code, redirect_uri):
+        self.exchanged = getattr(self, "exchanged", 0) + 1
+        self.exchange_redirect_uri = redirect_uri
+        return "gho_web_token"
 
 
 @pytest.fixture
@@ -555,14 +565,15 @@ async def test_admin_path_passes_with_a_good_key(client, auth_on, wired_auth, st
     assert r.json()["keys"][0]["key_prefix"].startswith("slk_live_")
 
 
-async def test_events_accepts_key_as_query_param(client, auth_on, wired_auth, store):
-    # EventSource can't set headers, so the live stream accepts the key in the query.
+async def test_events_no_longer_accepts_key_as_query_param(client, auth_on, wired_auth, store):
+    # Phase 21: the slice_key query-param path is gone; EventSource sends the session
+    # cookie on its own. Missing credentials is a 401, and a VALID key in the query is
+    # now a 401 too (the query is no longer read).
     _id, key = store.add_account_with_key()
     missing = await client.get("/dashboard/events")
     assert missing.status_code == 401
-    # A bad key in the query is still a 401 (it reaches the resolver, not just the shape).
-    bad = await client.get(f"/dashboard/events?slice_key={keymod.mint_key()}")
-    assert bad.status_code == 401
+    valid_in_query = await client.get(f"/dashboard/events?slice_key={key}")
+    assert valid_in_query.status_code == 401
 
 
 # ============================================================================
@@ -682,3 +693,259 @@ async def test_missing_account_id_defaults_to_none():
         cost_usd=None, stream=False,
     )
     assert record.account_id is None
+
+
+# ============================================================================
+# Phase 21: GitHub sign-in for the dashboard in the browser
+# ============================================================================
+
+JWT_SECRET_VALUE = "test-secret-0123456789-abcdef-xyz"
+
+
+@pytest.fixture
+def web_env(monkeypatch, store):
+    """Web login configured (id + secret), a JWT secret, an https public base, fake Redis."""
+    monkeypatch.setattr(config, "GITHUB_OAUTH_CLIENT_ID", "client-abc")
+    monkeypatch.setattr(config, "GITHUB_OAUTH_CLIENT_SECRET", "secret-xyz")
+    monkeypatch.setattr(config, "JWT_SECRET", JWT_SECRET_VALUE)
+    monkeypatch.setattr(config, "PUBLIC_BASE_URL", "https://slice.example.com")
+    # COOKIE_SECURE is derived from PUBLIC_BASE_URL at import; set it to match the https base.
+    monkeypatch.setattr(config, "COOKIE_SECURE", True)
+    redis = __import__("fakeredis").aioredis.FakeRedis()
+    app.state.redis = redis
+    return redis
+
+
+def _state_from_login(response) -> str:
+    loc = response.headers["location"]
+    return parse_qs(urlparse(loc).query)["state"][0]
+
+
+async def test_github_login_redirects_to_github_with_state_stored(client, web_env):
+    app.state.github_web = FakeGitHub(poll_states=[])
+    try:
+        r = await client.get("/auth/github/login")
+    finally:
+        app.state.github_web = None
+    assert r.status_code == 302
+    loc = r.headers["location"]
+    assert loc.startswith("https://github.com/login/oauth/authorize")
+    q = parse_qs(urlparse(loc).query)
+    assert q["client_id"] == ["client-abc"]
+    assert q["redirect_uri"] == ["https://slice.example.com/auth/github/callback"]
+    assert q["scope"] == ["read:user"]
+    state = q["state"][0]
+    # The state now exists in the store, holding the redirect_uri.
+    stored = await web_env.get(f"slice:auth:web:{state}")
+    assert stored is not None
+    assert stored.decode() == "https://slice.example.com/auth/github/callback"
+
+
+async def test_github_login_503_when_secret_unset(client, store, monkeypatch):
+    monkeypatch.setattr(config, "GITHUB_OAUTH_CLIENT_ID", "client-abc")
+    monkeypatch.setattr(config, "GITHUB_OAUTH_CLIENT_SECRET", None)
+    app.state.github_web = None
+    app.state.redis = __import__("fakeredis").aioredis.FakeRedis()
+    r = await client.get("/auth/github/login")
+    assert r.status_code == 503
+    assert "error" in r.json()
+
+
+async def test_github_callback_good_code_sets_cookie_and_upserts(client, web_env, store):
+    app.state.github_web = FakeGitHub(poll_states=[])
+    try:
+        login = await client.get("/auth/github/login")
+        state = _state_from_login(login)
+        cb = await client.get(f"/auth/github/callback?code=abc123&state={state}")
+    finally:
+        app.state.github_web = None
+
+    assert cb.status_code == 302
+    assert cb.headers["location"] == "/"
+    set_cookie = cb.headers["set-cookie"]
+    lower = set_cookie.lower()
+    assert "slice_session=" in set_cookie
+    assert "httponly" in lower
+    assert "samesite=lax" in lower
+    assert "path=/" in lower
+    assert "max-age=" in lower
+    assert "secure" in lower  # COOKIE_SECURE is true in web_env
+    # The cookie's value is a JWT that verifies to the upserted account.
+    jar = SimpleCookie()
+    jar.load(set_cookie)
+    token = jar["slice_session"].value
+    assert tokmod.verify_jwt(token) is not None
+    # The account was created from the GitHub identity.
+    assert any(a["github_login"] == "octocat" for a in store.accounts.values())
+
+
+async def test_github_callback_secure_absent_on_localhost(client, web_env, store, monkeypatch):
+    monkeypatch.setattr(config, "COOKIE_SECURE", False)
+    app.state.github_web = FakeGitHub(poll_states=[])
+    try:
+        login = await client.get("/auth/github/login")
+        state = _state_from_login(login)
+        cb = await client.get(f"/auth/github/callback?code=abc123&state={state}")
+    finally:
+        app.state.github_web = None
+    assert "secure" not in cb.headers["set-cookie"].lower()
+
+
+async def test_github_callback_unknown_state_fails_and_creates_no_account(client, web_env, store):
+    app.state.github_web = FakeGitHub(poll_states=[])
+    try:
+        r = await client.get("/auth/github/callback?code=abc&state=nope")
+    finally:
+        app.state.github_web = None
+    assert r.status_code == 302
+    assert r.headers["location"] == "/?login=failed"
+    assert store.accounts == {}
+
+
+async def test_github_callback_access_denied_redirects_denied(client, web_env):
+    r = await client.get("/auth/github/callback?error=access_denied")
+    assert r.status_code == 302
+    assert r.headers["location"] == "/?login=denied"
+
+
+async def test_github_callback_state_is_single_use(client, web_env, store):
+    app.state.github_web = FakeGitHub(poll_states=[])
+    try:
+        login = await client.get("/auth/github/login")
+        state = _state_from_login(login)
+        first = await client.get(f"/auth/github/callback?code=abc&state={state}")
+        assert first.headers["location"] == "/"
+        # Replaying the same state is now unknown -> failed.
+        replay = await client.get(f"/auth/github/callback?code=abc&state={state}")
+    finally:
+        app.state.github_web = None
+    assert replay.headers["location"] == "/?login=failed"
+
+
+# --- the session cookie through the lock ------------------------------------
+
+
+def _cookie(token: str) -> dict:
+    return {"Cookie": f"{config.SESSION_COOKIE}={token}"}
+
+
+async def test_cookie_opens_a_locked_get(client, auth_on, wired_auth, store, monkeypatch):
+    monkeypatch.setattr(config, "JWT_SECRET", JWT_SECRET_VALUE)
+    account_id, _key = store.add_account_with_key()
+    token = tokmod.mint_jwt(account_id)
+    r = await client.get("/admin/keys", headers=_cookie(token))
+    assert r.status_code == 200
+    assert len(r.json()["keys"]) == 1
+
+
+async def test_forged_expired_unknown_and_junk_cookies_are_401(client, auth_on, wired_auth, store, monkeypatch):
+    monkeypatch.setattr(config, "JWT_SECRET", JWT_SECRET_VALUE)
+    account_id, _key = store.add_account_with_key()
+
+    forged = pyjwt.encode(
+        {"sub": str(account_id), "iss": tokmod.ISSUER,
+         "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+        "wrong-secret-0123456789-abcdefghijk", algorithm="HS256",
+    )
+    expired = tokmod.mint_jwt(
+        account_id, ttl_seconds=1, now=datetime.now(timezone.utc) - timedelta(hours=2)
+    )
+    unknown = tokmod.mint_jwt(999999)  # valid token, no such account
+    for bad in (forged, expired, unknown, "not.a.jwt"):
+        r = await client.get("/admin/keys", headers=_cookie(bad))
+        assert r.status_code == 401
+
+
+async def test_me_via_cookie_reports_cookie_then_logout_is_401(client, wired_auth, store, monkeypatch):
+    monkeypatch.setattr(config, "JWT_SECRET", JWT_SECRET_VALUE)
+    account_id, _key = store.add_account_with_key(login="octocat")
+    token = tokmod.mint_jwt(account_id)
+
+    me = await client.get("/auth/me", headers=_cookie(token))
+    assert me.status_code == 200
+    assert me.json()["via"] == "cookie"
+    assert me.json()["account"] == {"login": "octocat", "id": account_id}
+
+    out = await client.post("/auth/logout")
+    assert out.status_code == 204
+    sc = out.headers["set-cookie"]
+    assert "Max-Age=0" in sc and f"{config.SESSION_COOKIE}=" in sc
+    # The browser honors that by dropping the cookie; a request without it is unauthorized.
+    assert (await client.get("/auth/me")).status_code == 401
+
+
+# --- SSE via cookie delivers only this account's events ----------------------
+
+
+class _SSECookieHarness:
+    """Drive one GET /dashboard/events with a session cookie, capturing what is sent."""
+
+    def __init__(self, cookie_header: str):
+        self.cookie_header = cookie_header
+        self.sent: list[dict] = []
+        self.disconnect = asyncio.Event()
+        self._body_sent = False
+
+    @property
+    def body(self) -> bytes:
+        return b"".join(m.get("body", b"") for m in self.sent if m["type"] == "http.response.body")
+
+    async def receive(self):
+        if not self._body_sent:
+            self._body_sent = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await self.disconnect.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(self, message):
+        self.sent.append(message)
+
+    async def run(self):
+        scope = {
+            "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1", "method": "GET", "scheme": "http",
+            "path": "/dashboard/events", "raw_path": b"/dashboard/events",
+            "query_string": b"", "root_path": "",
+            "headers": [(b"host", b"gateway"), (b"accept", b"text/event-stream"),
+                        (b"cookie", self.cookie_header.encode())],
+            "client": ("testclient", 1), "server": ("gateway", 80),
+        }
+        await app(scope, self.receive, self.send)
+
+    async def wait_for(self, needle: bytes, timeout: float = 2.0):
+        deadline = asyncio.get_running_loop().time() + timeout
+        while needle not in self.body:
+            if asyncio.get_running_loop().time() > deadline:
+                raise AssertionError(f"{needle!r} never arrived; got {self.body!r}")
+            await asyncio.sleep(0.01)
+
+
+async def test_sse_via_cookie_delivers_only_this_account(auth_on, wired_auth, store, monkeypatch):
+    from app.dashboard import get_broadcaster, make_event
+
+    monkeypatch.setattr(config, "JWT_SECRET", JWT_SECRET_VALUE)
+    a_id, _ = store.add_account_with_key(github_id=111, login="a")
+    b_id, _ = store.add_account_with_key(github_id=222, login="b")
+    token = tokmod.mint_jwt(a_id)
+
+    harness = _SSECookieHarness(f"{config.SESSION_COOKIE}={token}")
+    task = asyncio.create_task(harness.run())
+    try:
+        await harness.wait_for(b": connected")
+        broadcaster = get_broadcaster(app)
+        # B's event must be dropped at A's queue; A's must arrive.
+        broadcaster.publish(make_event(
+            team="t", model="m", routed_from=None, status=200,
+            cost=Decimal("0.01"), cached=False, account_id=b_id,
+        ))
+        broadcaster.publish(make_event(
+            team="t", model="m", routed_from=None, status=200,
+            cost=Decimal("0.02"), cached=False, account_id=a_id,
+        ))
+        await harness.wait_for(b"event: request\n")
+        # Only A's event (cost 0.02) is in the stream; B's (0.01) never is.
+        assert b"0.02" in harness.body
+        assert b"0.01" not in harness.body
+    finally:
+        harness.disconnect.set()
+        await asyncio.wait_for(task, timeout=2)

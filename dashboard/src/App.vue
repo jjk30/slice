@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { getJson, AuthError } from './api.js'
 import { useLiveEvents } from './live.js'
-import { sliceKey, setKey, clearKey, hasKey } from './auth.js'
+import { session, loadSession, logout } from './auth.js'
 import { money, percent, integer } from './format.js'
 import KpiTile from './components/KpiTile.vue'
 import LivePill from './components/LivePill.vue'
@@ -11,28 +11,56 @@ import ModelsChart from './components/ModelsChart.vue'
 import RecentCalls from './components/RecentCalls.vue'
 import GuardrailsTile from './components/GuardrailsTile.vue'
 import LoginScreen from './components/LoginScreen.vue'
+import SetupScreen from './components/SetupScreen.vue'
 
-// Phase 12: the dashboard is locked. Until a key is entered (or if the gateway rejects
-// it) the login screen is shown instead of the dashboard. ``authed`` reactively tracks
-// whether we currently hold a key; a 401 anywhere clears it (see api.js) and flips back.
+// Phase 21: the dashboard is locked behind a GitHub session (an httpOnly cookie). On
+// mount we ask /auth/me who we are. No session -> the login screen. A session whose
+// profile is not yet confirmed -> the one-time setup screen. Otherwise the dashboard.
+// A 401 anywhere clears the session (see api.js) and flips back to login.
 // The header logo. Built from Vite's BASE_URL ('./', see vite.config.js) so it stays
 // relative and resolves wherever the dashboard is served from.
 const logoSrc = import.meta.env.BASE_URL + 'favicon.png'
 
-const authed = computed(() => hasKey())
-const accountLogin = computed(() => summary.value?.account?.login ?? teams.value?.budget?.account ?? null)
+// `booted` gates the first render until /auth/me has answered, so the login screen never
+// flashes before we know there is (or isn't) a session.
+const booted = ref(false)
+const profileConfirmed = ref(false)
+const view = computed(() => {
+  if (!session.value) return 'login'
+  if (!profileConfirmed.value) return 'setup'
+  return 'dashboard'
+})
+const accountLogin = computed(() => session.value?.login ?? null)
 
-function onLogin(key) {
-  setKey(key)
-  error.value = ''
+// Begin the dashboard's own loads and the live stream. Called once a confirmed session
+// exists (on boot, or right after the setup screen finishes).
+function startDashboard() {
   recentLoaded = false
-  loadAll()
+  loadAll().finally(() => { initialLoadDone = true })
   startLive()
 }
 
-function onLogout() {
+async function loadProfileConfirmed() {
+  try {
+    const profile = await getJson('/account/profile')
+    profileConfirmed.value = Boolean(profile.profile_confirmed)
+  } catch (e) {
+    // A rejected session drops to login; any other read failure just shows setup.
+    if (e instanceof AuthError) session.value = null
+    profileConfirmed.value = false
+  }
+}
+
+function onSetupDone() {
+  profileConfirmed.value = true
+  error.value = ''
+  startDashboard()
+}
+
+async function onLogout() {
   stopLive()
-  clearKey()
+  await logout()
+  profileConfirmed.value = false
   summary.value = models.value = teams.value = recent.value = null
   recentLoaded = false
   error.value = ''
@@ -188,11 +216,18 @@ const { status: liveStatus, start: startLive, stop: stopLive } = useLiveEvents(
 )
 
 let initialLoadDone = false
-onMounted(() => {
-  // Only load (and let the live stream connect) when we already hold a key; otherwise
-  // the login screen shows and onLogin kicks things off.
-  if (!hasKey()) { initialLoadDone = true; return }
-  loadAll().finally(() => { initialLoadDone = true })
+onMounted(async () => {
+  // Ask who we are. With a confirmed session, start the dashboard; otherwise the login
+  // or setup screen shows and takes it from there.
+  await loadSession()
+  if (session.value) {
+    await loadProfileConfirmed()
+    if (profileConfirmed.value) startDashboard()
+    else initialLoadDone = true
+  } else {
+    initialLoadDone = true
+  }
+  booted.value = true
 })
 onBeforeUnmount(() => {
   if (refreshTimer) clearTimeout(refreshTimer)
@@ -233,7 +268,9 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
 </script>
 
 <template>
-  <LoginScreen v-if="!authed" @login="onLogin" />
+  <template v-if="!booted" />
+  <LoginScreen v-else-if="view === 'login'" />
+  <SetupScreen v-else-if="view === 'setup'" @done="onSetupDone" />
   <div v-else class="page">
     <header class="header">
       <div class="brand">
@@ -245,7 +282,7 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
         <span class="meta">this month · {{ month ?? '—' }}</span>
         <span v-if="accountLogin" class="meta account">{{ accountLogin }}</span>
         <LivePill :status="liveStatus" />
-        <button class="signout" type="button" @click="onLogout">sign out</button>
+        <button class="signout" type="button" @click="onLogout">Log out</button>
       </div>
     </header>
 
