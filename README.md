@@ -11,6 +11,40 @@
   &nbsp;<a href="https://sliceapp.dev">sliceapp.dev</a>
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12" />
+  <img src="https://img.shields.io/badge/FastAPI-gateway-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/LangGraph-router%20%2B%20agent%20loop-1C3C3C?logo=langgraph&logoColor=white" alt="LangGraph" />
+  <img src="https://img.shields.io/badge/LangChain-RAG-1C3C3C?logo=langchain&logoColor=white" alt="LangChain" />
+  <img src="https://img.shields.io/badge/FAISS-semantic%20search-0467DF?logo=meta&logoColor=white" alt="FAISS" />
+  <img src="https://img.shields.io/badge/RAGAS-eval-6E40C9" alt="RAGAS" />
+  <img src="https://img.shields.io/badge/NeMo%20Guardrails-safety-76B900?logo=nvidia&logoColor=white" alt="NeMo Guardrails" />
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Anthropic-Claude-D97757?logo=anthropic&logoColor=white" alt="Anthropic" />
+  <img src="https://img.shields.io/badge/OpenAI-GPT-412991?logo=openai&logoColor=white" alt="OpenAI" />
+  <img src="https://img.shields.io/badge/Google-Gemini-4285F4?logo=googlegemini&logoColor=white" alt="Google Gemini" />
+  <img src="https://img.shields.io/badge/NVIDIA%20NIM-open%20models-76B900?logo=nvidia&logoColor=white" alt="NVIDIA NIM" />
+  <img src="https://img.shields.io/badge/LoRA%20judge-Qwen2.5--0.5B-FFD21E?logo=huggingface&logoColor=black" alt="LoRA judge" />
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16" />
+  <img src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white" alt="Redis 7" />
+  <img src="https://img.shields.io/badge/Vue%203%20%2B%20Vite-SSE%20dashboard-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3 + Vite" />
+  <img src="https://img.shields.io/badge/Electron-Mac%20app-47848F?logo=electron&logoColor=white" alt="Electron" />
+  <img src="https://img.shields.io/badge/MCP-server-000000?logo=modelcontextprotocol&logoColor=white" alt="MCP server" />
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Docker-arm64-2496ED?logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/Terraform-IaC-844FBA?logo=terraform&logoColor=white" alt="Terraform" />
+  <img src="https://img.shields.io/badge/AWS-EC2%20%7C%20ECR%20%7C%20S3%20%7C%20SSM-FF9900?logo=amazonwebservices&logoColor=white" alt="AWS" />
+  <img src="https://img.shields.io/badge/Caddy-TLS-1F88C0?logo=caddy&logoColor=white" alt="Caddy" />
+  <img src="https://img.shields.io/badge/Kubernetes-kind%20%2B%20HPA-326CE5?logo=kubernetes&logoColor=white" alt="Kubernetes" />
+  <img src="https://img.shields.io/badge/Prometheus-Grafana-E6522C?logo=prometheus&logoColor=white" alt="Prometheus and Grafana" />
+  <img src="https://img.shields.io/badge/GitHub%20Actions-CI-2088FF?logo=githubactions&logoColor=white" alt="GitHub Actions" />
+  <img src="https://img.shields.io/badge/PyPI-slice--gateway-3775A9?logo=pypi&logoColor=white" alt="PyPI" />
+</p>
+
 ## Why I built this
 
 In 2026 the AI bill came due. One enterprise reportedly ran up about $500M on Claude in a single month with no cap (Axios). Uber's AI budget for the year was reportedly gone by April, with its heaviest Claude Code users costing around $2,000 a month each. Microsoft reportedly pulled Claude Code from a large division after six months because adoption outran the budget.
