@@ -28,6 +28,13 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# sentence-transformers pulls in torch. On this arm64 (aarch64) CPU-only box the default
+# torch wheel drags in NVIDIA CUDA libraries the image can never use, ballooning it by
+# gigabytes. Install the CPU-only wheel FIRST from the PyTorch CPU index (it serves
+# linux/aarch64 cp312 wheels); the requirements install below then finds torch already
+# satisfied and leaves it in place instead of pulling the CUDA build.
+RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
+
 # Copy the dependency manifest FIRST and install, so this layer is cached and a
 # code-only change never reinstalls the (heavy) dependency tree.
 COPY requirements.txt ./
