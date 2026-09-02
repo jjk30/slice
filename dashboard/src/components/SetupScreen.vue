@@ -145,6 +145,11 @@ async function connectAws() {
       <section v-if="showAws" class="aws">
         <span class="label">Connect AWS (optional)</span>
         <p class="aws-lede">
+          Link a read-only role and slice shows your cloud bill next to your AI spend. It
+          only reads your account name and costs. It never sees your keys, your data, or
+          anything that could change your bill.
+        </p>
+        <p class="aws-lede">
           Create a read-only role in your AWS account so slice can scan it. Nothing is
           changed in your account, the role only lets slice read.
         </p>
