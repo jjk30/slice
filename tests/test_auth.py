@@ -98,15 +98,33 @@ class FakeKeyStore:
         row = self.accounts.get(int(account_id))
         return dict(row) if row else None
 
-    async def create_key(self, account_id, key_hash, key_prefix, name):
+    async def create_key(self, account_id, key_hash, key_prefix, name, prefix=None, last4=None):
         row = {
             "id": self._next_key, "account_id": account_id, "key_hash": key_hash,
-            "key_prefix": key_prefix, "name": name, "revoked_at": None,
-            "last_used_at": None, "created_at": None,
+            "key_prefix": key_prefix, "name": name, "prefix": prefix, "last4": last4,
+            "revoked_at": None, "last_used_at": None, "created_at": None,
         }
         self.keys[key_hash] = row
         self._next_key += 1
         return {k: v for k, v in row.items() if k != "key_hash"}
+
+    async def get_active_key(self, account_id):
+        live = [
+            r for r in self.keys.values()
+            if r["account_id"] == account_id and r["revoked_at"] is None
+        ]
+        if not live:
+            return None
+        row = max(live, key=lambda r: r["id"])  # highest id = newest
+        return {"prefix": row.get("prefix"), "last4": row.get("last4"), "created_at": row["created_at"]}
+
+    async def revoke_active_keys(self, account_id):
+        n = 0
+        for r in self.keys.values():
+            if r["account_id"] == account_id and r["revoked_at"] is None:
+                r["revoked_at"] = datetime.now(timezone.utc)
+                n += 1
+        return n
 
     async def find_key(self, key_hash):
         self.find_calls += 1
@@ -159,7 +177,8 @@ class FakeKeyStore:
         key = keymod.mint_key()
         self.keys[keymod.hash_key(key)] = {
             "id": self._next_key, "account_id": account_id, "key_hash": keymod.hash_key(key),
-            "key_prefix": keymod.key_prefix(key), "name": "test", "revoked_at": None,
+            "key_prefix": keymod.key_prefix(key), "name": "test",
+            "prefix": keymod.KEY_PREFIX, "last4": keymod.key_last4(key), "revoked_at": None,
             "last_used_at": None, "created_at": None,
         }
         self._next_key += 1
@@ -872,6 +891,74 @@ async def test_me_via_cookie_reports_cookie_then_logout_is_401(client, wired_aut
     assert "Max-Age=0" in sc and f"{config.SESSION_COOKIE}=" in sc
     # The browser honors that by dropping the cookie; a request without it is unauthorized.
     assert (await client.get("/auth/me")).status_code == 401
+
+
+# --- the "Your slice key" card: GET /dashboard/key + POST /dashboard/key/rotate (22a) ---
+
+
+async def test_dashboard_key_without_a_session_is_401(client, auth_on, wired_auth, store):
+    # No cookie, no bearer: the lock answers before any handler runs.
+    assert (await client.get("/dashboard/key")).status_code == 401
+
+
+async def test_dashboard_key_returns_masked_fields_only(client, auth_on, wired_auth, store, monkeypatch):
+    monkeypatch.setattr(config, "JWT_SECRET", JWT_SECRET_VALUE)
+    account_id, key = store.add_account_with_key()
+    token = tokmod.mint_jwt(account_id)
+
+    r = await client.get("/dashboard/key", headers=_cookie(token))
+    assert r.status_code == 200
+    card = r.json()["key"]
+    assert card["prefix"] == keymod.KEY_PREFIX
+    assert card["last4"] == key[-4:]
+    assert "created_at" in card
+    # The plain key is never stored, so it can never be echoed back — not the whole key,
+    # and no more of it than the four public tail characters.
+    assert key not in r.text
+    assert key[len(keymod.KEY_PREFIX):-4] not in r.text
+
+
+async def test_dashboard_key_is_null_when_the_account_has_none(client, auth_on, wired_auth, store, monkeypatch):
+    monkeypatch.setattr(config, "JWT_SECRET", JWT_SECRET_VALUE)
+    acct = await store.upsert_account(222, "keyless", None)
+    token = tokmod.mint_jwt(acct["id"])
+    r = await client.get("/dashboard/key", headers=_cookie(token))
+    assert r.status_code == 200
+    assert r.json()["key"] is None
+
+
+async def test_dashboard_key_rotate_returns_the_full_key_exactly_once(client, auth_on, wired_auth, store, monkeypatch):
+    monkeypatch.setattr(config, "JWT_SECRET", JWT_SECRET_VALUE)
+    account_id, _old = store.add_account_with_key()
+    token = tokmod.mint_jwt(account_id)
+
+    r = await client.post("/dashboard/key/rotate", headers=_cookie(token))
+    assert r.status_code == 200
+    body = r.json()
+    new_key = body["slice_key"]
+    assert new_key.startswith("slk_live_") and keymod.is_slice_key(new_key)
+    assert body["key"]["last4"] == new_key[-4:]
+
+    # The masked read now reflects the new key and never carries the plain key.
+    g = await client.get("/dashboard/key", headers=_cookie(token))
+    assert g.json()["key"]["last4"] == new_key[-4:]
+    assert new_key not in g.text
+
+
+async def test_rotate_revokes_the_old_key(client, auth_on, wired_auth, store, monkeypatch):
+    monkeypatch.setattr(config, "JWT_SECRET", JWT_SECRET_VALUE)
+    account_id, old_key = store.add_account_with_key()
+    token = tokmod.mint_jwt(account_id)
+    # The old key authenticates the proxy path before rotation.
+    assert (await wired_auth.resolve(old_key)) is not None
+
+    assert (await client.post("/dashboard/key/rotate", headers=_cookie(token))).status_code == 200
+
+    # Now it is dead: a 401 on /v1/messages, resolved before any upstream call.
+    r = await client.post(
+        "/v1/messages", headers={"authorization": f"Bearer {old_key}"}, json=REQUEST
+    )
+    assert r.status_code == 401
 
 
 # --- SSE via cookie delivers only this account's events ----------------------

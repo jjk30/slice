@@ -1,11 +1,18 @@
 <script setup>
 import { computed } from 'vue'
 import { apiBase } from '../api.js'
+import githubMark from '../assets/github-mark.png'
 
 // Phase 21: GitHub sign-in for the dashboard. The button is a full-page redirect to the
 // gateway's /auth/github/login, which sends the browser to GitHub and back and sets the
 // session cookie. If the browser came back from a cancelled or failed sign-in, the URL
 // carries ?login=denied or ?login=failed and we show one plain line about it.
+// Phase 22a: `signedOut` is set by App.vue right after a Log out, so this screen shows a
+// one-line "Signed out" note instead of looking like a fresh, never-signed-in visit.
+const props = defineProps({
+  signedOut: { type: Boolean, default: false },
+})
+
 const loginError = computed(() => {
   const reason = new URLSearchParams(window.location.search).get('login')
   if (reason === 'denied') return 'Sign-in was cancelled on GitHub.'
@@ -26,8 +33,11 @@ function signIn() {
         <h1 class="brand-name">slice</h1>
       </div>
       <p class="lede">Sign in to your dashboard.</p>
+      <p v-if="signedOut && !loginError" class="signed-out" role="status">Signed out</p>
       <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
-      <button type="button" class="submit" @click="signIn">Sign in with GitHub</button>
+      <button type="button" class="submit" @click="signIn">
+        <img class="gh-mark" :src="githubMark" alt="" />Sign in with GitHub
+      </button>
       <p class="hint">
         The terminal uses <code class="mono">slice login</code> instead, which hands out a
         slice key for the CLI. This dashboard signs you in through GitHub.
@@ -122,7 +132,17 @@ function signIn() {
   font-size: 12px;
 }
 
+.signed-out {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
   padding: 11px 14px;
   border: 0;
   border-radius: 10px;
@@ -131,6 +151,13 @@ function signIn() {
   font-weight: 500;
   font-size: 14px;
   cursor: pointer;
+}
+
+/* The GitHub mark, used as-is: fixed height, width follows its aspect ratio (no stretch). */
+.gh-mark {
+  height: 18px;
+  width: auto;
+  display: block;
 }
 
 .submit:disabled {

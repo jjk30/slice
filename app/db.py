@@ -193,9 +193,25 @@ WHERE id = $1
 RETURNING id, github_id, github_login, email, whatsapp_number, profile_confirmed_at, created_at
 """
 INSERT_KEY = """
-INSERT INTO slice_keys (account_id, key_hash, key_prefix, name)
-VALUES ($1, $2, $3, $4)
-RETURNING id, account_id, key_prefix, name, created_at
+INSERT INTO slice_keys (account_id, key_hash, key_prefix, name, prefix, last4)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, account_id, key_prefix, name, prefix, last4, created_at
+"""
+# The account's live (non-revoked) key for the dashboard's "Your slice key" card:
+# only its masked display parts, never the hash. Newest first so a just-minted key wins.
+SELECT_ACTIVE_KEY = """
+SELECT prefix, last4, created_at
+FROM slice_keys
+WHERE account_id = $1 AND revoked_at IS NULL
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+"""
+# Revoke every live key an account holds — the rotate endpoint's first half, so the old
+# key stops working the moment the new one is minted.
+REVOKE_ACTIVE_KEYS = """
+UPDATE slice_keys SET revoked_at = now()
+WHERE account_id = $1 AND revoked_at IS NULL
+RETURNING id
 """
 # The one query on the request path (on a cache miss): the key row joined with its
 # account, revoked_at included so the resolver can refuse a dead key.
@@ -980,14 +996,42 @@ class Database:
         return dict(row) if row is not None else None
 
     async def create_key(
-        self, account_id: int, key_hash: str, key_prefix: str, name: str | None
+        self,
+        account_id: int,
+        key_hash: str,
+        key_prefix: str,
+        name: str | None,
+        prefix: str | None = None,
+        last4: str | None = None,
     ) -> dict:
-        """Store one slice key (hash only) for ``account_id``; returns the key row sans hash."""
+        """Store one slice key (hash only) for ``account_id``; returns the key row sans hash.
+
+        ``prefix``/``last4`` are the masked display parts the dashboard card renders
+        (``slk_live_••••••••a1b2``); the plain key is never stored.
+        """
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
-            row = await connection.fetchrow(INSERT_KEY, int(account_id), key_hash, key_prefix, name)
+            row = await connection.fetchrow(
+                INSERT_KEY, int(account_id), key_hash, key_prefix, name, prefix, last4
+            )
         return dict(row)
+
+    async def get_active_key(self, account_id: int) -> dict | None:
+        """The account's live key as ``{prefix, last4, created_at}``, or None when it has none."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(SELECT_ACTIVE_KEY, int(account_id))
+        return dict(row) if row is not None else None
+
+    async def revoke_active_keys(self, account_id: int) -> int:
+        """Revoke every live key the account holds; returns how many were revoked."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(REVOKE_ACTIVE_KEYS, int(account_id))
+        return len(rows)
 
     async def find_key(self, key_hash: str) -> dict | None:
         """The key row (joined with its account, ``revoked_at`` included) for a hash, or None."""

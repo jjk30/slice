@@ -80,10 +80,14 @@ export function providerLabel(model) {
   return PROVIDER_LABELS[providerOf(model)] || 'Other'
 }
 
-// HH:MM:SS in the viewer's local time zone.
+// "Aug 24 00:52" — short month, day, and HH:MM (24h), in the viewer's local time zone
+// (the same local basis every other timestamp on the dashboard uses). The date is shown
+// with the time so a row can't be mistaken for today when it is from another day.
 export function time(iso) {
   if (isNil(iso)) return DASH
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return DASH
-  return d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  const clock = d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit' })
+  return `${date} ${clock}`
 }

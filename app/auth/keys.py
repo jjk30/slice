@@ -43,6 +43,16 @@ def key_prefix(key: str) -> str:
     return f"{KEY_PREFIX}{body[:_DISPLAY_CHARS]}..."
 
 
+def key_last4(key: str) -> str:
+    """The key's last four characters — the only tail the masked display ever shows.
+
+    Four public characters is enough to tell two keys apart in a list, far too few to
+    reconstruct the rest; stored next to the hash so the dashboard can render
+    ``slk_live_••••••••a1b2`` without the plain key ever being kept.
+    """
+    return key[-_DISPLAY_CHARS:]
+
+
 def is_slice_key(value: str | None) -> bool:
     """True when ``value`` has the shape of a slice key (prefix plus enough random chars).
 

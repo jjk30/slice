@@ -15,7 +15,7 @@ Modules:
 - ``routes``     — ``/auth/device/start``, ``/auth/device/poll``, ``/auth/me``.
 """
 
-from app.auth.keys import bearer_token, hash_key, is_slice_key, key_prefix, mint_key  # noqa: F401
+from app.auth.keys import bearer_token, hash_key, is_slice_key, key_last4, key_prefix, mint_key  # noqa: F401
 from app.auth.middleware import AuthMiddleware, current_account, get_authenticator, is_locked  # noqa: F401
 from app.auth.resolver import Account, Authenticator, AuthUnavailable, KeyCache, account_from_row  # noqa: F401
 from app.auth.routes import router  # noqa: F401

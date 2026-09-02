@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { getJson, AuthError } from '../api.js'
 import { apiBase } from '../api.js'
 import { session } from '../auth.js'
+import awsLogo from '../assets/aws-logo.png'
 
 // Phase 21: the first-time setup screen, shown once after sign-in while the account's
 // profile_confirmed is still false. Two things: an email slice can reach the user on
@@ -41,14 +42,9 @@ const connected = ref(false)
 const emailValid = computed(() => EMAIL_RE.test(email.value.trim()))
 const showAws = computed(() => awsMode.value === 'connect')
 
-onMounted(async () => {
-  try {
-    const profile = await getJson('/account/profile')
-    if (profile.email) email.value = profile.email
-  } catch (e) {
-    // A load failure just leaves the email blank; the user can type one.
-    if (e instanceof AuthError) session.value = null
-  }
+// Read GET /scanner/connect and reflect it into the AWS block. Used on mount and
+// again right after a successful connect so the status shows what the backend now sees.
+async function loadConnect() {
   try {
     const info = await getJson('/scanner/connect')
     awsMode.value = info.mode === 'operator' ? 'operator' : 'connect'
@@ -59,6 +55,17 @@ onMounted(async () => {
     // Treat an unreadable scanner as "no AWS block" rather than blocking setup.
     awsMode.value = 'operator'
   }
+}
+
+onMounted(async () => {
+  try {
+    const profile = await getJson('/account/profile')
+    if (profile.email) email.value = profile.email
+  } catch (e) {
+    // A load failure just leaves the email blank; the user can type one.
+    if (e instanceof AuthError) session.value = null
+  }
+  await loadConnect()
 })
 
 async function saveAndContinue() {
@@ -108,7 +115,9 @@ async function connectAws() {
       connectError.value = (body && body.error && body.error.message) || 'Could not verify the role. Check the ARN.'
       return
     }
-    connected.value = true
+    // Re-read the status from the backend rather than assuming success, so the
+    // status line reflects what the scanner actually sees after the assume-role.
+    await loadConnect()
   } catch (e) {
     connectError.value = 'Could not reach the gateway. Try again.'
   } finally {
@@ -144,6 +153,10 @@ async function connectAws() {
 
       <section v-if="showAws" class="aws">
         <span class="label">Connect AWS (optional)</span>
+        <p class="aws-status">
+          Status:
+          <span :class="connected ? 'aws-ok' : 'aws-muted'">{{ connected ? 'connected' : 'not connected' }}</span>
+        </p>
         <p class="aws-lede">
           Link a read-only role and slice shows your cloud bill next to your AI spend. It
           only reads your account name and costs. It never sees your keys, your data, or
@@ -159,7 +172,7 @@ async function connectAws() {
           :href="quickCreateUrl"
           target="_blank"
           rel="noopener"
-        >Create the read-only role in AWS</a>
+        ><img class="aws-create-logo" :src="awsLogo" alt="AWS" />Create the read-only role in AWS</a>
         <div class="key-row">
           <input
             v-model="roleArn"
@@ -172,8 +185,7 @@ async function connectAws() {
             {{ connecting ? 'Connecting…' : 'Connect' }}
           </button>
         </div>
-        <p v-if="connected" class="aws-ok">AWS account connected.</p>
-        <p v-else-if="connectError" class="aws-err" role="alert">{{ connectError }}</p>
+        <p v-if="connectError" class="aws-err" role="alert">{{ connectError }}</p>
       </section>
 
       <p v-if="saveError" class="aws-err" role="alert">{{ saveError }}</p>
@@ -279,6 +291,9 @@ async function connectAws() {
 
 .aws-create {
   align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 12px;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -286,6 +301,13 @@ async function connectAws() {
   color: var(--ink);
   font-size: 13px;
   text-decoration: none;
+}
+
+/* The AWS mark, used as-is: fixed height, width follows the aspect ratio (no stretch). */
+.aws-create-logo {
+  height: 18px;
+  width: auto;
+  display: block;
 }
 
 .connect {
@@ -303,10 +325,20 @@ async function connectAws() {
   cursor: not-allowed;
 }
 
+.aws-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .aws-ok {
   margin: 0;
   font-size: 13px;
   color: var(--teal);
+}
+
+.aws-muted {
+  color: var(--muted);
 }
 
 .aws-err {

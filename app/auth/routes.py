@@ -29,7 +29,15 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from app import config
 from app.auth import github as gh
 from app.auth import web
-from app.auth.keys import bearer_token, hash_key, is_slice_key, key_prefix, mint_key
+from app.auth.keys import (
+    KEY_PREFIX,
+    bearer_token,
+    hash_key,
+    is_slice_key,
+    key_last4,
+    key_prefix,
+    mint_key,
+)
 from app.auth.middleware import get_authenticator
 from app.auth.resolver import AuthUnavailable, account_from_row
 from app.auth.tokens import mint_jwt, verify_jwt
@@ -233,7 +241,8 @@ async def device_poll(request: Request):
         account_row = await db.upsert_account(user.id, user.login, user.email)
         slice_key = mint_key()
         await db.create_key(
-            int(account_row["id"]), hash_key(slice_key), key_prefix(slice_key), LOGIN_KEY_NAME
+            int(account_row["id"]), hash_key(slice_key), key_prefix(slice_key), LOGIN_KEY_NAME,
+            KEY_PREFIX, key_last4(slice_key),
         )
     except Exception as exc:  # noqa: BLE001 — a write failure means no key was minted; say so.
         logger.warning(json.dumps({"event": "auth_account_write_failed", "error": str(exc)}))

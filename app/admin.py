@@ -22,7 +22,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from app.auth.keys import hash_key, key_prefix, mint_key
+from app.auth.keys import KEY_PREFIX, hash_key, key_last4, key_prefix, mint_key
 from app.auth.middleware import get_authenticator, read_account
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -261,7 +261,9 @@ async def create_key(request: Request):
 
     key = mint_key()
     try:
-        row = await db.create_key(account.id, hash_key(key), key_prefix(key), name)
+        row = await db.create_key(
+            account.id, hash_key(key), key_prefix(key), name, KEY_PREFIX, key_last4(key)
+        )
     except Exception:  # noqa: BLE001
         return _error(503, "Could not store the key.")
     return JSONResponse(status_code=201, content={"key": _key_json(row), "slice_key": key})

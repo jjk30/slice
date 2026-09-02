@@ -47,3 +47,38 @@ export async function getJson(path) {
   }
   return body
 }
+
+// POST a JSON endpoint (no request body) and read its JSON reply. Same error and 401
+// handling as getJson: a 401 drops the session so the app returns to the login screen.
+export async function postJson(path) {
+  let res
+  try {
+    res = await fetch(apiBase() + path, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    })
+  } catch (e) {
+    throw new Error(`Cannot reach the gateway at ${apiBase() || window.location.origin}.`)
+  }
+  let body = null
+  try {
+    body = await res.json()
+  } catch (e) {
+    body = null
+  }
+  if (res.status === 401) {
+    session.value = null
+    const msg = body && body.error && body.error.message ? body.error.message : 'Not authorized.'
+    throw new AuthError(msg)
+  }
+  if (!res.ok) {
+    const msg = body && body.error && body.error.message
+      ? body.error.message
+      : `Request to ${path} failed with HTTP ${res.status}.`
+    throw new Error(msg)
+  }
+  if (body === null || typeof body !== 'object') {
+    throw new Error(`Unexpected non-JSON response from ${path}.`)
+  }
+  return body
+}

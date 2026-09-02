@@ -38,7 +38,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app import config, redis_layer
-from app.auth.middleware import read_account
+from app.auth.keys import KEY_PREFIX, hash_key, key_last4, key_prefix, mint_key
+from app.auth.middleware import get_authenticator, read_account
+from app.auth.routes import LOGIN_KEY_NAME
 from app.dashboard import stats
 from app.dashboard.broadcaster import EVENT_NAME, get_broadcaster
 from app.db import summarize_eval_rows, summarize_guardrail_rows
@@ -232,6 +234,71 @@ async def recent(request: Request, limit: int = RECENT_DEFAULT_LIMIT):
 
 def _iso(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _key_view(row: dict | None) -> dict | None:
+    """The masked display of one key row, or None. Never carries the key or its hash."""
+    if row is None:
+        return None
+    return {
+        "prefix": row.get("prefix"),
+        "last4": row.get("last4"),
+        "created_at": _iso(row.get("created_at")),
+    }
+
+
+@router.get("/key")
+async def key(request: Request):
+    """The account's live slice key, masked — ``{prefix, last4, created_at}`` or null.
+
+    Session-cookie auth like every other dashboard read. The plain key is never stored,
+    so it can never be read back here: only its ``slk_live_`` prefix and last four
+    characters, enough for the card to render ``slk_live_••••••••a1b2``.
+    """
+    account = read_account(request)
+    if account is None:
+        return _unauthenticated()
+    db = _db(request)
+    if db is None:
+        return _error(503, DB_UNAVAILABLE)
+    try:
+        row = await db.get_active_key(account.id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(json.dumps({"event": "dashboard_read_failed", "error": str(exc)}))
+        return _error(503, DB_READ_FAILED)
+    return {"key": _key_view(row)}
+
+
+@router.post("/key/rotate")
+async def rotate_key(request: Request):
+    """Mint a fresh slice key for the account and revoke the old one; return the new key once.
+
+    Same minting the ``slice login`` flow uses (``mint_key`` + ``create_key``). The old
+    key is revoked first so it stops working the instant the new one exists, and the
+    resolver cache is cleared so the revocation bites in this process immediately (the
+    cache is keyed by hash, which is not kept here). The full plain key is in this
+    response and nowhere else — the caller shows it once.
+    """
+    account = read_account(request)
+    if account is None:
+        return _unauthenticated()
+    db = _db(request)
+    if db is None:
+        return _error(503, DB_UNAVAILABLE)
+    new_key = mint_key()
+    try:
+        await db.revoke_active_keys(account.id)
+        row = await db.create_key(
+            account.id, hash_key(new_key), key_prefix(new_key), LOGIN_KEY_NAME,
+            KEY_PREFIX, key_last4(new_key),
+        )
+    except Exception as exc:  # noqa: BLE001 — a write failure is a clean 503, never a 500.
+        logger.warning(json.dumps({"event": "dashboard_key_rotate_failed", "error": str(exc)}))
+        return _error(503, "Could not rotate the key.")
+    # The cache is keyed by hash, which we don't have for the old key; drop everything so
+    # the revoked key can't outlive its row in this process. Cheap: it refills lazily.
+    get_authenticator(request.app).cache.clear()
+    return {"slice_key": new_key, "key": _key_view(row)}
 
 
 def _public_event(event: dict) -> dict:

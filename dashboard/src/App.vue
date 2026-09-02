@@ -10,6 +10,7 @@ import TeamBudgets from './components/TeamBudgets.vue'
 import ModelsChart from './components/ModelsChart.vue'
 import RecentCalls from './components/RecentCalls.vue'
 import GuardrailsTile from './components/GuardrailsTile.vue'
+import SliceKeyCard from './components/SliceKeyCard.vue'
 import LoginScreen from './components/LoginScreen.vue'
 import SetupScreen from './components/SetupScreen.vue'
 
@@ -27,6 +28,8 @@ const booted = ref(false)
 const profileConfirmed = ref(false)
 // Phase 23: a confirmed user can reopen the setup screen to edit their email + AWS role.
 const settingsOpen = ref(false)
+// Phase 22a: true right after a Log out, so the login screen shows a "Signed out" note.
+const signedOut = ref(false)
 const view = computed(() => {
   if (!session.value) return 'login'
   if (!profileConfirmed.value) return 'setup'
@@ -38,6 +41,7 @@ const accountLogin = computed(() => session.value?.login ?? null)
 // Begin the dashboard's own loads and the live stream. Called once a confirmed session
 // exists (on boot, or right after the setup screen finishes).
 function startDashboard() {
+  signedOut.value = false
   recentLoaded = false
   loadAll().finally(() => { initialLoadDone = true })
   startLive()
@@ -68,12 +72,18 @@ function onSettingsClose() {
 }
 
 async function onLogout() {
+  // Close the live stream first, then clear the cookie server-side, so nothing keeps
+  // pulling the old session's data on the way out.
   stopLive()
   await logout()
   profileConfirmed.value = false
+  settingsOpen.value = false
   summary.value = models.value = teams.value = recent.value = null
   recentLoaded = false
   error.value = ''
+  // `session` is now null, so `view` flips to 'login'; this shows the "Signed out" note
+  // there. It is cleared the moment a sign-in starts a fresh session (see startDashboard).
+  signedOut.value = true
 }
 
 const RECENT_LIMIT = 20
@@ -158,6 +168,11 @@ async function loadAll() {
     markFailed(e)
   }
 }
+
+// The slice-key card rejected the session (401). api.js already cleared `session`, so
+// `view` flips to the login screen on its own; nothing else to do but not treat it as
+// an outage banner.
+function onKeyAuthError() {}
 
 // ---- recent list merging ----------------------------------------------------
 
@@ -279,7 +294,7 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
 
 <template>
   <template v-if="!booted" />
-  <LoginScreen v-else-if="view === 'login'" />
+  <LoginScreen v-else-if="view === 'login'" :signed-out="signedOut" />
   <SetupScreen v-else-if="view === 'setup'" mode="onboarding" @done="onSetupDone" />
   <SetupScreen
     v-else-if="view === 'settings'"
@@ -319,6 +334,7 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
       <RecentCalls class="span-4" :rows="recent" :failed="failed" />
 
       <GuardrailsTile :guardrails="guardrails" :failed="failed" />
+      <SliceKeyCard class="span-2" @auth-error="onKeyAuthError" />
     </main>
   </div>
 </template>
