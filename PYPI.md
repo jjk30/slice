@@ -29,3 +29,8 @@ Run `slice use anthropic`, `slice use openai`, `slice use curl`, or `slice use c
 This is only the client. The slice gateway itself, the server that does the routing, caching, budgets, and dashboards, lives on GitHub at https://github.com/jjk30/slice.
 
 Homepage: https://sliceapp.dev
+
+## What's new in 0.2.0
+
+`slice login` now names the key after your machine and revokes the previous key from the same machine.
+Each device has one live key.
