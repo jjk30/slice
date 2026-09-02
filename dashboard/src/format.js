@@ -37,6 +37,16 @@ export function money(v) {
   return `${sign}$${grouped}.${fracPart}`
 }
 
+// A bill in dollars and cents: always exactly two decimals ($0.79, $1,234.50).
+// For amounts a provider already rounds to cents, unlike per-request AI spend.
+export function dollars(v) {
+  if (isNotNumber(v)) return DASH
+  const abs = Math.abs(v)
+  const [intPart, fracPart] = abs.toFixed(2).split('.')
+  const sign = v < 0 ? '-' : ''
+  return `${sign}$${groupInt.format(Number(intPart))}.${fracPart}`
+}
+
 export function percent(v) {
   if (isNotNumber(v)) return DASH
   return `${(v * 100).toFixed(1)}%`

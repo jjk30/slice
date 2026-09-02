@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { getJson, getAwsCost, AuthError } from './api.js'
 import { useLiveEvents } from './live.js'
 import { session, loadSession, logout } from './auth.js'
-import { money, percent, integer } from './format.js'
+import { money, dollars, percent, integer } from './format.js'
 import KpiTile from './components/KpiTile.vue'
 import LivePill from './components/LivePill.vue'
 import TeamBudgets from './components/TeamBudgets.vue'
@@ -292,12 +292,13 @@ const passRateSub = computed(() => {
   if (!summary.value) return ''
   return `${integer(summary.value.eval?.count)} scored`
 })
-// The AWS bill tile. Amounts arrive as decimal strings; a null month_to_date means
-// the account has not connected AWS (or nothing has been fetched yet), which is said
-// in words rather than shown as a $0 bill.
+// The AWS bill tile. Amounts arrive as decimal strings of dollars and cents, so they
+// are shown with exactly two decimals (not the small-amount AI-spend formatter). A
+// null month_to_date means the account has not connected AWS (or nothing has been
+// fetched yet), which is said in words rather than shown as a $0 bill.
 function usd(raw) {
   if (raw === null || raw === undefined) return null
-  return money(Number(raw))
+  return dollars(Number(raw))
 }
 const awsConnected = computed(() => usd(awsCost.value?.month_to_date) !== null)
 const awsBill = computed(() => {
