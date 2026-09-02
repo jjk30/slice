@@ -230,6 +230,10 @@ def _fields(alert: Alert) -> dict:
 # never pulls the scanner package (and boto3) in.
 SCAN_SUBJECT = "slice found {count} thing{plural} to check in your AWS account"
 
+# The resource id the scanner uses for a finding about the whole account rather than one
+# resource (``app/scanner/checks.py`` emits ``resource_id="account"``).
+ACCOUNT_RESOURCE = "account"
+
 SCAN_CHECK_COPY = {
     "s3_public": {
         "what": "Your S3 storage bucket {resource} in {region} is open to the internet.",
@@ -281,6 +285,22 @@ SCAN_CHECK_COPY = {
     },
 }
 
+# Wording for the account-wide variant of a check, used when the finding's resource is
+# ``ACCOUNT_RESOURCE``. The s3_public check raises one such finding when the account-level
+# Block Public Access setting is off or partial; that is a setting, not a bucket, so it
+# must not read like one. Same doc link as the bucket wording.
+SCAN_ACCOUNT_COPY = {
+    "s3_public": {
+        "what": "Block Public Access is turned off for your whole AWS account.",
+        "why": "With it off, any one bucket can be made public by mistake.",
+        "todo": (
+            "In the S3 console, open Block Public Access settings for this account, "
+            "and turn it on if no bucket needs to be public."
+        ),
+        "doc": SCAN_CHECK_COPY["s3_public"]["doc"],
+    },
+}
+
 
 def _scan_count(alert: Alert) -> int:
     try:
@@ -300,10 +320,18 @@ def _footer_lines(alert: Alert) -> list[str]:
 
 
 def _scan_finding_block(finding: dict) -> list[str]:
-    """One finding as three short lines plus a Read more link, in plain words."""
+    """One finding as three short lines plus a Read more link, in plain words.
+
+    The Read more link is the last thing on its line and is followed by one space, so a
+    mail client that re-wraps plain text (Gmail does) cannot glue the URL to the first
+    word of the next block. The caller adds the blank line after the block.
+    """
     resource = finding.get("resource") or "a resource"
     region = finding.get("region") or "your region"
-    copy = SCAN_CHECK_COPY.get(finding.get("check"))
+    check = finding.get("check")
+    copy = SCAN_ACCOUNT_COPY.get(check) if resource == ACCOUNT_RESOURCE else None
+    if copy is None:
+        copy = SCAN_CHECK_COPY.get(check)
     if copy is None:
         # A check we have no wording for: still say something plain, and skip the doc line
         # rather than guess at a link.
@@ -316,7 +344,7 @@ def _scan_finding_block(finding: dict) -> list[str]:
         copy["what"].format(resource=resource, region=region),
         copy["why"],
         copy["todo"],
-        f"Read more: {copy['doc']}",
+        f"Read more: {copy['doc']} ",
     ]
 
 

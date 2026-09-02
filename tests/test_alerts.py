@@ -21,6 +21,7 @@ Alerts are opt-in per test (see conftest); each test that needs them flips
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -47,6 +48,8 @@ from app.alerts import engine as alerts_engine
 from app.alerts.channels import (
     FOOTER_NOTE,
     RESEND_EMAILS_URL,
+    SCAN_ACCOUNT_COPY,
+    SCAN_CHECK_COPY,
     _money,
     body_for,
     format_time,
@@ -614,6 +617,74 @@ def test_scan_email_singular_and_more_line(monkeypatch):
         {"count": 6, "findings": SCAN_DETAIL["findings"], "summaries": ["x"], "run_id": "r"}
     )
     assert "And 4 more like these." in body_for(more)
+
+
+ACCOUNT_BPA_FINDING = {"check": "s3_public", "resource": "account", "region": "us-east-1", "severity": "high"}
+
+
+def test_scan_email_account_block_public_access_is_not_a_bucket():
+    """The account-level Block Public Access finding is a setting, not a bucket, and reads so."""
+    scan = _scan_alert(
+        {"count": 1, "findings": [ACCOUNT_BPA_FINDING], "summaries": ["bpa off"], "run_id": "r"}
+    )
+    body = body_for(scan)
+    assert "Block Public Access is turned off for your whole AWS account." in body
+    assert "With it off, any one bucket can be made public by mistake." in body
+    assert (
+        "In the S3 console, open Block Public Access settings for this account, "
+        "and turn it on if no bucket needs to be public." in body
+    )
+    # Same doc link as the bucket wording, and none of the bucket wording.
+    assert (
+        "Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/"
+        "access-control-block-public-access.html" in body
+    )
+    assert "bucket account" not in body
+    assert "is open to the internet" not in body
+    # A real bucket finding keeps the bucket wording (and "account" as a bucket name is not
+    # special for any other check).
+    bucket = body_for(_scan_alert())
+    assert "Your S3 storage bucket acme-invoices in us-east-1 is open to the internet." in bucket
+    other = body_for(
+        _scan_alert(
+            {
+                "count": 1,
+                "findings": [{"check": "sg_open", "resource": "account", "region": "us-east-1", "severity": "high"}],
+                "summaries": ["x"],
+                "run_id": "r",
+            }
+        )
+    )
+    assert "A firewall rule on account in us-east-1" in other
+
+
+def test_scan_email_read_more_url_ends_its_line():
+    """Every URL is the last thing on its line, then one space, then a blank line (Gmail glued
+    the URL to the next block otherwise). The body never carries a carriage return."""
+    scan = _scan_alert(
+        {
+            "count": 3,
+            "findings": SCAN_DETAIL["findings"] + [ACCOUNT_BPA_FINDING],
+            "summaries": ["x"],
+            "run_id": "r",
+        }
+    )
+    body = body_for(scan)
+    assert "\r" not in body
+    urls = list(re.finditer(r"https?://\S+", body))
+    assert len(urls) == 3
+    for m in urls:
+        after = body[m.end() :]
+        assert after[0] == " ", f"URL {m.group()} must be followed by a space"
+        assert after[1] == "\n", f"URL {m.group()} must end its line"
+        assert after[2] == "\n", f"URL {m.group()} must be followed by a blank line"
+        line = body[: m.end()].rsplit("\n", 1)[-1]
+        assert line.startswith("Read more: ")
+    # The scan copy tables carry no CR either, and every doc link is a bare https URL.
+    for table in (SCAN_CHECK_COPY, SCAN_ACCOUNT_COPY):
+        for copy in table.values():
+            assert copy["doc"].startswith("https://") and " " not in copy["doc"]
+            assert not any("\r" in v for v in copy.values())
 
 
 def test_left_is_cap_minus_spend_floored_at_zero():

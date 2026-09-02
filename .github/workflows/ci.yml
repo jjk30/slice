@@ -41,10 +41,10 @@ jobs:
       REDIS_URL: redis://localhost:6379
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -83,14 +83,17 @@ jobs:
     needs: test
     # Only build and push for commits landing on main, never for pull requests.
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
+    # Native arm64 runner (free for public repos): the image is linux/arm64 for the Graviton
+    # box, and building it natively instead of under QEMU on amd64 cuts the job from about
+    # twenty minutes to a few.
+    runs-on: ubuntu-24.04-arm
 
     permissions:
       id-token: write
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -101,10 +104,6 @@ jobs:
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Set up QEMU before buildx so linux/arm64 can build on the amd64 runner.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -112,7 +111,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          # The EC2 box is arm64 (Graviton), so build for that platform.
+          # The EC2 box is arm64 (Graviton), so build for that platform. The runner is
+          # arm64 too, so this is a native build, no emulation.
           platforms: linux/arm64
           push: true
           tags: |
