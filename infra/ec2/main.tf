@@ -109,6 +109,50 @@ resource "aws_route53_record" "www" {
 }
 
 # ---------------------------------------------------------------------------
+# Resend sending (DKIM, SPF via CNAME, DMARC) and receiving (MX) for
+# alerts@sliceapp.dev, phase 23. The DKIM value is a public key, fine in git.
+# ---------------------------------------------------------------------------
+resource "aws_route53_record" "resend_dkim" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = "resend._domainkey.${var.domain_name}"
+  type    = "TXT"
+  ttl     = 300
+  records = ["p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCkcjEJaoMkMFyu/+PqLi7UtSmNbU/XXb256yBX0EG0wvaXrkcXsH9VO4C4KYu85UQOwOlyLWW79CrA9qviLNZB8MmFT0AkAxiwW6FBkySMWeG4Ro6gbfQOcuayIlDCJA9SMevMyhY5zWQUMfs3VkqxVRx90XNFl4CQTM9Aetp6owIDAQAB"]
+}
+
+resource "aws_route53_record" "resend_rsend" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = "rsend.${var.domain_name}"
+  type    = "CNAME"
+  ttl     = 300
+  records = ["rsend.forge.rmta.net"]
+}
+
+resource "aws_route53_record" "resend_send" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = "send.${var.domain_name}"
+  type    = "CNAME"
+  ttl     = 300
+  records = ["send.forge.rmta.net"]
+}
+
+resource "aws_route53_record" "resend_dmarc" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = "_dmarc.${var.domain_name}"
+  type    = "TXT"
+  ttl     = 300
+  records = ["v=DMARC1; p=none;"]
+}
+
+resource "aws_route53_record" "resend_mx" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = var.domain_name
+  type    = "MX"
+  ttl     = 300
+  records = ["10 inbound-smtp.us-east-1.amazonaws.com"]
+}
+
+# ---------------------------------------------------------------------------
 # Security group: HTTP/HTTPS in from anywhere (Caddy needs 80 for ACME and 443
 # for traffic), everything out. No port 22 — access is via SSM Session Manager.
 # ---------------------------------------------------------------------------
@@ -518,6 +562,11 @@ resource "aws_instance" "app" {
   metadata_options {
     http_tokens   = "required" # IMDSv2 only
     http_endpoint = "enabled"
+  }
+
+  lifecycle {
+    # The box is upgraded by hand, not by AMI churn — don't replace it when a newer AL2023 AMI ships.
+    ignore_changes = [ami]
   }
 
   tags = {
