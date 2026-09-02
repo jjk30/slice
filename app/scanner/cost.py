@@ -109,6 +109,9 @@ def fetch_costs(session, *, now: datetime | None = None) -> CostReport:
             TimePeriod={"Start": start.isoformat(), "End": today.isoformat()},
             Granularity="DAILY",
             Metrics=["UnblendedCost"],
+            # Gross spend, not net: exclude credits and refunds so a promo-credited account
+            # (e.g. the operator's) reports what usage actually cost, not $0 after credits.
+            Filter={"Not": {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Credit", "Refund"]}}},
         )
     except Exception as exc:  # noqa: BLE001 — cost data is best-effort, never a crash.
         logger.warning(json.dumps({"event": "scanner_cost_error", "error": str(exc)}))

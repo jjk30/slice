@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import stat
 import time
 import webbrowser
@@ -39,6 +40,18 @@ DEFAULT_BASE_URL = "http://localhost:8080"
 # How the device flow gives up if the user never authorizes: the gateway returns the
 # expiry, but cap the CLI's own patience too so a wedged terminal doesn't spin forever.
 POLL_CEILING_SECONDS = 900
+
+# The gateway names the minted key after this so one machine keeps one live key: a repeat
+# login from here replaces this device's key, while another machine's key is left alone.
+MAX_DEVICE_CHARS = 64
+
+
+def device_name() -> str:
+    """This machine's name for the poll request, trimmed. Empty if the host has none."""
+    try:
+        return (platform.node() or "").strip()[:MAX_DEVICE_CHARS]
+    except Exception:  # noqa: BLE001 — a nameless host just logs in without a device.
+        return ""
 
 
 # --- config file ------------------------------------------------------------
@@ -102,11 +115,15 @@ def login(
                 pass
 
         typer.echo("Waiting for you to authorize in the browser…")
+        device = device_name()
+        poll_body = {"session_id": session_id}
+        if device:
+            poll_body["device"] = device
         deadline = time.monotonic() + POLL_CEILING_SECONDS
         while time.monotonic() < deadline:
             time.sleep(max(1, interval))
             try:
-                polled = http.post(f"{target}/auth/device/poll", json={"session_id": session_id})
+                polled = http.post(f"{target}/auth/device/poll", json=poll_body)
             except httpx.HTTPError as exc:
                 _fail(f"Lost contact with the gateway: {exc}")
             if polled.status_code != 200:

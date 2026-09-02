@@ -442,6 +442,7 @@ def test_fetch_costs_via_stub():
             "TimePeriod": {"Start": "2026-08-01", "End": "2026-08-23"},
             "Granularity": "DAILY",
             "Metrics": ["UnblendedCost"],
+            "Filter": {"Not": {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Credit", "Refund"]}}},
         },
     )
     stub.activate()

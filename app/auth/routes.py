@@ -30,7 +30,6 @@ from app import config
 from app.auth import github as gh
 from app.auth import web
 from app.auth.keys import (
-    KEY_PREFIX,
     bearer_token,
     hash_key,
     is_slice_key,
@@ -54,8 +53,15 @@ SESSION_KEY = "slice:auth:device:{session_id}"
 WEB_STATE_KEY = "slice:auth:web:{state}"
 WEB_STATE_TTL = 600
 
-# The name a key minted by the device flow gets, so it is recognisable in a key list.
-LOGIN_KEY_NAME = "slice login"
+# The name a key gets so it is recognisable in a key list — and, since login revokes live
+# keys of the same name before minting, so one machine keeps exactly one live key. A device
+# flow key is ``cli`` (or ``cli:<device>`` when the CLI sent its machine name); the dashboard
+# "Create new key" path uses ``dashboard`` (and revokes every live key — it is the kill switch).
+CLI_KEY_NAME = "cli"
+DASHBOARD_KEY_NAME = "dashboard"
+
+# The CLI's optional device name is trimmed to this many characters before it names a key.
+MAX_DEVICE_CHARS = 64
 
 LOGIN_OFF = "Login is not configured on this gateway (GITHUB_OAUTH_CLIENT_ID is unset)."
 WEB_LOGIN_OFF = (
@@ -177,6 +183,10 @@ async def device_poll(request: Request):
     session_id = body.get("session_id") if isinstance(body, dict) else None
     if not isinstance(session_id, str) or not session_id.strip():
         return _error(400, "'session_id' is required.")
+    # Optional: the CLI sends the machine it is logging in from. Old CLIs omit it.
+    device = body.get("device") if isinstance(body, dict) else None
+    device = device.strip()[:MAX_DEVICE_CHARS] if isinstance(device, str) else ""
+    key_name = f"{CLI_KEY_NAME}:{device}" if device else CLI_KEY_NAME
 
     flow = get_github_flow(request.app)
     if flow is None:
@@ -240,9 +250,13 @@ async def device_poll(request: Request):
     try:
         account_row = await db.upsert_account(user.id, user.login, user.email)
         slice_key = mint_key()
+        # One live key per machine: drop this device's previous key before minting the new
+        # one, so logging in three times from one machine leaves one key, not three, while a
+        # login from another machine (a different name) leaves that machine's key alone.
+        await db.revoke_active_keys_named(int(account_row["id"]), key_name)
         await db.create_key(
-            int(account_row["id"]), hash_key(slice_key), key_prefix(slice_key), LOGIN_KEY_NAME,
-            KEY_PREFIX, key_last4(slice_key),
+            int(account_row["id"]), hash_key(slice_key), key_prefix(slice_key), key_name,
+            key_last4(slice_key),
         )
     except Exception as exc:  # noqa: BLE001 — a write failure means no key was minted; say so.
         logger.warning(json.dumps({"event": "auth_account_write_failed", "error": str(exc)}))

@@ -40,7 +40,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app import config, redis_layer
 from app.auth.keys import KEY_PREFIX, hash_key, key_last4, key_prefix, mint_key
 from app.auth.middleware import get_authenticator, read_account
-from app.auth.routes import LOGIN_KEY_NAME
+from app.auth.routes import DASHBOARD_KEY_NAME
 from app.dashboard import stats
 from app.dashboard.broadcaster import EVENT_NAME, get_broadcaster
 from app.db import summarize_eval_rows, summarize_guardrail_rows
@@ -237,19 +237,24 @@ def _iso(value):
 
 
 def _key_view(row: dict | None) -> dict | None:
-    """The masked display of one key row, or None. Never carries the key or its hash."""
+    """The masked display of one key row, or None. Never carries the key or its hash.
+
+    ``prefix`` is the constant ``slk_live_`` marker (no longer a stored column); the card
+    renders it plus the eight dots and the stored ``last4``, and shows ``name`` alongside.
+    """
     if row is None:
         return None
     return {
-        "prefix": row.get("prefix"),
+        "prefix": KEY_PREFIX,
         "last4": row.get("last4"),
+        "name": row.get("name"),
         "created_at": _iso(row.get("created_at")),
     }
 
 
 @router.get("/key")
 async def key(request: Request):
-    """The account's live slice key, masked — ``{prefix, last4, created_at}`` or null.
+    """The account's live slice key, masked — ``{prefix, last4, name, created_at}`` or null.
 
     Session-cookie auth like every other dashboard read. The plain key is never stored,
     so it can never be read back here: only its ``slk_live_`` prefix and last four
@@ -289,8 +294,8 @@ async def rotate_key(request: Request):
     try:
         await db.revoke_active_keys(account.id)
         row = await db.create_key(
-            account.id, hash_key(new_key), key_prefix(new_key), LOGIN_KEY_NAME,
-            KEY_PREFIX, key_last4(new_key),
+            account.id, hash_key(new_key), key_prefix(new_key), DASHBOARD_KEY_NAME,
+            key_last4(new_key),
         )
     except Exception as exc:  # noqa: BLE001 — a write failure is a clean 503, never a 500.
         logger.warning(json.dumps({"event": "dashboard_key_rotate_failed", "error": str(exc)}))

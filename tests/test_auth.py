@@ -98,10 +98,10 @@ class FakeKeyStore:
         row = self.accounts.get(int(account_id))
         return dict(row) if row else None
 
-    async def create_key(self, account_id, key_hash, key_prefix, name, prefix=None, last4=None):
+    async def create_key(self, account_id, key_hash, key_prefix, name, last4=None):
         row = {
             "id": self._next_key, "account_id": account_id, "key_hash": key_hash,
-            "key_prefix": key_prefix, "name": name, "prefix": prefix, "last4": last4,
+            "key_prefix": key_prefix, "name": name, "last4": last4,
             "revoked_at": None, "last_used_at": None, "created_at": None,
         }
         self.keys[key_hash] = row
@@ -116,12 +116,20 @@ class FakeKeyStore:
         if not live:
             return None
         row = max(live, key=lambda r: r["id"])  # highest id = newest
-        return {"prefix": row.get("prefix"), "last4": row.get("last4"), "created_at": row["created_at"]}
+        return {"name": row.get("name"), "last4": row.get("last4"), "created_at": row["created_at"]}
 
     async def revoke_active_keys(self, account_id):
         n = 0
         for r in self.keys.values():
             if r["account_id"] == account_id and r["revoked_at"] is None:
+                r["revoked_at"] = datetime.now(timezone.utc)
+                n += 1
+        return n
+
+    async def revoke_active_keys_named(self, account_id, name):
+        n = 0
+        for r in self.keys.values():
+            if r["account_id"] == account_id and r["name"] == name and r["revoked_at"] is None:
                 r["revoked_at"] = datetime.now(timezone.utc)
                 n += 1
         return n
@@ -178,7 +186,7 @@ class FakeKeyStore:
         self.keys[keymod.hash_key(key)] = {
             "id": self._next_key, "account_id": account_id, "key_hash": keymod.hash_key(key),
             "key_prefix": keymod.key_prefix(key), "name": "test",
-            "prefix": keymod.KEY_PREFIX, "last4": keymod.key_last4(key), "revoked_at": None,
+            "last4": keymod.key_last4(key), "revoked_at": None,
             "last_used_at": None, "created_at": None,
         }
         self._next_key += 1
@@ -473,6 +481,78 @@ async def test_device_poll_slow_down_is_reported(client, device_env):
         app.state.github = None
     assert r.json()["status"] == "slow_down"
     assert r.json()["interval"] == 9
+
+
+# --- one live key per machine: login names its key and revokes the same-named one (22c) ---
+
+
+async def _device_login(client, device=None):
+    """Run one full ``slice login`` (start + authorized poll), optionally sending a device."""
+    app.state.github = FakeGitHub(
+        poll_states=[gh.DevicePoll(status=gh.STATUS_AUTHORIZED, access_token="gho_x")]
+    )
+    try:
+        sid = (await client.post("/auth/device/start")).json()["session_id"]
+        body = {"session_id": sid}
+        if device is not None:
+            body["device"] = device
+        return await client.post("/auth/device/poll", json=body)
+    finally:
+        app.state.github = None
+
+
+def _live_keys(account_id):
+    return [
+        r for r in app.state.db.keys.values()
+        if r["account_id"] == account_id and r["revoked_at"] is None
+    ]
+
+
+async def test_login_twice_same_device_leaves_one_live_key(client, device_env):
+    first = await _device_login(client, device="my-laptop")
+    account_id = first.json()["account"]["id"]
+    await _device_login(client, device="my-laptop")
+
+    live = _live_keys(account_id)
+    assert len(live) == 1
+    assert live[0]["name"] == "cli:my-laptop"
+
+
+async def test_login_from_two_devices_leaves_two_live_keys(client, device_env):
+    first = await _device_login(client, device="my-laptop")
+    account_id = first.json()["account"]["id"]
+    await _device_login(client, device="my-desktop")
+
+    live = _live_keys(account_id)
+    assert len(live) == 2
+    assert {r["name"] for r in live} == {"cli:my-laptop", "cli:my-desktop"}
+
+
+async def test_login_without_device_field_still_works(client, device_env):
+    # An old CLI that omits `device` logs in fine; the key is named plain `cli`.
+    authorized = await _device_login(client, device=None)
+    assert authorized.json()["status"] == "authorized"
+    account_id = authorized.json()["account"]["id"]
+    live = _live_keys(account_id)
+    assert len(live) == 1
+    assert live[0]["name"] == "cli"
+
+
+async def test_dashboard_rotate_revokes_every_live_key(client, auth_on, wired_auth, device_env):
+    # Two machines each hold a live key; the dashboard "Create new key" kill switch
+    # revokes them all and leaves exactly one — its own, named `dashboard`.
+    first = await _device_login(client, device="my-laptop")
+    account_id = first.json()["account"]["id"]
+    await _device_login(client, device="my-desktop")
+    assert len(_live_keys(account_id)) == 2
+
+    token = tokmod.mint_jwt(account_id)
+    r = await client.post("/dashboard/key/rotate", headers=_cookie(token))
+    assert r.status_code == 200
+
+    live = _live_keys(account_id)
+    assert len(live) == 1
+    assert live[0]["name"] == "dashboard"
 
 
 async def test_device_start_503_without_client_id(client, monkeypatch, store):

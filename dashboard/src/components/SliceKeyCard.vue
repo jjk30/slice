@@ -28,6 +28,9 @@ const masked = computed(() => {
   return `${prefix}${'•'.repeat(8)}${last4}`
 })
 
+// The key's name (e.g. `cli:my-laptop` or `dashboard`), shown beside the masked key.
+const keyName = computed(() => card.value?.name || '')
+
 const createdLabel = computed(() => {
   const iso = card.value?.created_at
   if (!iso) return ''
@@ -109,7 +112,10 @@ onMounted(load)
       <p v-if="!loaded" class="loading">Loading…</p>
       <p v-else-if="loadFailed" class="empty">—</p>
       <template v-else-if="card">
-        <code class="mono key-masked">{{ masked }}</code>
+        <div class="key-row">
+          <code class="mono key-masked">{{ masked }}</code>
+          <span v-if="keyName" class="key-name">{{ keyName }}</span>
+        </div>
         <p v-if="createdLabel" class="meta created">Created {{ createdLabel }}</p>
       </template>
       <p v-else class="empty">No active key.</p>
@@ -134,6 +140,23 @@ onMounted(load)
   font-size: 14px;
   color: var(--ink);
   word-break: break-all;
+}
+
+.key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.key-name {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .key-full {
