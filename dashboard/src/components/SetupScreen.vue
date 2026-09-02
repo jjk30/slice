@@ -9,7 +9,18 @@ import { session } from '../auth.js'
 // (required, saving it is what marks the profile confirmed), and an optional read-only
 // AWS role so the scanner can scan the user's account. No WhatsApp field: the API still
 // accepts whatsapp_number, this screen just does not ask.
-const emit = defineEmits(['done'])
+// Phase 23: the same screen serves first-time onboarding and later editing. In
+// 'settings' mode the copy changes and a "Back to dashboard" link emits 'close';
+// the fields, validation, and save/connect calls stay identical.
+const props = defineProps({
+  mode: {
+    type: String,
+    default: 'onboarding',
+  },
+})
+const emit = defineEmits(['done', 'close'])
+
+const isSettings = computed(() => props.mode === 'settings')
 
 // A loose email check, just to enable the button; the gateway validates for real.
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
@@ -113,8 +124,10 @@ async function connectAws() {
         <img class="brand-logo" src="/favicon.png" alt="" width="28" height="28" />
         <h1 class="brand-name">slice</h1>
       </div>
-      <h2 class="title">Two quick things</h2>
-      <p class="sub">So slice can reach you when it matters.</p>
+      <h2 class="title">{{ isSettings ? 'Settings' : 'Two quick things' }}</h2>
+      <p class="sub">
+        {{ isSettings ? 'Update the email and AWS role slice uses.' : 'So slice can reach you when it matters.' }}
+      </p>
 
       <label class="field">
         <span class="label">Email</span>
@@ -160,9 +173,10 @@ async function connectAws() {
 
       <p v-if="saveError" class="aws-err" role="alert">{{ saveError }}</p>
       <button type="button" class="submit" :disabled="!emailValid || saving" @click="saveAndContinue">
-        {{ saving ? 'Saving…' : 'Save and continue' }}
+        {{ saving ? 'Saving…' : (isSettings ? 'Save' : 'Save and continue') }}
       </button>
-      <a v-if="showAws" class="later" href="#" @click.prevent="saveAndContinue">Connect later</a>
+      <a v-if="showAws && !isSettings" class="later" href="#" @click.prevent="saveAndContinue">Connect later</a>
+      <a v-if="isSettings" class="later" href="#" @click.prevent="emit('close')">Back to dashboard</a>
     </div>
   </div>
 </template>

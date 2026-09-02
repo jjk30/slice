@@ -25,9 +25,12 @@ const logoSrc = import.meta.env.BASE_URL + 'favicon.png'
 // flashes before we know there is (or isn't) a session.
 const booted = ref(false)
 const profileConfirmed = ref(false)
+// Phase 23: a confirmed user can reopen the setup screen to edit their email + AWS role.
+const settingsOpen = ref(false)
 const view = computed(() => {
   if (!session.value) return 'login'
   if (!profileConfirmed.value) return 'setup'
+  if (settingsOpen.value) return 'settings'
   return 'dashboard'
 })
 const accountLogin = computed(() => session.value?.login ?? null)
@@ -55,6 +58,13 @@ function onSetupDone() {
   profileConfirmed.value = true
   error.value = ''
   startDashboard()
+}
+
+// Closing settings just returns to the already-running dashboard. The user stays
+// confirmed and the live stream keeps flowing, so we do not touch profileConfirmed
+// or restart anything here.
+function onSettingsClose() {
+  settingsOpen.value = false
 }
 
 async function onLogout() {
@@ -270,7 +280,13 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
 <template>
   <template v-if="!booted" />
   <LoginScreen v-else-if="view === 'login'" />
-  <SetupScreen v-else-if="view === 'setup'" @done="onSetupDone" />
+  <SetupScreen v-else-if="view === 'setup'" mode="onboarding" @done="onSetupDone" />
+  <SetupScreen
+    v-else-if="view === 'settings'"
+    mode="settings"
+    @done="onSettingsClose"
+    @close="onSettingsClose"
+  />
   <div v-else class="page">
     <header class="header">
       <div class="brand">
@@ -282,6 +298,7 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
         <span class="meta">this month · {{ month ?? '—' }}</span>
         <span v-if="accountLogin" class="meta account">{{ accountLogin }}</span>
         <LivePill :status="liveStatus" />
+        <button class="settings" type="button" @click="settingsOpen = true">Settings</button>
         <button class="signout" type="button" @click="onLogout">Log out</button>
       </div>
     </header>

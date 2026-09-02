@@ -200,7 +200,9 @@ a {
 }
 
 /* Phase 12: sign out of the slice-key session. */
-.signout {
+/* Phase 23: reopen setup as settings, sharing the sign-out button styling. */
+.signout,
+.settings {
   font-family: var(--mono);
   font-size: 12px;
   color: var(--muted);
@@ -212,7 +214,8 @@ a {
   white-space: nowrap;
 }
 
-.signout:hover {
+.signout:hover,
+.settings:hover {
   background: var(--hover);
   color: var(--ink);
 }
