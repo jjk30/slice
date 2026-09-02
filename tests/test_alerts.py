@@ -32,6 +32,7 @@ import respx
 from app import config, redis_layer
 from app.alerts import (
     KIND_BLOCK,
+    KIND_SCAN,
     KIND_WARN,
     Alert,
     AlertEngine,
@@ -43,7 +44,14 @@ from app.alerts import (
 )
 from app.alerts import channels as alert_channels
 from app.alerts import engine as alerts_engine
-from app.alerts.channels import RESEND_EMAILS_URL, _money, body_for, format_time, subject_for
+from app.alerts.channels import (
+    FOOTER_NOTE,
+    RESEND_EMAILS_URL,
+    _money,
+    body_for,
+    format_time,
+    subject_for,
+)
 from app.alerts.whatsapp import TWILIO_MESSAGES_URL
 from app.db import (
     ALERT_STATUS_FAILED,
@@ -479,29 +487,26 @@ def test_subject_and_body_templates(monkeypatch):
     assert body_for(warn) == (
         "Team team-a has spent $21.00 of its $25.00 monthly AI budget. About $4.00 is left for August 2026.\n"
         "\n"
-        "Nothing is blocked yet. This is an early warning. At this pace the team hits its cap before "
+        "Nothing is blocked yet. This is an early heads up. At this pace the team will hit its cap before "
         "the month ends, and slice will then block its AI requests until the new month or a higher cap.\n"
         "\n"
-        "Ways to still continue your work in a more cost effective way:\n"
+        "Three ways to keep working for less:\n"
         "\n"
-        "1. Keep auto-routing on. slice already sends easy work to cheaper models.\n"
+        "1. Leave auto-routing on. slice already sends easy work to cheaper models.\n"
         "\n"
-        "2. If most of this team's work is interactive coding, for example through Claude Code "
-        "(https://claude.com/product/claude-code), a flat-fee coding tool can beat paying per token. Use these "
-        "tools as a substitute if you have their subscription:\n"
+        "2. If most of this team's work is coding in a tool like Claude Code "
+        "(https://claude.com/product/claude-code), a flat monthly fee can beat paying per token. These "
+        "work as a substitute if you have a plan:\n"
         "   - GitHub Copilot: https://github.com/features/copilot\n"
         "   - Codex: https://openai.com/codex\n"
         "\n"
-        "3. Bulk and repeat jobs, like nightly summaries and changelogs, can run free on open models:\n"
+        "3. Bulk and repeat jobs, like nightly summaries and changelogs, can run for free on open models:\n"
         "   - Ollama: https://ollama.com. One download, then Llama or Mistral runs on your own machine for free.\n"
         "   - NVIDIA model catalog: https://build.nvidia.com. Hosted Llama, Mistral and Nemotron, with free credits.\n"
         "\n"
-        "This is advice, slice can make mistakes. Verify before acting.\n"
+        "slice is an AI. Please double check before you change anything in AWS.\n"
         "\n"
-        "Sent Aug 18, 2026, 8:00 AM EDT\n"
-        "\n"
-        "Best regards,\n"
-        "— slice gateway"
+        "Sent Aug 18, 2026, 8:00 AM EDT"
     )
 
     block = _alert(KIND_BLOCK, BLOCK_DETAIL)
@@ -509,17 +514,16 @@ def test_subject_and_body_templates(monkeypatch):
     assert body_for(block) == (
         "Team team-a hit its monthly AI budget cap. Spend: $25.50 of $25.00.\n"
         "\n"
-        "What this means: slice is now blocking this team's AI requests. Blocked requests return a "
+        "slice is now blocking this team's AI requests. Blocked requests return a "
         "clear error and cost nothing. Other teams are not affected.\n"
         "\n"
         "To unblock:\n"
         "- Raise this team's cap and restart the gateway, or\n"
         "- Wait for the new month. The counter resets on its own.\n"
         "\n"
-        "Sent Aug 18, 2026, 8:00 AM EDT\n"
+        "slice is an AI. Please double check before you change anything in AWS.\n"
         "\n"
-        "Best regards,\n"
-        "— slice gateway"
+        "Sent Aug 18, 2026, 8:00 AM EDT"
     )
 
     # Missing numbers never break formatting: the configured warn line and "unknown" fill in,
@@ -528,6 +532,88 @@ def test_subject_and_body_templates(monkeypatch):
     bare = Alert(team="t", kind=KIND_WARN, detail={}, ts=warn.ts)
     assert subject_for(bare) == "slice: t has used 80% of its monthly AI budget"
     assert "has spent unknown of its unknown monthly AI budget. About unknown is left for August 2026." in body_for(bare)
+
+
+# The character we must never emit anywhere in an email: U+2014, the em dash.
+EM_DASH = "—"
+
+SCAN_DETAIL = {
+    "count": 2,
+    "findings": [
+        {"check": "s3_public", "resource": "acme-invoices", "region": "us-east-1", "severity": "high"},
+        {"check": "sg_open", "resource": "sg-1", "region": "us-east-1", "severity": "high"},
+    ],
+    "summaries": ["public bucket acme-invoices", "open port on sg-1"],
+    "run_id": "r1",
+}
+
+
+def _scan_alert(detail=None):
+    return Alert(
+        team="aws:own",
+        kind=KIND_SCAN,
+        detail=dict(detail if detail is not None else SCAN_DETAIL),
+        ts=datetime(2026, 8, 18, 12, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_warn_email_has_no_em_dash():
+    warn = _alert()
+    assert EM_DASH not in subject_for(warn)
+    assert EM_DASH not in body_for(warn)
+
+
+def test_block_email_has_no_em_dash():
+    block = _alert(KIND_BLOCK, BLOCK_DETAIL)
+    assert EM_DASH not in subject_for(block)
+    assert EM_DASH not in body_for(block)
+
+
+def test_scan_email_has_no_em_dash():
+    scan = _scan_alert()
+    assert EM_DASH not in subject_for(scan)
+    assert EM_DASH not in body_for(scan)
+
+
+def test_footer_line_is_on_every_email():
+    for alert in (_alert(), _alert(KIND_BLOCK, BLOCK_DETAIL), _scan_alert()):
+        body = body_for(alert)
+        assert FOOTER_NOTE == "slice is an AI. Please double check before you change anything in AWS."
+        assert FOOTER_NOTE in body
+        # The footer note sits just above the "Sent ..." line, and there is no old sign-off.
+        assert "Best regards" not in body
+        assert body.rstrip().endswith("Sent Aug 18, 2026, 8:00 AM EDT")
+
+
+def test_scan_email_subject_and_first_block(monkeypatch):
+    monkeypatch.setattr(config, "ALERT_TIMEZONE", "America/New_York")
+    scan = _scan_alert()
+    assert subject_for(scan) == "slice found 2 things to check in your AWS account"
+    body = body_for(scan)
+    assert body.startswith("slice looked at your AWS account and found 2 things worth a look.")
+    # The s3_public block names the resource and carries its AWS doc link.
+    assert "Your S3 storage bucket acme-invoices in us-east-1 is open to the internet." in body
+    assert (
+        "Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/"
+        "access-control-block-public-access.html" in body
+    )
+    # No jargon from the old copy.
+    assert "high-risk" not in body
+    assert "GET /scanner/findings" not in body
+
+
+def test_scan_email_singular_and_more_line(monkeypatch):
+    monkeypatch.setattr(config, "SCANNER_ALERT_TOP_N", 5)
+    one = _scan_alert(
+        {"count": 1, "findings": [SCAN_DETAIL["findings"][0]], "summaries": ["x"], "run_id": "r"}
+    )
+    assert subject_for(one) == "slice found 1 thing to check in your AWS account"
+    assert "found 1 thing worth a look." in body_for(one)
+    # count higher than the rendered findings -> a plain "and N more" line.
+    more = _scan_alert(
+        {"count": 6, "findings": SCAN_DETAIL["findings"], "summaries": ["x"], "run_id": "r"}
+    )
+    assert "And 4 more like these." in body_for(more)
 
 
 def test_left_is_cap_minus_spend_floored_at_zero():

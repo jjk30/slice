@@ -256,12 +256,28 @@ async def _persist_and_diff(db, account_id, run_id: str, findings: list[Finding]
 
 
 def _fire_new_high_alert(account_id, run_id: str, new_highs: list[Finding]) -> None:
-    """Fire one per-account ``aws_scan`` alert for the new highs, fire-and-forget."""
-    summaries = [f.summary for f in new_highs[: max(1, config.SCANNER_ALERT_TOP_N)]]
+    """Fire one per-account ``aws_scan`` alert for the new highs, fire-and-forget.
+
+    The detail carries structured ``findings`` (one dict per new high: check, resource,
+    region, severity) so the email can write a real block per finding. The scanner is
+    single-region, so the region is the session's own (``AWS_REGION``). The older
+    ``summaries`` list is kept alongside so anything reading the old shape still works.
+    """
+    top = new_highs[: max(1, config.SCANNER_ALERT_TOP_N)]
+    findings = [
+        {
+            "check": f.check,
+            "resource": f.resource_id,
+            "region": config.AWS_REGION,
+            "severity": f.severity,
+        }
+        for f in top
+    ]
+    summaries = [f.summary for f in top]
     alerts.fire(
         _scan_team(account_id),
         alerts.KIND_SCAN,
-        {"count": len(new_highs), "summaries": summaries, "run_id": run_id},
+        {"count": len(new_highs), "findings": findings, "summaries": summaries, "run_id": run_id},
         account_id=account_id,
     )
 

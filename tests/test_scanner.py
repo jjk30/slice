@@ -638,9 +638,36 @@ async def test_new_high_fires_alert(monkeypatch, scan_alerts_on):
     alert = channel.sent[0]
     assert alert.kind == alerts_engine.KIND_SCAN
     assert alert.detail["count"] == 1
+    # The detail carries structured findings (check/resource/region/severity), and the older
+    # summaries list is kept alongside.
+    assert alert.detail["findings"] == [
+        {"check": CHECK_SG_OPEN, "resource": "sg-1", "region": config.AWS_REGION, "severity": SEVERITY_HIGH}
+    ]
+    assert alert.detail["summaries"] == ["world-open ssh"]
     from app.alerts.channels import subject_for
 
-    assert subject_for(alert) == "slice found 1 high-risk AWS issue"
+    assert subject_for(alert) == "slice found 1 thing to check in your AWS account"
+
+
+async def test_scan_email_renders_s3_public_doc_link(monkeypatch, scan_alerts_on):
+    """A new s3_public high renders its friendly block, naming the bucket and its AWS doc link."""
+    channel = scan_alerts_on
+    highs = [Finding(check=CHECK_S3_PUBLIC, resource_id="acme-invoices", severity=SEVERITY_HIGH, summary="public")]
+    monkeypatch.setattr(service, "run_scan_graph", _async_return(highs))
+
+    db = FakeScannerDB()
+    await service.run_scan(object(), db, None, run_id="run1")
+    await alerts_engine.drain()
+
+    from app.alerts.channels import body_for
+
+    body = body_for(channel.sent[0])
+    assert "Your S3 storage bucket acme-invoices" in body
+    assert (
+        "Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/"
+        "access-control-block-public-access.html" in body
+    )
+    assert "—" not in body  # no em dash anywhere
 
 
 async def test_repeat_high_does_not_fire(monkeypatch, scan_alerts_on):

@@ -29,9 +29,9 @@ logger = logging.getLogger("slice.gateway")
 
 KIND_WARN = "warn"
 KIND_BLOCK = "block"
-# Phase 18a: the AWS security scanner fires this kind when a scan surfaces new HIGH-risk
-# findings. Its copy is built from a different detail shape (a count and a list of
-# summaries) than the budget kinds, so subject_for/body_for branch on it.
+# Phase 18a: the AWS scanner fires this kind when a scan surfaces new HIGH findings. Its
+# copy is built from a different detail shape (a count and a list of per-finding dicts) than
+# the budget kinds, so subject_for/body_for branch on it.
 KIND_SCAN = "aws_scan"
 
 RESEND_EMAILS_URL = "https://api.resend.com/emails"
@@ -134,45 +134,45 @@ def _percent(alert: Alert) -> int | None:
     return None
 
 
+# The same sign-off on every email slice sends (phase 23a), in place of the old
+# "Best regards" line: one plain sentence, then a blank line, then the send time.
+FOOTER_NOTE = "slice is an AI. Please double check before you change anything in AWS."
+
 WARN_SUBJECT = "slice: {team} has used {percent}% of its monthly AI budget"
 WARN_BODY = """\
 Team {team} has spent {spend} of its {cap} monthly AI budget. About {left} is left for {month}.
 
-Nothing is blocked yet. This is an early warning. At this pace the team hits its cap before the month ends, and slice will then block its AI requests until the new month or a higher cap.
+Nothing is blocked yet. This is an early heads up. At this pace the team will hit its cap before the month ends, and slice will then block its AI requests until the new month or a higher cap.
 
-Ways to still continue your work in a more cost effective way:
+Three ways to keep working for less:
 
-1. Keep auto-routing on. slice already sends easy work to cheaper models.
+1. Leave auto-routing on. slice already sends easy work to cheaper models.
 
-2. If most of this team's work is interactive coding, for example through Claude Code (https://claude.com/product/claude-code), a flat-fee coding tool can beat paying per token. Use these tools as a substitute if you have their subscription:
+2. If most of this team's work is coding in a tool like Claude Code (https://claude.com/product/claude-code), a flat monthly fee can beat paying per token. These work as a substitute if you have a plan:
    - GitHub Copilot: https://github.com/features/copilot
    - Codex: https://openai.com/codex
 
-3. Bulk and repeat jobs, like nightly summaries and changelogs, can run free on open models:
+3. Bulk and repeat jobs, like nightly summaries and changelogs, can run for free on open models:
    - Ollama: https://ollama.com. One download, then Llama or Mistral runs on your own machine for free.
    - NVIDIA model catalog: https://build.nvidia.com. Hosted Llama, Mistral and Nemotron, with free credits.
 
-This is advice, slice can make mistakes. Verify before acting.
+{footer}
 
-Sent {time}
-
-Best regards,
-— slice gateway"""
+Sent {time}"""
 
 BLOCK_SUBJECT = "slice: {team} hit its budget cap. AI requests are blocked"
 BLOCK_BODY = """\
 Team {team} hit its monthly AI budget cap. Spend: {spend} of {cap}.
 
-What this means: slice is now blocking this team's AI requests. Blocked requests return a clear error and cost nothing. Other teams are not affected.
+slice is now blocking this team's AI requests. Blocked requests return a clear error and cost nothing. Other teams are not affected.
 
 To unblock:
 - Raise this team's cap and restart the gateway, or
 - Wait for the new month. The counter resets on its own.
 
-Sent {time}
+{footer}
 
-Best regards,
-— slice gateway"""
+Sent {time}"""
 
 
 def _left(spend, cap) -> str:
@@ -213,14 +213,73 @@ def _fields(alert: Alert) -> dict:
         "left": _left(spend, cap),
         "month": _month_name(alert),
         "time": format_time(alert.ts),
+        "footer": FOOTER_NOTE,
     }
 
 
-# --- Scanner alert copy (phase 18a) -------------------------------------------
-# The scanner's detail carries ``count`` (how many high-risk issues are new) and
-# ``summaries`` (the top plain-sentence summaries, already trimmed by the caller). The
-# copy needs neither budget numbers nor the team's spend, so it is formatted on its own.
-SCAN_SUBJECT = "slice found {count} high-risk AWS issue{plural}"
+# --- Scanner alert copy (phase 23a) -------------------------------------------
+# The scanner's detail carries ``count`` (how many findings are new), ``findings`` (a small
+# dict per new finding: check, resource, region, severity) and ``summaries`` (the older
+# plain-sentence summaries, kept so anything reading the old shape still works).
+#
+# The email reads like a person wrote it: one short block per finding. All the wording lives
+# in ``SCAN_CHECK_COPY`` below, one entry per check, so it is easy to edit in one place. Each
+# entry has three short lines (what it is, why it matters, the first thing to do) and the
+# official AWS doc page for that check. The keys mirror the check ids in
+# ``app/scanner/models.py``; they are literals here on purpose, so importing this module
+# never pulls the scanner package (and boto3) in.
+SCAN_SUBJECT = "slice found {count} thing{plural} to check in your AWS account"
+
+SCAN_CHECK_COPY = {
+    "s3_public": {
+        "what": "Your S3 storage bucket {resource} in {region} is open to the internet.",
+        "why": "Anyone who finds the link can read what is inside, and that is how private files leak.",
+        "todo": "In the S3 console, open the bucket, go to Permissions, and turn on Block all public access.",
+        "doc": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html",
+    },
+    "sg_open": {
+        "what": "A firewall rule on {resource} in {region} lets the whole internet reach a server port.",
+        "why": "Bots find open ports within minutes and keep trying to get in.",
+        "todo": "In the EC2 console open Security Groups, edit the inbound rule, and set the source to your own IP.",
+        "doc": "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html",
+    },
+    "unencrypted": {
+        "what": "The storage {resource} in {region} is not encrypted.",
+        "why": "If someone gets the raw storage, they can read the data straight off it.",
+        "todo": "Turn on default encryption for it in the AWS console.",
+        "doc": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/default-bucket-encryption.html",
+    },
+    "iam_risk": {
+        "what": "The user {resource} has full admin access attached straight to their account.",
+        "why": "If that one login is stolen, an attacker gets the keys to everything.",
+        "todo": "In IAM, move the user into a group and give them only the access they need.",
+        "doc": "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html",
+    },
+    "ebs_waste": {
+        "what": "The disk {resource} in {region} is not attached to anything, but you still pay for it.",
+        "why": "It sits there unused and adds to your bill every month for nothing.",
+        "todo": "Make sure you do not need it, snapshot it if unsure, then delete it in the EC2 console.",
+        "doc": "https://docs.aws.amazon.com/ebs/latest/userguide/ebs-deleting-volume.html",
+    },
+    "eip_waste": {
+        "what": "The Elastic IP {resource} in {region} is not attached to anything, but still costs money.",
+        "why": "AWS charges for a reserved IP address that nothing is using.",
+        "todo": "Release it in the EC2 console once you are sure nothing needs it.",
+        "doc": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html",
+    },
+    "snapshot_waste": {
+        "what": "The old backup {resource} in {region} is still on your bill.",
+        "why": "Snapshots you no longer need keep costing a little every month.",
+        "todo": "Delete the ones you no longer need in the EC2 console.",
+        "doc": "https://docs.aws.amazon.com/ebs/latest/userguide/ebs-deleting-snapshot.html",
+    },
+    "idle_instances": {
+        "what": "The server {resource} in {region} is running but barely used.",
+        "why": "You pay the full price for a machine that is doing almost nothing.",
+        "todo": "Stop it, or move it to a smaller size, in the EC2 console.",
+        "doc": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-resize.html",
+    },
+}
 
 
 def _scan_count(alert: Alert) -> int:
@@ -235,32 +294,58 @@ def _scan_subject(alert: Alert) -> str:
     return SCAN_SUBJECT.format(count=count, plural="" if count == 1 else "s")
 
 
+def _footer_lines(alert: Alert) -> list[str]:
+    """The shared sign-off: the AI note, a blank line, then the send time."""
+    return [FOOTER_NOTE, "", f"Sent {format_time(alert.ts)}"]
+
+
+def _scan_finding_block(finding: dict) -> list[str]:
+    """One finding as three short lines plus a Read more link, in plain words."""
+    resource = finding.get("resource") or "a resource"
+    region = finding.get("region") or "your region"
+    copy = SCAN_CHECK_COPY.get(finding.get("check"))
+    if copy is None:
+        # A check we have no wording for: still say something plain, and skip the doc line
+        # rather than guess at a link.
+        return [
+            f"slice flagged {resource} in {region} and thinks it is worth a look.",
+            "It is something to check in your AWS account.",
+            "Open the AWS console and take a look when you can.",
+        ]
+    return [
+        copy["what"].format(resource=resource, region=region),
+        copy["why"],
+        copy["todo"],
+        f"Read more: {copy['doc']}",
+    ]
+
+
 def _scan_body(alert: Alert) -> str:
     detail = alert.detail or {}
     count = _scan_count(alert)
-    summaries = detail.get("summaries") or []
-    lines = [
-        f"slice's AWS security scan found {count} new high-risk issue"
-        f"{'' if count == 1 else 's'} in the account it runs in.",
-        "",
-    ]
-    if summaries:
-        lines.append("Top issues:")
-        lines.extend(f"  - {s}" for s in summaries)
-        lines.append("")
-    lines.append(
-        "See GET /scanner/findings for the full list. This alerts only on issues that are "
-        "new since the previous scan, at most once per cooldown window."
-    )
-    run_id = detail.get("run_id")
-    if run_id:
-        lines += ["", f"Run: {run_id}"]
-    lines += ["", f"Sent {format_time(alert.ts)}", "", "Best regards,", "— slice gateway"]
+    thing = "thing" if count == 1 else "things"
+    lines = [f"slice looked at your AWS account and found {count} {thing} worth a look.", ""]
+
+    findings = detail.get("findings") or []
+    if findings:
+        for finding in findings:
+            lines.extend(_scan_finding_block(finding))
+            lines.append("")
+        remaining = count - len(findings)
+        if remaining > 0:
+            lines += [f"And {remaining} more like these.", ""]
+    else:
+        # No structured findings (an older caller): fall back to the plain summaries so the
+        # email still says something useful.
+        for summary in detail.get("summaries") or []:
+            lines += [summary, ""]
+
+    lines += _footer_lines(alert)
     return "\n".join(lines)
 
 
 def subject_for(alert: Alert) -> str:
-    """``slice: team-a has used 80% ...`` / ``slice: team-a hit its budget cap ...`` / ``slice found N high-risk AWS issues``."""
+    """``slice: team-a has used 80% ...`` / ``slice: team-a hit its budget cap ...`` / ``slice found N things to check in your AWS account``."""
     if alert.kind == KIND_SCAN:
         return _scan_subject(alert)
     template = BLOCK_SUBJECT if alert.kind == KIND_BLOCK else WARN_SUBJECT
