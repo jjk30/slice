@@ -7,6 +7,10 @@ tests
 # only keep the two build products out: the host's node_modules and any host build.
 dashboard/node_modules
 dashboard/dist
+# A dev's local dashboard/.env can carry VITE_API_BASE_URL=http://localhost:8080, which
+# Vite would bake into the production bundle. Keep it out of the build context (this exact
+# pattern does not match .env.production / .env.example, which must reach the build stage).
+dashboard/.env
 .env
 *.pyc
 __pycache__
