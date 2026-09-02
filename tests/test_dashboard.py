@@ -30,7 +30,9 @@ import respx
 from app import config, pricing, redis_layer
 from app.dashboard import stats
 from app.dashboard.broadcaster import DEFAULT_QUEUE_SIZE, Broadcaster, get_broadcaster, make_event
+from app.auth.middleware import LOCAL_ACCOUNT
 from app.dashboard.routes import RECENT_MAX_LIMIT
+from app.scanner.routes import _storage_scope
 from app.main import DASHBOARD_DIST, app
 
 MESSAGES_URL = f"{config.ANTHROPIC_BASE_URL}/v1/messages"
@@ -91,14 +93,16 @@ class FakeDashboardDB:
 
     enabled = True
 
-    def __init__(self, rows=None, eval_rows=None, guardrail_rows=None, error=None):
+    def __init__(self, rows=None, eval_rows=None, guardrail_rows=None, aws_cost_rows=None, error=None):
         self.rows = list(rows or [])
         self.eval_rows = list(eval_rows or [])
         self.guardrail_rows = list(guardrail_rows or [])
+        self.aws_cost_rows = list(aws_cost_rows or [])
         self.error = error
         self.since_calls: list = []
         self.recent_limits: list[int] = []
         self.account_ids: list = []
+        self.cost_calls: list = []
         self.records: list = []
 
     def _maybe_raise(self):
@@ -125,6 +129,11 @@ class FakeDashboardDB:
     async def guardrail_rows_since(self, since, account_id=None):
         self._maybe_raise()
         return list(self.guardrail_rows)
+
+    async def aws_cost_rows_since(self, account_id, since):
+        self._maybe_raise()
+        self.cost_calls.append((account_id, since))
+        return list(self.aws_cost_rows)
 
     async def record(self, record):
         self.records.append(record)
@@ -592,6 +601,66 @@ async def test_summary_endpoint_empty_month_is_honest_zeros(client, dash_db):
     assert body["savings_usd"] == 0.0
     assert body["eval"] == {"count": 0, "passed": 0, "pass_rate": None}
     assert body["guardrails"] == {"total": 0, "blocked": 0, "errors": 0, "blocked_by_rail": []}
+
+
+AWS_COST_EMPTY = {"yesterday": None, "month_to_date": None, "currency": "USD", "fetched_at": None, "daily": []}
+
+
+async def test_aws_cost_endpoint_summarizes_the_recorded_rows(client, dash_db):
+    first = datetime.now(timezone.utc).date().replace(day=1)
+    fetched = datetime(2026, 8, 12, 6, 0, tzinfo=timezone.utc)
+    dash_db.aws_cost_rows = [
+        {"date": first.replace(day=2), "amount_usd": Decimal("3.25"), "fetched_at": fetched},
+        {"date": first, "amount_usd": Decimal("1.75"), "fetched_at": fetched},
+    ]
+
+    r = await client.get("/dashboard/aws_cost")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["yesterday"] == "3.25"
+    assert body["month_to_date"] == "5.00"
+    assert body["currency"] == "USD"
+    assert body["fetched_at"] == fetched.isoformat()
+    assert body["daily"] == [
+        {"date": first.replace(day=2).isoformat(), "amount_usd": "3.25"},
+        {"date": first.isoformat(), "amount_usd": "1.75"},
+    ]
+    # One read, under the caller's storage scope and from the first of this month.
+    assert dash_db.cost_calls == [(_storage_scope(LOCAL_ACCOUNT.id), first)]
+
+
+async def test_aws_cost_endpoint_no_rows_is_the_empty_shape_not_a_zero_bill(client, dash_db):
+    r = await client.get("/dashboard/aws_cost")
+    assert r.status_code == 200
+    assert r.json() == AWS_COST_EMPTY
+
+
+async def test_aws_cost_endpoint_without_a_database_is_the_empty_shape(client):
+    previous = getattr(app.state, "db", None)
+    app.state.db = None
+    try:
+        r = await client.get("/dashboard/aws_cost")
+    finally:
+        app.state.db = previous
+    assert r.status_code == 200
+    assert r.json() == AWS_COST_EMPTY
+
+
+async def test_aws_cost_endpoint_read_failure_is_the_empty_shape(client, dash_db):
+    dash_db.error = OSError("connection refused")
+    r = await client.get("/dashboard/aws_cost")
+    assert r.status_code == 200
+    assert r.json() == AWS_COST_EMPTY
+
+
+async def test_aws_cost_endpoint_requires_a_session_like_summary(client, dash_db, monkeypatch):
+    monkeypatch.setattr(config, "AUTH_ENABLED", True)
+    summary_r = await client.get("/dashboard/summary")
+    cost_r = await client.get("/dashboard/aws_cost")
+    assert summary_r.status_code == 401
+    assert cost_r.status_code == summary_r.status_code
+    assert cost_r.json() == summary_r.json()
 
 
 async def test_models_endpoint_shape(client, dash_db):

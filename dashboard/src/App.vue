@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { getJson, AuthError } from './api.js'
+import { getJson, getAwsCost, AuthError } from './api.js'
 import { useLiveEvents } from './live.js'
 import { session, loadSession, logout } from './auth.js'
 import { money, percent, integer } from './format.js'
@@ -78,7 +78,7 @@ async function onLogout() {
   await logout()
   profileConfirmed.value = false
   settingsOpen.value = false
-  summary.value = models.value = teams.value = recent.value = null
+  summary.value = models.value = teams.value = awsCost.value = recent.value = null
   recentLoaded = false
   error.value = ''
   // `session` is now null, so `view` flips to 'login'; this shows the "Signed out" note
@@ -93,6 +93,7 @@ const REFRESH_DEBOUNCE_MS = 400
 const summary = ref(null)
 const models = ref(null)
 const teams = ref(null)
+const awsCost = ref(null)
 const recent = ref(null)
 const error = ref('')
 // True after a load failed: cards render dashes instead of "Loading…".
@@ -110,15 +111,17 @@ let recentLoaded = false
 
 async function loadAggregates() {
   const seq = ++aggSeq
-  const [s, m, t] = await Promise.all([
+  const [s, m, t, a] = await Promise.all([
     getJson('/dashboard/summary'),
     getJson('/dashboard/models'),
     getJson('/dashboard/teams'),
+    getAwsCost(),
   ])
   if (seq !== aggSeq) return false
   summary.value = s
   models.value = m
   teams.value = t
+  awsCost.value = a
   error.value = ''
   return true
 }
@@ -152,13 +155,14 @@ async function loadRecent() {
 // so fall through to the login screen instead of showing the banner.
 function markFailed(e) {
   if (e instanceof AuthError) {
-    summary.value = models.value = teams.value = null
+    summary.value = models.value = teams.value = awsCost.value = null
     return
   }
   error.value = e && e.message ? e.message : 'Backend unavailable.'
   summary.value = null
   models.value = null
   teams.value = null
+  awsCost.value = null
 }
 
 async function loadAll() {
@@ -288,6 +292,24 @@ const passRateSub = computed(() => {
   if (!summary.value) return ''
   return `${integer(summary.value.eval?.count)} scored`
 })
+// The AWS bill tile. Amounts arrive as decimal strings; a null month_to_date means
+// the account has not connected AWS (or nothing has been fetched yet), which is said
+// in words rather than shown as a $0 bill.
+function usd(raw) {
+  if (raw === null || raw === undefined) return null
+  return money(Number(raw))
+}
+const awsConnected = computed(() => usd(awsCost.value?.month_to_date) !== null)
+const awsBill = computed(() => {
+  if (awsCost.value) return awsConnected.value ? usd(awsCost.value.month_to_date) : 'not connected'
+  return failed.value ? '—' : null
+})
+const awsBillSub = computed(() => {
+  if (!awsCost.value) return ''
+  if (!awsConnected.value) return 'connect AWS in the scanner'
+  const y = usd(awsCost.value.yesterday)
+  return y === null ? '' : `yesterday ${y}`
+})
 // A loaded summary with no guardrails object renders dashes, not "Loading…".
 const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {} : null))
 </script>
@@ -323,10 +345,13 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
     </div>
 
     <main class="grid">
-      <KpiTile label="spend this month" :value="spend" :sub="spendSub" :failed="failed" tone="cherry" tint="lavender" />
-      <KpiTile label="saved this month" :value="saved" :failed="failed" tone="teal" tint="green" />
-      <KpiTile label="requests" :value="requests" :sub="requestsSub" :failed="failed" tint="bluegrey" />
-      <KpiTile label="eval pass rate" :value="passRate" :sub="passRateSub" :failed="failed" tint="amber" />
+      <div class="kpis">
+        <KpiTile label="spend this month" :value="spend" :sub="spendSub" :failed="failed" tone="cherry" tint="lavender" />
+        <KpiTile label="AWS bill this month" :value="awsBill" :sub="awsBillSub" :failed="failed" tint="rose" />
+        <KpiTile label="saved this month" :value="saved" :failed="failed" tone="teal" tint="green" />
+        <KpiTile label="requests" :value="requests" :sub="requestsSub" :failed="failed" tint="bluegrey" />
+        <KpiTile label="eval pass rate" :value="passRate" :sub="passRateSub" :failed="failed" tint="amber" />
+      </div>
 
       <TeamBudgets class="span-2" :data="teams" :failed="failed" />
       <ModelsChart class="span-2" :data="models" :failed="failed" />

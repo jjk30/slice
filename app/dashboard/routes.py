@@ -9,6 +9,8 @@ Endpoints under /dashboard, all read-only:
   and an estimate of tokens remaining at its blended rate; null when not estimable)
   plus this month's spend split by team label.
 - ``GET /dashboard/recent``  — the latest N requests.
+- ``GET /dashboard/aws_cost`` — the caller's AWS bill: yesterday and month-to-date, the
+  same shape as ``/scanner/cost``; the empty shape (not an error) when nothing is recorded.
 - ``GET /dashboard/events``  — Server-Sent Events, one ``request`` event per completed
   gateway request, fanned out by the in-process ``Broadcaster``.
 
@@ -44,6 +46,7 @@ from app.auth.routes import DASHBOARD_KEY_NAME
 from app.dashboard import stats
 from app.dashboard.broadcaster import EVENT_NAME, get_broadcaster
 from app.db import summarize_eval_rows, summarize_guardrail_rows
+from app.scanner.routes import _cost_summary, _storage_scope
 
 logger = logging.getLogger("slice.gateway")
 
@@ -65,6 +68,11 @@ SSE_KEEPALIVE_SECONDS = 15.0
 SSE_RETRY_MS = 2000
 
 DB_UNAVAILABLE = "Dashboard data is unavailable (database not connected)."
+
+# What /dashboard/aws_cost answers when there is nothing to show: no rows recorded yet,
+# the database not connected, or a read failure. ``month_to_date`` null is the tile's
+# "not connected" signal, so an unconnected account never reads as a $0 bill.
+AWS_COST_EMPTY = {"yesterday": None, "month_to_date": None, "currency": "USD", "fetched_at": None, "daily": []}
 DB_READ_FAILED = "Dashboard data could not be read from the database."
 
 
@@ -230,6 +238,34 @@ async def recent(request: Request, limit: int = RECENT_DEFAULT_LIMIT):
             for row in rows
         ],
     }
+
+
+@router.get("/aws_cost")
+async def aws_cost(request: Request):
+    """The caller's AWS bill this month: yesterday's completed-day cost and month-to-date.
+
+    Same data and shape as ``/scanner/cost`` (the rows the scanner's cost fetch records,
+    under the caller's storage scope), but with the dashboard's failure posture: no rows,
+    no database, or a read failure all answer the empty shape with ``month_to_date`` null,
+    never a 503. The tile shows "not connected" for that, which is the honest reading —
+    the account has not connected AWS, or the first fetch has not happened yet.
+    """
+    account = read_account(request)
+    if account is None:
+        return _unauthenticated()
+    db = _db(request)
+    if db is None:
+        return dict(AWS_COST_EMPTY)
+    scope = _storage_scope(account.id)
+    since = datetime.now(timezone.utc).date().replace(day=1)
+    try:
+        rows = await db.aws_cost_rows_since(scope, since)
+    except Exception as exc:  # noqa: BLE001 — degrade to "not connected", never a 500.
+        logger.warning(json.dumps({"event": "dashboard_read_failed", "error": str(exc)}))
+        return dict(AWS_COST_EMPTY)
+    if not rows:
+        return dict(AWS_COST_EMPTY)
+    return _cost_summary(rows)
 
 
 def _iso(value):

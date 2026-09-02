@@ -4,7 +4,7 @@
 // still loading and show a muted "Loading…", unless the load failed, in which
 // case a dash is shown instead. `tone` colours the number: cherry for spend,
 // teal for savings, default ink otherwise. `tint` picks the soft card background
-// (lavender / green / bluegrey / amber); none means a plain white card.
+// (lavender / green / bluegrey / amber / rose); none means a plain white card.
 defineProps({
   label: { type: String, required: true },
   value: { type: String, default: null },

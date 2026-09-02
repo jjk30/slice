@@ -82,3 +82,9 @@ export async function postJson(path) {
   }
   return body
 }
+
+// The caller's AWS bill this month (yesterday + month-to-date). `month_to_date` is null
+// when AWS is not connected or nothing has been fetched yet; the tile says so.
+export function getAwsCost() {
+  return getJson('/dashboard/aws_cost')
+}

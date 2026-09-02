@@ -35,6 +35,8 @@
   --tint-bluegrey-line: #CBD7E5;
   --tint-amber: #F6ECD9;
   --tint-amber-line: #E9D6B4;
+  --tint-rose: #F6E3E6;
+  --tint-rose-line: #EACBD2;
   --muted-on-tint: #5E574E;
   /* Provider identity dots (Recent calls, Spend by model). Distinct hues, not
      brand logos; deliberately apart from the status-pill teal/amber/cherry. */
@@ -81,6 +83,8 @@ html.dark {
   --tint-bluegrey-line: #36424F;
   --tint-amber: #332A1C;
   --tint-amber-line: #4E3E24;
+  --tint-rose: #33232A;
+  --tint-rose-line: #4E3541;
   --muted-on-tint: #B5ADA1;
   /* Lifted a touch so the dots keep their identity on the ink background. */
   --prov-anthropic: #E0805C;
@@ -247,6 +251,20 @@ a {
   align-self: stretch;
 }
 
+/* The KPI row: five tiles across the full width, on their own sub-grid so the
+   four-column main grid underneath never has to wrap an odd fifth tile. */
+.kpis {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.kpis > .card {
+  align-self: stretch;
+}
+
 .span-2 {
   grid-column: span 2;
 }
@@ -256,7 +274,8 @@ a {
 }
 
 @media (max-width: 880px) {
-  .grid {
+  .grid,
+  .kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .span-2,
@@ -270,7 +289,8 @@ a {
     padding-left: var(--s2);
     padding-right: var(--s2);
   }
-  .grid {
+  .grid,
+  .kpis {
     grid-template-columns: 1fr;
   }
   .span-2,
@@ -342,7 +362,7 @@ a {
 
 /* ---------- KPI card ---------- */
 
-/* Soft tinted variants for the four KPI tiles; the guardrails tile and every
+/* Soft tinted variants for the five KPI tiles; the guardrails tile and every
    panel stay white cards on paper. */
 .card.tint-lavender {
   background: var(--tint-lavender);
@@ -362,6 +382,11 @@ a {
 .card.tint-amber {
   background: var(--tint-amber);
   border-color: var(--tint-amber-line);
+}
+
+.card.tint-rose {
+  background: var(--tint-rose);
+  border-color: var(--tint-rose-line);
 }
 
 .card[class*="tint-"] .kpi-label,
