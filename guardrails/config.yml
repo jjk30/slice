@@ -23,3 +23,12 @@ rails:
   output:
     flows:
       - self check output
+
+# Phase 23b: the reply-by-email assistant runs the same two rail flows, but as a TOPIC
+# rail with its own prompts. prompts.yml carries a second self_check_input /
+# self_check_output pair tagged ``mode: email``; NeMo selects prompts by task and by
+# ``prompting_mode``, so the agent-loop engine (this default, "standard") never sees
+# them, and the email engine — built in code as build_engine(mode="email"), which copies
+# this config with prompting_mode set to "email" — gets only them. One config directory,
+# one set of flows, two channels with different prompts and no embeddings either way.
+prompting_mode: standard

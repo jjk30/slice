@@ -34,6 +34,8 @@ from app.rag.prompt import extract_prompt_text
 from app.scanner import router as scanner_router
 from app.scanner import service as scanner_service
 from app.account.routes import router as account_router
+from app.email_assistant import router as email_router
+from app.email_assistant import service as email_service
 from app.redis_layer import CACHE_HEADER
 from app.router import RAG_HEADER, ROUTED_HEADER, route
 from app.rules import RulesCache
@@ -147,7 +149,23 @@ async def lifespan(app: FastAPI):
     # off the request path; boto3 is imported lazily inside the task, never at startup.
     app.state.scanner_task = scanner_service.start_daily_task(app)
 
+    # Phase 23b: the reply-by-email assistant, or None when EMAIL_ASSISTANT_ENABLED is off.
+    # It owns its own guardrails engine (the same config directory in NeMo's "email"
+    # prompting mode: the topic rail) and fails CLOSED on every step — an unbuildable engine
+    # means every question gets the fixed line, never an unguarded answer. Guarded so nothing
+    # in the build can block startup.
+    app.state.email_assistant = _safe_startup(
+        "email_assistant",
+        lambda: email_service.build_assistant(app.state.db, app.state.redis),
+    )
+
     yield
+
+    # Let an in-flight email reply finish before its clients (redis/db) go away. Bounded.
+    try:
+        await asyncio.wait_for(email_service.drain(), timeout=15)
+    except Exception:  # noqa: BLE001 — shutdown must not trip on an email reply.
+        pass
 
     # Stop the scanner's daily loop before its clients (redis/db) go away.
     scanner_task = getattr(app.state, "scanner_task", None)
@@ -203,6 +221,7 @@ app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(scanner_router)
 app.include_router(account_router)
+app.include_router(email_router)
 
 
 def get_client(app: FastAPI) -> httpx.AsyncClient:

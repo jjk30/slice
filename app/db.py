@@ -240,6 +240,32 @@ SELECT id, key_prefix, name, created_at, last_used_at, revoked_at
 FROM slice_keys WHERE account_id = $1 ORDER BY id
 """
 
+# --- Reply-by-email assistant (phase 23b) -----------------------------------
+# One email_replies row per inbound mail, keyed by Resend's email_id so a webhook retry is
+# a no-op. The row is CLAIMED first (insert with verdict 'error', ON CONFLICT DO NOTHING: a
+# None back means a duplicate and the pipeline stops) and FINISHED last (the real verdict
+# and, once known, the account). A pipeline that dies mid-way leaves 'error' behind, which
+# is the truth. The subject is stored; the body and the answer never are.
+SELECT_ACCOUNT_BY_EMAIL = """
+SELECT id, github_id, github_login, email, whatsapp_number, profile_confirmed_at, created_at
+FROM accounts
+WHERE email IS NOT NULL AND lower(email) = lower($1)
+ORDER BY id
+LIMIT 1
+"""
+SELECT_EMAIL_REPLY_SEEN = "SELECT 1 FROM email_replies WHERE email_id = $1"
+CLAIM_EMAIL_REPLY = """
+INSERT INTO email_replies (email_id, from_address, subject, verdict)
+VALUES ($1, $2, $3, 'error')
+ON CONFLICT (email_id) DO NOTHING
+RETURNING id
+"""
+FINISH_EMAIL_REPLY = """
+UPDATE email_replies
+SET verdict = $2, account_id = COALESCE($3, account_id)
+WHERE email_id = $1
+"""
+
 # --- Dashboard reads (phase 10) ---------------------------------------------
 # The dashboard's math lives in app.dashboard.stats (pure functions, unit-tested
 # against seeded rows, the same way the eval and guardrail summaries work). To keep a
@@ -931,6 +957,49 @@ class Database:
     async def guardrail_rows_since(self, since, account_id: int | None = None) -> list[dict]:
         """One account's guardrail event rows at or after ``since``, for summarize_guardrail_rows."""
         return await self._fetch(SELECT_GUARDRAIL_ROWS_SINCE, since, account_id)
+
+    # --- Reply-by-email assistant (phase 23b) ------------------------------
+    # find_account_by_email and email_reply_seen are reads the pipeline needs an answer
+    # from, so they raise like the other reads; the caller fails closed (no reply) on an
+    # error. claim/finish are the one-row-per-mail bookkeeping: claim raises too (a
+    # duplicate must be told apart from a dead database, and both stop the pipeline);
+    # finish is fire-and-forget like every other write off the request path.
+
+    async def find_account_by_email(self, email: str) -> dict | None:
+        """The accounts row whose saved email matches ``email`` case-insensitively, or None."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(SELECT_ACCOUNT_BY_EMAIL, email)
+        return dict(row) if row is not None else None
+
+    async def email_reply_seen(self, email_id: str) -> bool:
+        """True when an email_replies row already exists for this Resend email id."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            value = await connection.fetchval(SELECT_EMAIL_REPLY_SEEN, email_id)
+        return value is not None
+
+    async def claim_email_reply(self, email_id: str, from_address: str, subject: str) -> bool:
+        """Insert the row for this inbound mail; False means it was already claimed (a retry)."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            value = await connection.fetchval(CLAIM_EMAIL_REPLY, email_id, from_address, subject)
+        return value is not None
+
+    async def finish_email_reply(self, email_id: str, verdict: str, account_id: int | None) -> None:
+        """Stamp the final verdict (and the account, once known) on the claimed row."""
+        if self._pool is None:
+            return
+        try:
+            async with self._pool.acquire() as connection:
+                await connection.execute(FINISH_EMAIL_REPLY, email_id, verdict, account_id)
+        except Exception as exc:  # noqa: BLE001 — bookkeeping is never worth a crash.
+            logger.warning(
+                json.dumps({"event": "db_unavailable", "stage": "email_reply_write", "error": str(exc)})
+            )
 
     # --- Switch rules (phase 5) --------------------------------------------
     # Unlike record(), these return values the caller needs, so they raise on

@@ -412,6 +412,33 @@ class ResendEmailChannel:
     async def send(self, alert: Alert) -> DeliveryResult:
         if not self.configured:
             return DeliveryResult(ok=False, error="email channel not configured")
+        return await self._post(self.payload(alert))
+
+    async def send_email(
+        self,
+        *,
+        to: str | list[str],
+        subject: str,
+        text: str,
+        headers: dict[str, str] | None = None,
+    ) -> DeliveryResult:
+        """One arbitrary plain-text email from the configured sender (phase 23b). Never raises.
+
+        The reply-by-email assistant answers the sender of an inbound mail, so the
+        recipient is per call rather than the channel's fixed ``to`` list; ``headers``
+        carries Resend custom headers (``In-Reply-To`` / ``References``) so the reply
+        threads under the original in the user's mail client. Same POST, same auth, same
+        timeout and error shape as an alert send.
+        """
+        recipients = _recipients(to)
+        if not (self._api_key and self._sender and recipients):
+            return DeliveryResult(ok=False, error="email channel not configured")
+        payload = {"from": self._sender, "to": recipients, "subject": subject, "text": text}
+        if headers:
+            payload["headers"] = dict(headers)
+        return await self._post(payload)
+
+    async def _post(self, payload: dict) -> DeliveryResult:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -419,11 +446,11 @@ class ResendEmailChannel:
         try:
             if self._client is not None:
                 response = await self._client.post(
-                    self._url, json=self.payload(alert), headers=headers, timeout=self._timeout
+                    self._url, json=payload, headers=headers, timeout=self._timeout
                 )
             else:
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
-                    response = await client.post(self._url, json=self.payload(alert), headers=headers)
+                    response = await client.post(self._url, json=payload, headers=headers)
         except Exception as exc:  # noqa: BLE001 — a channel never raises into the engine.
             return DeliveryResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 

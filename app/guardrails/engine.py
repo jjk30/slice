@@ -141,13 +141,20 @@ def _blocked(response, rail: str) -> tuple[bool, str | None]:
     return False, None
 
 
-def build_engine() -> "GuardrailEngine | None":
+def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
     """Construct the engine, or return None when guardrails are off or unbuildable.
 
     Returns None (fail open, no rails) when the kill switch is off, or when anything in
     the build fails — a missing config dir, a broken nemoguardrails, a rails LLM that
     won't construct. nemoguardrails is imported HERE, lazily, so with the switch off it
     is never imported and the server starts even if the package is broken or absent.
+
+    ``mode`` (phase 23b) selects a NeMo ``prompting_mode``: the same config directory and
+    the same two flows, but the prompts tagged with that mode in ``prompts.yml`` instead
+    of the default "standard" ones. The reply-by-email assistant builds its own engine
+    with ``mode="email"`` to get its topic rail; ``None`` is the agent-loop engine, exactly
+    as before. Whether a *caller* fails open or closed on an errored outcome is the
+    caller's decision — the agent loop fails open, the email assistant fails closed.
     """
     if not config.GUARDRAILS_ENABLED:
         return None
@@ -159,6 +166,8 @@ def build_engine() -> "GuardrailEngine | None":
         from nemoguardrails.rails.llm.options import GenerationOptions
 
         rails_config = RailsConfig.from_path(config.GUARDRAILS_CONFIG_DIR)
+        if mode:
+            rails_config = rails_config.model_copy(update={"prompting_mode": mode})
         llm = LangChainLLMAdapter(
             ChatAnthropic(model=config.GUARDRAILS_MODEL, temperature=0.0)
         )
@@ -181,7 +190,9 @@ def build_engine() -> "GuardrailEngine | None":
         return None
 
     logger.info(
-        json.dumps({"event": "guardrail_engine_ready", "model": config.GUARDRAILS_MODEL})
+        json.dumps(
+            {"event": "guardrail_engine_ready", "model": config.GUARDRAILS_MODEL, "mode": mode or "standard"}
+        )
     )
     return GuardrailEngine(
         rails, options_input, options_output, config.GUARDRAILS_TIMEOUT_SECONDS

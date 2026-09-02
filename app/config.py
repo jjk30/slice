@@ -369,3 +369,26 @@ SCANNER_CONSOLE_REGION = os.getenv("SCANNER_CONSOLE_REGION", "us-east-1")
 # one scan and keeps temporary credentials short-lived.
 SCANNER_ASSUME_ROLE_SESSION_NAME = os.getenv("SCANNER_ASSUME_ROLE_SESSION_NAME", "slice-scanner")
 SCANNER_ASSUME_ROLE_DURATION_SECONDS = int(os.getenv("SCANNER_ASSUME_ROLE_DURATION_SECONDS", "900"))
+
+# --- Reply-by-email assistant (phase 23b): answer a reply to a slice alert email. ---
+# A user replies to an alert email with a question; Resend posts an ``email.received``
+# webhook to ``POST /email/inbound``; slice verifies the Svix signature, matches the sender
+# to an account by ``accounts.email``, fetches the body, runs the email-channel guardrails,
+# answers from that account's own read-only data, and replies in the same thread. Every
+# step fails closed: a bad signature is a 401, an unknown sender gets nothing, a blocked
+# or failed rail gets the fixed line, and nothing here ever writes to AWS or slice rules.
+#
+# EMAIL_ASSISTANT_ENABLED is the whole switch. Off (the default) means the route answers
+# 200 and does nothing, no engine is built, and no model is ever called.
+EMAIL_ASSISTANT_ENABLED = _bool("EMAIL_ASSISTANT_ENABLED", False)
+
+# The Svix signing secret Resend shows for the webhook endpoint (``whsec_<base64>``).
+# Unset with the assistant on means every inbound post is rejected with a 401 (fail
+# closed) and a warning says why. Env only, never in code.
+RESEND_WEBHOOK_SECRET = os.getenv("RESEND_WEBHOOK_SECRET") or None
+
+# The model that writes the reply, wired through langchain-anthropic (ChatAnthropic, the
+# same client and ANTHROPIC_API_KEY the guardrails and the eval judge use). Defaults to the
+# router judge model. One call per answered email, capped at 300 output tokens; its cost
+# is slice's own, out-of-band from the account budget.
+EMAIL_ASSISTANT_MODEL = os.getenv("EMAIL_ASSISTANT_MODEL", JUDGE_MODEL)
