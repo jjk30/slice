@@ -218,6 +218,12 @@ a {
   white-space: nowrap;
 }
 
+/* The How to link shares the header button look; as an anchor it needs the same box. */
+.howto {
+  display: inline-block;
+  line-height: normal;
+}
+
 .signout:hover,
 .settings:hover {
   background: var(--hover);

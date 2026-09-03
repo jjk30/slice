@@ -336,6 +336,7 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
         <span class="meta">this month · {{ month ?? '—' }}</span>
         <span v-if="accountLogin" class="meta account">{{ accountLogin }}</span>
         <LivePill :status="liveStatus" />
+        <a class="settings howto" href="https://sliceapp.dev/how-to.html" target="_blank" rel="noopener">How to</a>
         <button class="settings" type="button" @click="settingsOpen = true">Settings</button>
         <button class="signout" type="button" @click="onLogout">Log out</button>
       </div>

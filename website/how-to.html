@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How to · slice</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=Inter:wght@400;450;500&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1C1815; --paper:#FBF8F1; --paper2:#FFFDF8; --edge:#EFE7D7;
+    --green:#0F6E56; --green-deep:#0B5A46; --red:#C24A44;
+    --muted:#736A5D; --faint:#A79C8B; --dot:#CFC5B2; --rule:#E4DBC9;
+    --display:'Bricolage Grotesque',sans-serif; --body:'Inter',sans-serif; --mono:'JetBrains Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:
+    radial-gradient(120% 90% at 82% 4%, #FFFDF8 0%, rgba(255,253,248,0) 52%),
+    radial-gradient(90% 70% at 6% 102%, #F3ECDE 0%, rgba(243,236,222,0) 58%),
+    var(--paper);color:var(--ink);font-family:var(--body);line-height:1.6;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  .wrap{max-width:720px;margin:0 auto;padding:0 24px}
+  .wide{max-width:1120px;margin:0 auto;padding:0 32px}
+  a{color:inherit;text-decoration:none}
+  ::selection{background:#C6E3D2}
+  :focus-visible{outline:2.5px solid var(--green);outline-offset:3px;border-radius:4px}
+
+  /* nav */
+  .nav{display:flex;align-items:center;justify-content:space-between;height:70px}
+  .brand{display:flex;align-items:center;gap:9px}
+  .brand b{font-family:var(--display);font-weight:700;font-size:20px}
+  .navr{display:flex;align-items:center;gap:18px}
+  .navlink{font-family:var(--mono);font-size:13px;color:var(--muted);transition:color .14s ease}
+  .navlink:hover,.navlink.here{color:var(--ink)}
+  .nav .go{font-family:var(--mono);font-size:13px;color:var(--green);border:1px solid var(--green);padding:8px 15px;border-radius:9px;transition:background .14s ease,color .14s ease}
+  .nav .go:hover{background:var(--green);color:#fff}
+
+  /* page head */
+  .lede-h{padding:34px 0 10px}
+  .lede-h h1{font-family:var(--display);font-weight:700;font-size:clamp(30px,5.4vw,46px);line-height:1.02;letter-spacing:-.03em;max-width:18ch}
+  .lede-h p{font-size:16.5px;color:var(--muted);max-width:36em;margin:16px 0 0;line-height:1.55}
+  .h-mark{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--green);margin-bottom:14px}
+  .legend{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin:14px 0 0;line-height:1.6}
+  .legend .sw{color:#EAC58C;border-bottom:1px dotted rgba(192,124,30,.55)}
+  .toc{list-style:none;display:flex;flex-wrap:wrap;gap:8px 18px;margin:22px 0 10px;padding:0}
+  .toc a{font-family:var(--mono);font-size:12.5px;color:var(--muted);border-bottom:1px solid var(--dot)}
+  .toc a:hover{color:var(--ink);border-color:var(--ink)}
+  .toc .n{color:var(--green);margin-right:6px}
+
+  /* sections */
+  .block{padding:48px 0;border-top:1px solid var(--rule)}
+  .block h2{font-family:var(--display);font-weight:700;font-size:clamp(24px,4vw,32px);letter-spacing:-.025em;line-height:1.06;margin-bottom:8px;display:flex;align-items:baseline;gap:14px}
+  .block h2 .no{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--green);letter-spacing:.02em}
+  .block .say{font-size:16px;color:var(--muted);line-height:1.6;max-width:38em;margin-bottom:22px}
+  .block h3{font-family:var(--display);font-weight:600;font-size:19px;letter-spacing:-.012em;margin:26px 0 6px}
+  .block p{font-size:14.5px;color:var(--muted);line-height:1.6;max-width:46em;margin:10px 0 0}
+  .block p b,.block li b{color:var(--ink);font-weight:500}
+  .block p a,.block li a{color:var(--green);border-bottom:1px solid rgba(15,110,86,.35)}
+  .block code,.block li code{font-family:var(--mono);font-size:12.5px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
+  .block .term{margin-top:14px}
+  .block ol,.block ul{margin:12px 0 0 22px;font-size:14.5px;color:var(--muted);line-height:1.6;max-width:46em}
+  .block li{margin:6px 0}
+  .block ul.tight li{margin:3px 0}
+  .tiles{border-top:1.5px dashed var(--rule);margin-top:14px}
+  .tile{display:flex;gap:14px;padding:12px 0;border-bottom:1px solid var(--rule);font-size:14.5px;line-height:1.55}
+  .tile .k{font-family:var(--mono);font-weight:700;font-size:12.5px;color:var(--ink);min-width:170px;padding-top:2px;letter-spacing:.01em}
+  .tile .v{color:var(--muted)}
+  .conn-note{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:18px;line-height:1.7}
+  .conn-note b{color:var(--ink);font-weight:500}
+
+  /* terminal blocks */
+  .term{background:var(--ink);border-radius:12px;overflow:hidden;box-shadow:0 20px 40px -30px rgba(28,24,21,.6)}
+  .term .bar{display:flex;align-items:center;gap:7px;padding:12px 15px;border-bottom:1px solid rgba(255,255,255,.08)}
+  .term .bar i{width:10px;height:10px;border-radius:999px;display:block}
+  .term .bar .r{background:#E2535F}.term .bar .y{background:#EAC58C}.term .bar .g{background:#7FB77E}
+  .term .bar span{margin-left:8px;font-family:var(--mono);font-size:12px;color:rgba(251,248,241,.5)}
+  .term pre{margin:0;padding:18px 18px 20px;font-family:var(--mono);font-size:13px;line-height:1.95;color:var(--paper);overflow-x:auto}
+  .term .cm{color:rgba(251,248,241,.42)}.term .kw{color:#7FD3B0}.term .st{color:#EAC58C}
+  .term .dim{color:rgba(251,248,241,.45)}
+  .ph{color:#EAC58C;border-bottom:1px dotted rgba(234,197,140,.55)}
+
+  /* copy icon in the terminal bar, shown on hover */
+  .term .copy{margin:-6px 0 -6px auto;display:inline-flex;align-items:center;justify-content:center;width:26px;height:22px;color:rgba(251,248,241,.62);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:7px;cursor:pointer;opacity:0;transition:opacity .15s ease,color .14s ease,background .14s ease,border-color .14s ease}
+  .term:hover .copy,.term:focus-within .copy,.term .copy.done{opacity:1}
+  @media(hover:none){.term .copy{opacity:1}}
+  .term .copy:hover{color:var(--paper);background:rgba(255,255,255,.11);border-color:rgba(255,255,255,.22)}
+  .term .copy svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;display:block}
+  .term .copy .ic-done{display:none}
+  .term .copy.done{color:#7FD3B0;border-color:rgba(127,211,176,.45);background:rgba(127,211,176,.1)}
+  .term .copy.done .ic{display:none}
+  .term .copy.done .ic-done{display:block}
+
+  /* final + footer */
+  .final{padding:56px 0 30px;text-align:center;border-top:1px solid var(--rule)}
+  .final h2{font-family:var(--display);font-weight:700;font-size:clamp(26px,4.6vw,38px);letter-spacing:-.03em;line-height:1.02;margin-bottom:12px}
+  .final p{font-size:16px;color:var(--muted);max-width:28em;margin:0 auto 24px;line-height:1.55}
+  .act{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:26px 0 4px;justify-content:center}
+  .btn{font-family:var(--body);font-weight:500;font-size:15.5px;border:none;cursor:pointer;border-radius:11px;background:var(--green);color:#fff;padding:13px 26px;display:inline-flex;align-items:center;gap:9px;transition:transform .14s ease,background .14s ease}
+  .btn:hover{transform:translateY(-1px);background:var(--green-deep)}
+  .btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .note{text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:2px}
+  footer{border-top:1px solid var(--rule);padding:26px 0 54px;display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  footer a:hover{color:var(--ink)}
+
+  @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wide">
+  <nav class="nav">
+    <a class="brand" href="index.html">
+      <b>slice</b>
+    </a>
+    <div class="navr">
+      <a href="how-to.html" class="navlink here">How to</a>
+      <a href="https://api.sliceapp.dev" class="go">Get started</a>
+    </div>
+  </nav>
+</div>
+
+<div class="wrap">
+  <section class="lede-h">
+    <div class="h-mark">how to</div>
+    <h1>Set up slice, step by step.</h1>
+    <p>Eight short steps, from install to uninstall. Every block below can be copied with the button in its top right corner.</p>
+    <p class="legend"><span class="sw">(like&nbsp;this)</span> &nbsp;means a value you fill in with your own. Everything else you can copy as-is.</p>
+    <ul class="toc">
+      <li><a href="#install"><span class="n">01</span>Install</a></li>
+      <li><a href="#login"><span class="n">02</span>Log in</a></li>
+      <li><a href="#tools"><span class="n">03</span>Point your tools at slice</a></li>
+      <li><a href="#spend"><span class="n">04</span>Watch spend</a></li>
+      <li><a href="#aws"><span class="n">05</span>Connect AWS</a></li>
+      <li><a href="#actions"><span class="n">06</span>GitHub Actions</a></li>
+      <li><a href="#alerts"><span class="n">07</span>Alert emails</a></li>
+      <li><a href="#uninstall"><span class="n">08</span>Uninstall and revoke</a></li>
+    </ul>
+  </section>
+
+  <!-- 01 INSTALL -->
+  <section class="block" id="install">
+    <h2><span class="no">01</span>Install</h2>
+    <p class="say">The slice CLI is a small package on PyPI. It needs Python 3.11 or newer.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre><span class="dim">$</span> pip install slice-gateway</pre>
+    </div>
+    <p>On Mac, use pip3 if pip is not found.</p>
+    <p>Check that it installed, and see which version you have:</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre><span class="dim">$</span> slice --version
+
+slice-gateway 0.2.1</pre>
+    </div>
+  </section>
+
+  <!-- 02 LOG IN -->
+  <section class="block" id="login">
+    <h2><span class="no">02</span>Log in</h2>
+    <p class="say">Sign in with GitHub. slice shows a short code. Open the GitHub page it prints, paste the code, and click Authorize. No password is typed in the terminal.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre><span class="dim">$</span> slice login
+
+  To finish signing in, open:
+    <span class="st">https://github.com/login/device</span>
+  and enter this code:
+    <span class="st">WXYZ-1234</span>
+
+Waiting for you to authorize in the browser...
+Logged in as <span class="ph">(your-github-username)</span></pre>
+    </div>
+    <p>Self-hosted? Pass <code>--base-url http://localhost:8080</code> once, or set <code>SLICE_BASE_URL</code>. slice saves the address with your login.</p>
+
+    <h3>Your slice key</h3>
+    <p>Login mints a slice key. It starts with <code>slk_live_</code>. The CLI saves it to <code>~/.slice/config.json</code>, readable only by you, and does not print it. It is not shown again. The dashboard shows only its last four characters.</p>
+
+    <h3>One key per device</h3>
+    <p>The key is named after your machine, for example <code>cli:Mac.home.local</code>. Run <code>slice login</code> again on the same machine and slice revokes that machine's old key and saves a new one. Keys on your other machines are not touched.</p>
+
+    <h3>Where to see it</h3>
+    <p>Open the dashboard at <a href="https://api.sliceapp.dev" target="_blank" rel="noopener">api.sliceapp.dev</a>. The card called <b>Your slice key</b> shows your newest live key, masked, with its name and the day it was made.</p>
+    <p>To check the saved login from the terminal:</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre><span class="dim">$</span> slice init
+
+Gateway:  https://api.sliceapp.dev
+Config:   <span class="ph">(your home folder)</span>/.slice/config.json
+Logged in as <span class="ph">(your-github-username)</span> (account <span class="ph">(id)</span>).</pre>
+    </div>
+  </section>
+
+  <!-- 03 POINT YOUR TOOLS -->
+  <section class="block" id="tools">
+    <h2><span class="no">03</span>Point your tools at slice</h2>
+    <p class="say">slice reads your slice key from the Authorization header. Your own Anthropic key goes in x-api-key, and slice forwards it to Anthropic. Each setup below sends both.</p>
+
+    <h3>Claude Code</h3>
+    <p>Set three variables in the shell where you run Claude Code. <code>slice use claude-code</code> prints the same lines with your key filled in.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
+<span class="kw">export</span> ANTHROPIC_API_KEY=<span class="ph">(your own Anthropic key)</span>
+<span class="kw">export</span> ANTHROPIC_AUTH_TOKEN=<span class="ph">(your slice key, from ~/.slice/config.json)</span></pre>
+    </div>
+    <p><code>ANTHROPIC_AUTH_TOKEN</code> goes out as <code>Authorization: Bearer</code>, which is where slice reads its key. <code>ANTHROPIC_API_KEY</code> stays your own Anthropic key in <code>x-api-key</code>. Claude Code prints a notice that env auth takes precedence over your claude.ai login while these are set. That is expected. Unset the three variables to go back to normal.</p>
+
+    <h3>Anthropic Python SDK</h3>
+    <p>Give the client the slice address, your Anthropic key, and your slice key as the auth token. The SDK also reads the three variables above, so you can leave the keys out of the code.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Python</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre><span class="kw">import</span> anthropic
+
+client = anthropic.Anthropic(
+    base_url=<span class="st">"https://api.sliceapp.dev"</span>,
+    api_key=<span class="ph">"(your own Anthropic key)"</span>,
+    auth_token=<span class="ph">"(your slice key)"</span>,
+)
+message = client.messages.create(
+    model=<span class="st">"claude-sonnet-5"</span>,
+    max_tokens=64,
+    messages=[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: <span class="st">"hi"</span>}],
+)
+<span class="kw">print</span>(message.content[0].text)</pre>
+    </div>
+
+    <h3>curl</h3>
+    <p>The same two headers, by hand. This uses the variables from the Claude Code block.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre>curl https://api.sliceapp.dev/v1/messages \
+  -H <span class="st">"Authorization: Bearer $ANTHROPIC_AUTH_TOKEN"</span> \
+  -H <span class="st">"x-api-key: $ANTHROPIC_API_KEY"</span> \
+  -H <span class="st">"anthropic-version: 2023-06-01"</span> \
+  -H <span class="st">"content-type: application/json"</span> \
+  -d <span class="st">'{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'</span></pre>
+    </div>
+    <p><b>Run it twice.</b> The first call is billed. The second call, with the same body, is served from cache at $0. slice keeps an answer for one hour.</p>
+  </section>
+
+  <!-- 04 WATCH SPEND -->
+  <section class="block" id="spend">
+    <h2><span class="no">04</span>Watch spend</h2>
+    <p class="say">The dashboard is at <a href="https://api.sliceapp.dev" target="_blank" rel="noopener">api.sliceapp.dev</a>. Sign in with GitHub. The first time, it asks for an email so slice can reach you.</p>
+
+    <h3>The five tiles</h3>
+    <div class="tiles">
+      <div class="tile"><span class="k">spend this month</span><span class="v">What your requests through slice have cost so far this month. Cache hits count as $0. If a model has no price in slice's table, the tile says how many requests were left out.</span></div>
+      <div class="tile"><span class="k">AWS bill this month</span><span class="v">Your AWS spend for the month so far, from Cost Explorer, with yesterday's total under it. It reads "not connected" until you connect AWS in step 05.</span></div>
+      <div class="tile"><span class="k">saved this month</span><span class="v">For each request slice routed to a cheaper model: what the model you asked for would have cost, minus what you paid. Only successful requests count.</span></div>
+      <div class="tile"><span class="k">requests</span><span class="v">How many calls went through slice this month, with how many were cache hits and how many were routed to a cheaper model.</span></div>
+      <div class="tile"><span class="k">eval pass rate</span><span class="v">slice scores a sample of the routed-down answers after the fact. This is the share that passed, and how many were scored.</span></div>
+    </div>
+
+    <h3>The account cap</h3>
+    <p>Every account has a monthly cap. The <b>Account budget</b> panel shows what is used, the cap, and what is left.</p>
+    <ul>
+      <li><b>Near the cap.</b> When spend reaches 80% of the cap, slice sends one warning email for the month. Nothing is blocked yet.</li>
+      <li><b>At the cap.</b> slice blocks requests. A blocked request gets a 429 with the message <code>Monthly budget exceeded for this account.</code> and costs nothing. A block email goes out.</li>
+      <li><b>New month.</b> The counter resets on its own.</li>
+    </ul>
+  </section>
+
+  <!-- 05 CONNECT AWS -->
+  <section class="block" id="aws">
+    <h2><span class="no">05</span>Connect AWS</h2>
+    <p class="say">Optional. Connect a read-only role and the dashboard shows your AWS bill next to your AI spend. slice also scans the account once a day for risks and waste.</p>
+    <ol>
+      <li>In the dashboard, click <b>Settings</b>. Find <b>Connect AWS (optional)</b>.</li>
+      <li>Click <b>Create the read-only role in AWS</b>. It opens the CloudFormation quick-create page in your AWS account, with the template and your External ID already filled in. The stack is named <code>slice-scanner-role</code>.</li>
+      <li>Read the template if you like. It is in the repo at <a href="https://github.com/jjk30/slice/blob/main/infra/user-onboarding/slice-readonly-role.yaml" target="_blank" rel="noopener">infra/user-onboarding/slice-readonly-role.yaml</a>. Tick the box that acknowledges the stack creates an IAM role, then click <b>Create stack</b>.</li>
+      <li>When the stack shows <code>CREATE_COMPLETE</code>, open its <b>Outputs</b> tab and copy <code>RoleArn</code>.</li>
+      <li>Back in Settings, paste it into the <b>Role ARN</b> box and click <b>Connect</b>. slice assumes the role once to check it. The status changes to <b>connected</b>.</li>
+    </ol>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Role ARN</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre>arn:aws:iam::<span class="ph">(your AWS account id)</span>:role/slice-scanner/<span class="ph">(the name CloudFormation gave the role)</span></pre>
+    </div>
+    <p>The first scan runs within about an hour. After that, once a day.</p>
+
+    <h3>What the role can read</h3>
+    <ul class="tight">
+      <li>The list of your S3 buckets, and each bucket's ACL, policy, policy status, encryption, and public access settings.</li>
+      <li>Your account's public access block setting.</li>
+      <li>EC2 security groups, volumes, snapshots, instances, and Elastic IP addresses.</li>
+      <li>CloudWatch metric statistics.</li>
+      <li>IAM users, their access keys, when a key was last used, and the policies attached to a user.</li>
+      <li>Cost Explorer cost and usage.</li>
+      <li>Its own identity.</li>
+    </ul>
+    <p><b>It cannot change anything.</b> It cannot read a file in a bucket, a secret, or a password. Only slice's AWS account, <code>194133064379</code>, can assume the role, and only with your External ID.</p>
+    <p>To disconnect, delete the <code>slice-scanner-role</code> stack in CloudFormation. slice's access ends the moment the role is gone.</p>
+  </section>
+
+  <!-- 06 GITHUB ACTIONS -->
+  <section class="block" id="actions">
+    <h2><span class="no">06</span>GitHub Actions</h2>
+    <p class="say">There is no slice action. A workflow step can call the gateway with curl. Store two repository secrets: <code>SLICE_KEY</code> and <code>ANTHROPIC_API_KEY</code>.</p>
+    <p><b>A key for CI.</b> Make it in the dashboard: open <b>Your slice key</b> and click <b>Create new key</b>. Copy it once. This revokes every other live key on the account, including your laptop's, so run <code>slice login</code> again afterwards. A CLI login does not revoke a dashboard key.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>.github/workflows/your-workflow.yml</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre>- name: Ask Claude through slice
+  env:
+    ANTHROPIC_AUTH_TOKEN: ${{ secrets.SLICE_KEY }}
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  run: |
+    curl -sS https://api.sliceapp.dev/v1/messages \
+      -H <span class="st">"Authorization: Bearer $ANTHROPIC_AUTH_TOKEN"</span> \
+      -H <span class="st">"x-api-key: $ANTHROPIC_API_KEY"</span> \
+      -H <span class="st">"anthropic-version: 2023-06-01"</span> \
+      -H <span class="st">"content-type: application/json"</span> \
+      -d <span class="st">'{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'</span></pre>
+    </div>
+    <p>Every call from CI shows up in the dashboard and counts against the same account cap.</p>
+  </section>
+
+  <!-- 07 ALERT EMAILS -->
+  <section class="block" id="alerts">
+    <h2><span class="no">07</span>Alert emails</h2>
+    <p class="say">slice scans a connected AWS account once a day. When a scan finds new high-risk items, you get one email about them, at most one an hour. The budget warning and the block from step 04 arrive the same way.</p>
+    <p>Each finding is three short lines: what it is, why it matters, and the first thing to do. Then a <b>Read more</b> link to the AWS doc page for that check. Here is one:</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Email</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre>Your S3 storage bucket <span class="ph">(bucket name)</span> in us-east-1 is open to the internet.
+Anyone who finds the link can read what is inside, and that is how private files leak.
+In the S3 console, open the bucket, go to Permissions, and turn on Block all public access.
+Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html</pre>
+    </div>
+    <p>Every email ends with the same line: <b>slice is an AI. Please double check before you change anything in AWS.</b></p>
+
+    <h3>Reply with a question</h3>
+    <p>Reply to the email with a question about your own account. For example, how much you spent this week, or what a finding means. Send it from the email you saved in Settings. slice answers from your own slice data, in plain words, under 150 words. It never sends commands or scripts to run. If it does not have the number, it says so.</p>
+    <p>Anything off topic gets one line back: <b>Sorry, I can't help with that here.</b></p>
+  </section>
+
+  <!-- 08 UNINSTALL -->
+  <section class="block" id="uninstall">
+    <h2><span class="no">08</span>Uninstall and revoke</h2>
+    <p class="say">Remove the CLI and its saved key, then revoke the key on the server.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre><span class="dim">$</span> pip uninstall slice-gateway
+<span class="dim">$</span> rm -rf ~/.slice</pre>
+    </div>
+    <ol>
+      <li><b>Revoke the key.</b> In the dashboard, open <b>Your slice key</b> and click <b>Create new key</b>. That revokes every live key on the account, including the one from your machine. The new key is shown once. Close it without saving it, and nothing can use it.</li>
+      <li><b>Unset the variables.</b> Remove <code>ANTHROPIC_BASE_URL</code>, <code>ANTHROPIC_API_KEY</code>, and <code>ANTHROPIC_AUTH_TOKEN</code> from your shell, so your tools talk to Anthropic directly again.</li>
+      <li><b>Stop AWS access.</b> If you connected AWS, delete the <code>slice-scanner-role</code> stack in CloudFormation.</li>
+      <li><b>Sign out.</b> Click <b>Log out</b> in the dashboard header.</li>
+    </ol>
+  </section>
+</div>
+
+<!-- FINAL -->
+<div class="wrap">
+  <section class="final">
+    <h2>That is the whole setup.</h2>
+    <p>Free and open source. Read the code, or run it on your own box.</p>
+    <div class="act" style="margin-bottom:0">
+      <a class="btn" href="https://api.sliceapp.dev">
+        <svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>Open the dashboard
+      </a>
+    </div>
+    <p class="note" style="margin-top:16px"><a href="https://github.com/jjk30/slice" target="_blank" rel="noopener">github.com/jjk30/slice</a></p>
+  </section>
+
+  <footer>
+    <span>slice · the AI &amp; cloud cost gateway</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+  function legacy(text){
+    return new Promise(function(ok,fail){
+      var ta=document.createElement('textarea'); ta.value=text; ta.setAttribute('readonly','');
+      ta.style.position='fixed'; ta.style.top='-1000px'; document.body.appendChild(ta); ta.select();
+      var done=false;
+      try{ done=document.execCommand('copy'); }catch(e){ done=false; }
+      document.body.removeChild(ta);
+      if(done) ok(); else fail(new Error('copy failed'));
+    });
+  }
+  function put(text){
+    // The clipboard API needs a secure context and a user gesture; when it is missing or
+    // refuses, fall back to the older select-and-copy path before giving up.
+    if(navigator.clipboard && window.isSecureContext){
+      return navigator.clipboard.writeText(text).catch(function(){ return legacy(text); });
+    }
+    return legacy(text);
+  }
+  document.querySelectorAll('.term .copy').forEach(function(btn){
+    var timer;
+    btn.addEventListener('click',function(){
+      var term=btn.closest('.term');
+      var pre=term&&term.querySelector('pre');
+      var text=pre?pre.textContent:'';
+      // Strip the leading "$ " prompt marker from any command line so the copied
+      // text is runnable; other lines (output, exports, comments) are untouched.
+      text=text.split('\n').map(function(l){return l.replace(/^\$ ?/,'');}).join('\n');
+      put(text).then(function(){
+        btn.classList.add('done'); btn.setAttribute('aria-label','Copied');
+      }).catch(function(){
+        btn.setAttribute('aria-label','Copy failed');
+      });
+      clearTimeout(timer);
+      timer=setTimeout(function(){ btn.classList.remove('done'); btn.setAttribute('aria-label','Copy command'); },1600);
+    });
+  });
+})();
+</script>
+</body>
+</html>

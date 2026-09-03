@@ -13,6 +13,10 @@ Installed as a console entry point via pyproject.toml, so ``pip install -e .`` g
   the caller controls headers (SDK, curl) that is the whole story; for ``claude-code`` it
   prints the three variables (base URL, your Anthropic key in ANTHROPIC_API_KEY, your slice
   key in ANTHROPIC_AUTH_TOKEN) that run it end to end through slice.
+- ``slice --version``, prints ``slice-gateway <version>`` from the installed distribution.
+
+The gateway address is the saved config, then ``SLICE_BASE_URL``, then the hosted
+``https://api.sliceapp.dev``; self-hosted users pass ``--base-url`` once or set the variable.
 
 The CLI talks only to the gateway over HTTP; it holds no secrets of its own. The saved
 slice key is a bearer credential, so the config file is written 0600.
@@ -26,6 +30,7 @@ import platform
 import stat
 import time
 import webbrowser
+from importlib import metadata
 from pathlib import Path
 
 import httpx
@@ -35,7 +40,12 @@ app = typer.Typer(add_completion=False, help="slice. Log in and point your tools
 
 CONFIG_DIR = Path.home() / ".slice"
 CONFIG_PATH = CONFIG_DIR / "config.json"
-DEFAULT_BASE_URL = "http://localhost:8080"
+# The hosted gateway. A saved config or SLICE_BASE_URL overrides it (see base_url), which
+# is how a self-hosted box (http://localhost:8080 in docker compose) is reached.
+DEFAULT_BASE_URL = "https://api.sliceapp.dev"
+
+# The distribution the CLI ships in; its installed version is what --version prints.
+DIST_NAME = "slice-gateway"
 
 # How the device flow gives up if the user never authorizes: the gateway returns the
 # expiry, but cap the CLI's own patience too so a wedged terminal doesn't spin forever.
@@ -58,9 +68,33 @@ def device_name() -> str:
 
 
 def base_url() -> str:
-    """The gateway base URL: the saved one, else ``SLICE_BASE_URL``, else the local default."""
+    """The gateway base URL: the saved one, else ``SLICE_BASE_URL``, else the hosted default."""
     saved = load_config().get("base_url")
     return (saved or os.getenv("SLICE_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+
+
+def version_string() -> str:
+    """``slice-gateway <version>`` from the installed distribution, or ``unknown``."""
+    try:
+        version = metadata.version(DIST_NAME)
+    except metadata.PackageNotFoundError:
+        version = "unknown"
+    return f"{DIST_NAME} {version}"
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(version_string())
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False, "--version", help="Print the version and exit.", callback=_version_callback, is_eager=True
+    ),
+) -> None:
+    """slice. Log in and point your tools at the gateway."""
 
 
 def load_config() -> dict:
@@ -82,7 +116,11 @@ def save_config(data: dict) -> None:
 
 @app.command()
 def login(
-    base: str = typer.Option(None, "--base-url", help="Gateway base URL (default: saved / SLICE_BASE_URL / localhost)."),
+    base: str = typer.Option(
+        None,
+        "--base-url",
+        help="Gateway base URL (default: saved config, then SLICE_BASE_URL, then https://api.sliceapp.dev).",
+    ),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the verification URL in a browser."),
 ) -> None:
     """Log in to slice via GitHub (device flow) and save the slice key."""

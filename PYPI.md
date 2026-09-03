@@ -30,6 +30,12 @@ This is only the client. The slice gateway itself, the server that does the rout
 
 Homepage: https://sliceapp.dev
 
+## What's new in 0.2.1
+
+`slice login` talks to the hosted gateway at https://api.sliceapp.dev by default. No flag needed.
+Self-hosted users pass `--base-url http://localhost:8080` once, or set `SLICE_BASE_URL`. A saved login keeps its address.
+`slice --version` prints the installed version.
+
 ## What's new in 0.2.0
 
 `slice login` now names the key after your machine and revokes the previous key from the same machine.
