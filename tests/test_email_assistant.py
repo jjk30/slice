@@ -43,9 +43,13 @@ from app.email_assistant.service import (
     daily_key,
     load_thread,
     new_text,
+    parse_references,
     remember_turn,
     reply_subject,
+    resolve_thread,
     strip_quoted,
+    thread_alias_key,
+    thread_candidates,
     thread_key,
     thread_redis_key,
     tidy_answer,
@@ -860,6 +864,10 @@ def test_thread_key_prefers_references_then_in_reply_to_then_message_id():
     # References: the first id wins, whatever the header shape and case.
     received = {"headers": {"References": "<root@slice> <second@mail>", "In-Reply-To": "<second@mail>"}}
     assert thread_key(received, event) == "<root@slice>"
+    # Every id the mail carries, lookup order, no repeats.
+    assert thread_candidates(received, event) == ["<root@slice>", "<second@mail>", "<inbound@mail>"]
+    assert parse_references(received) == ("<root@slice>", "<second@mail>")
+    assert parse_references({"headers": {}}) == () and parse_references({}) == ()
     received = {"headers": [{"name": "references", "value": "  <root@slice>\n <second@mail>"}]}
     assert thread_key(received, event) == "<root@slice>"
     # No References: In-Reply-To.
@@ -871,7 +879,22 @@ def test_thread_key_prefers_references_then_in_reply_to_then_message_id():
     assert thread_key({"headers": {"Message-Id": "<hdr@mail>"}}, bare) == "<hdr@mail>"
     assert thread_key({"headers": {}}, bare) is None
     assert thread_key({}, bare) is None
+    assert thread_candidates({}, bare) == []
     assert thread_redis_key(7, "<root@slice>") == "slice:email_thread:7:<root@slice>"
+    assert thread_alias_key(7, "<m1@mail>") == "slice:email_thread_alias:7:<m1@mail>"
+
+
+def test_reply_headers_carry_the_whole_chain():
+    event = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="<m2@mail>",
+                         references=("<a@slice>", "<m1@mail>", "<r1@slice>"))
+    assert event.reply_headers() == {"In-Reply-To": "<m2@mail>", "References": "<a@slice> <m1@mail> <r1@slice> <m2@mail>"}
+    # No References: just the message id. The id already in the chain is not repeated.
+    bare = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="<m1@mail>")
+    assert bare.reply_headers() == {"In-Reply-To": "<m1@mail>", "References": "<m1@mail>"}
+    dup = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="<m1@mail>", references=("<a@slice>", "<m1@mail>"))
+    assert dup.reply_headers() == {"In-Reply-To": "<m1@mail>", "References": "<a@slice> <m1@mail>"}
+    # No message id: no threading headers at all, as before.
+    assert InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id=None, references=("<a@slice>",)).reply_headers() == {}
 
 
 async def test_thread_memory_keeps_three_trimmed_turns_for_seven_days():
@@ -911,6 +934,9 @@ class _DownRedis:
     async def set(self, key, value, **kwargs):
         raise ConnectionError("redis down")
 
+    async def mget(self, *keys):
+        raise ConnectionError("redis down")
+
     async def incr(self, key):
         raise ConnectionError("redis down")
 
@@ -925,8 +951,11 @@ async def test_thread_memory_fails_open_when_redis_is_down(client, env):
     assert THREAD_HEADING not in user
     # The topic rail got no turns either: its prompt has no thread section.
     assert env.engine.input_turns == [[]]
-    assert await remember_turn(_DownRedis(), 7, "<root@slice>", "q", "a") is None
+    assert await remember_turn(_DownRedis(), 7, "<root@slice>", "q", "a", aliases=["<x>"]) is None
     assert await load_thread(_DownRedis(), 7, "<root@slice>") == []
+    assert await resolve_thread(_DownRedis(), 7, ["<x>", "<root@slice>"], "<x>") == ("<x>", "none")
+    # And the reply still went out threaded on the whole chain.
+    assert env.fakes.sent[0]["headers"] == {"In-Reply-To": MESSAGE_ID, "References": "<root@slice> " + MESSAGE_ID}
 
 
 async def test_blocked_limit_and_error_turns_are_not_remembered(client, env, monkeypatch):
@@ -1051,7 +1080,7 @@ async def test_follow_up_is_judged_with_the_earlier_turns(client, env):
 
     # The same follow-up in a thread slice has no memory of: judged alone, blocked.
     env.fakes.received["headers"] = {"References": "<other@slice>"}
-    await post(client, received_event(email_id="em_3"))
+    await post(client, received_event(email_id="em_3", message_id="<other-msg@mail>"))
     assert env.db.replies["em_3"]["verdict"] == "blocked_input"
     assert env.engine.input_turns[2] == []
     assert env.fakes.sent[-1]["text"] == FIXED_LINE
@@ -1101,6 +1130,112 @@ async def test_thread_load_is_logged_before_the_input_rail(client, env, caplog):
         text = json.dumps(line)
         assert "What is my cap?" not in text and "And what is left" not in text
         assert env.fakes.canned_answer not in text
+
+
+async def test_gmail_chain_finds_the_thread_through_the_aliases(client, env, caplog):
+    """Seen live: the client's next reply had a different first References id, so the
+    memory was saved under one root and looked up under another. Now the outgoing reply
+    carries the whole chain, and every id we see is an alias for the root."""
+    caplog.set_level(logging.INFO, logger="slice.gateway")
+    redis = fakeredis.aioredis.FakeRedis()
+    env.install(redis=redis)
+    root_key = thread_redis_key(7, "<alert@slice>")
+
+    # Mail 1: a reply to our alert. Root is the alert id; the reply threads the chain.
+    env.fakes.received["headers"] = {"References": "<alert@slice>", "In-Reply-To": "<alert@slice>"}
+    env.fakes.received["text"] = "What is my cap?"
+    env.fakes.canned_answer = "Your cap is $25."
+    await post(client, received_event(email_id="em_1", message_id="<m1@gmail>"))
+    assert env.db.replies["em_1"]["verdict"] == "answered_own"
+    assert env.fakes.sent[0]["headers"] == {"In-Reply-To": "<m1@gmail>", "References": "<alert@slice> <m1@gmail>"}
+    assert len(json.loads(await redis.get(root_key))) == 1
+    assert (await redis.get(thread_alias_key(7, "<m1@gmail>"))).decode() == "<alert@slice>"
+    assert await redis.get(thread_alias_key(7, "<alert@slice>")) is None
+    root_ttl, alias_ttl = await redis.ttl(root_key), await redis.ttl(thread_alias_key(7, "<m1@gmail>"))
+    assert 0 < alias_ttl <= THREAD_TTL_SECONDS and abs(root_ttl - alias_ttl) <= 1
+
+    # Mail 2, the broken chain from the old reply: References starts at m1, not the alert.
+    env.fakes.received["headers"] = {"References": "<m1@gmail> <r1@slice>", "In-Reply-To": "<r1@slice>"}
+    env.fakes.received["text"] = "And how much is left?"
+    env.fakes.canned_answer = "About $24.50 is left."
+    await post(client, received_event(email_id="em_2", message_id="<m2@gmail>"))
+    assert env.db.replies["em_2"]["verdict"] == "answered_own"
+    _, user, _ = env.fakes.answer_calls[1]
+    assert THREAD_HEADING in user and "What is my cap?" in user and "Your cap is $25." in user
+    assert [turn["q"] for turn in env.engine.input_turns[1]] == ["What is my cap?"]
+    # Saved under the same root, with aliases for every new id; nothing under m1 itself.
+    assert [turn["q"] for turn in json.loads(await redis.get(root_key))] == ["What is my cap?", "And how much is left?"]
+    assert await redis.get(thread_redis_key(7, "<m1@gmail>")) is None
+    for alias in ("<r1@slice>", "<m2@gmail>"):
+        assert (await redis.get(thread_alias_key(7, alias))).decode() == "<alert@slice>"
+        assert 0 < await redis.ttl(thread_alias_key(7, alias)) <= THREAD_TTL_SECONDS
+    assert env.fakes.sent[1]["headers"] == {"In-Reply-To": "<m2@gmail>", "References": "<m1@gmail> <r1@slice> <m2@gmail>"}
+
+    # Mail 3, a client that trims the chain to the last hop (an id we have seen and our
+    # reply's id, which we never see): still the same thread, via the alias for m2.
+    env.fakes.received["headers"] = {"References": "<m2@gmail> <r2@slice>", "In-Reply-To": "<r2@slice>"}
+    env.fakes.received["text"] = "Thanks. And the warning line?"
+    env.fakes.canned_answer = "The warning line is 80% of the cap."
+    await post(client, received_event(email_id="em_3", message_id="<m3@gmail>"))
+    assert env.db.replies["em_3"]["verdict"] == "answered_own"
+    assert [turn["q"] for turn in env.engine.input_turns[2]] == ["What is my cap?", "And how much is left?"]
+    assert len(json.loads(await redis.get(root_key))) == 3
+    assert (await redis.get(thread_alias_key(7, "<r2@slice>"))).decode() == "<alert@slice>"
+
+    # Mail 4 starts a fresh thread from a different alert: the root logic, no turns.
+    env.fakes.received["headers"] = {"References": "<alert2@slice>", "In-Reply-To": "<alert2@slice>"}
+    await post(client, received_event(email_id="em_4", message_id="<m4@gmail>"))
+    assert env.engine.input_turns[3] == []
+    assert len(json.loads(await redis.get(thread_redis_key(7, "<alert2@slice>")))) == 1
+
+    # The load log says how the key was found, and never carries an id.
+    loads = [line for line in _pipeline_steps(caplog) if line["step"] == "thread_load"]
+    assert [(line["turns"], line["keyed"], line["via"]) for line in loads] == [
+        (0, True, "none"), (1, True, "alias"), (2, True, "alias"), (0, True, "none"),
+    ]
+    for line in _pipeline_steps(caplog):
+        assert "@gmail" not in json.dumps(line) and "@slice" not in json.dumps(line)
+
+
+async def test_thread_without_references_is_found_directly(client, env, caplog):
+    """No References on the first mail: the root is its message id, the reply threads on
+    it, and the next hop (which references it) finds the turns under it directly."""
+    caplog.set_level(logging.INFO, logger="slice.gateway")
+    redis = fakeredis.aioredis.FakeRedis()
+    env.install(redis=redis)
+    env.fakes.received["headers"] = {}
+    await post(client, received_event(email_id="em_1", message_id="<m1@mail>"))
+    assert env.fakes.sent[0]["headers"] == {"In-Reply-To": "<m1@mail>", "References": "<m1@mail>"}
+    assert len(json.loads(await redis.get(thread_redis_key(7, "<m1@mail>")))) == 1
+    assert [k async for k in redis.scan_iter("slice:email_thread_alias:*")] == []
+
+    env.fakes.received["headers"] = {"References": "<m1@mail> <r1@slice>", "In-Reply-To": "<r1@slice>"}
+    await post(client, received_event(email_id="em_2", message_id="<m2@mail>"))
+    assert len(env.engine.input_turns[1]) == 1
+    assert len(json.loads(await redis.get(thread_redis_key(7, "<m1@mail>")))) == 2
+    assert (await redis.get(thread_alias_key(7, "<r1@slice>"))).decode() == "<m1@mail>"
+    loads = [line for line in _pipeline_steps(caplog) if line["step"] == "thread_load"]
+    assert [line["via"] for line in loads] == ["none", "direct"]
+
+    # No ids at all: answered, nothing looked up, nothing stored.
+    env.fakes.received["headers"] = {}
+    await post(client, received_event(email_id="em_3", message_id=None))
+    assert env.db.replies["em_3"]["verdict"] == "answered_own"
+    assert env.fakes.sent[2]["headers"] == {}
+    loads = [line for line in _pipeline_steps(caplog) if line["step"] == "thread_load"]
+    assert (loads[-1]["turns"], loads[-1]["keyed"], loads[-1]["via"]) == (0, False, "none")
+
+
+async def test_resolve_thread_order_alias_then_direct():
+    redis = fakeredis.aioredis.FakeRedis()
+    await redis.set(thread_redis_key(7, "<b>"), json.dumps([{"q": "q", "a": "a"}]))
+    await redis.set(thread_alias_key(7, "<c>"), "<root>")
+    # First candidate with anything wins; an alias on a later id beats nothing on earlier ones.
+    assert await resolve_thread(redis, 7, ["<a>", "<b>", "<c>"], "<a>") == ("<b>", "direct")
+    assert await resolve_thread(redis, 7, ["<a>", "<c>", "<b>"], "<a>") == ("<root>", "alias")
+    assert await resolve_thread(redis, 7, ["<a>", "<z>"], "<a>") == ("<a>", "none")
+    assert await resolve_thread(redis, 7, [], None) == (None, "none")
+    assert await resolve_thread(None, 7, ["<b>"], "<b>") == ("<b>", "none")
 
 
 # --- The real model call ------------------------------------------------------

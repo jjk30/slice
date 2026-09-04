@@ -30,7 +30,9 @@ nothing, or sends the fixed line where the spec says so):
    connected AWS account (the latest findings and the cost figures), and nothing at all
    when no AWS account is connected. Both buckets also get the same last three turns of
    this email thread from Redis (``slice:email_thread:{account_id}:{thread_key}``, seven
-   days), so a follow-up can lean on the earlier answers.
+   days), so a follow-up can lean on the earlier answers. The thread is found under any
+   id in the mail's chain: every id we see is written as an alias
+   (``slice:email_thread_alias:{account_id}:{id}``) pointing at the root key.
 8. **Answer**: one model call, 450 tokens max, through langchain-anthropic:
    ``EMAIL_ASSISTANT_MODEL`` from the context for ``own_data``,
    ``EMAIL_ASSISTANT_GENERAL_MODEL`` from its own knowledge for ``general``. A general
@@ -44,7 +46,10 @@ nothing, or sends the fixed line where the spec says so):
    blocks commands, code, policy text, guesses about the sender's account, other accounts'
    data, slice internals, harm, and anything off those subjects). Same fail-closed rule
    for both; a block sends the fixed line.
-10. **Reply**: through the existing Resend channel, threaded under the original.
+10. **Reply**: through the existing Resend channel, threaded under the original:
+    ``In-Reply-To`` is the inbound message id and ``References`` is the inbound mail's
+    whole ``References`` chain plus that id, so the client's next reply keeps the chain
+    and the thread memory keeps its root.
 11. **Record**: the verdict (the bucket: ``answered_own``, ``answered_general``,
     ``blocked_input``, ...) lands on the claimed row. One JSON log line per step, with
     account_id, email_id and the verdict; the body and the answer are never logged.
@@ -60,7 +65,7 @@ import html as html_lib
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from email.utils import parseaddr
 from typing import Awaitable, Callable
@@ -127,6 +132,7 @@ _DAILY_KEY_TTL = 60 * 60 * 48  # two days
 # Thread memory (phase 27): one Redis key per account per email thread holding the last
 # few answered turns as JSON. Read before the model call, appended after a sent answer.
 _THREAD_PREFIX = "slice:email_thread"
+_THREAD_ALIAS_PREFIX = "slice:email_thread_alias"
 THREAD_TTL_SECONDS = 60 * 60 * 24 * 7  # seven days
 THREAD_MAX_TURNS = 3
 THREAD_TURN_CHARS = 600
@@ -244,10 +250,22 @@ class InboundEvent:
     subject: str
     message_id: str | None
     to: tuple[str, ...] = ()
+    # The inbound mail's ``References`` ids, in order (phase 27). The webhook does not
+    # carry them; the pipeline fills them in from the fetched mail's headers.
+    references: tuple[str, ...] = ()
 
     @property
     def sender(self) -> str:
         return parse_address(self.from_raw)
+
+    def reply_headers(self) -> dict[str, str]:
+        """The threading headers of our reply: ``In-Reply-To`` is the inbound message id,
+        ``References`` is the inbound chain plus that id (no repeats, order kept), so the
+        client's next reply carries the whole chain. Empty without a message id."""
+        if not self.message_id:
+            return {}
+        chain = [item for item in self.references if item != self.message_id] + [self.message_id]
+        return {"In-Reply-To": self.message_id, "References": " ".join(chain)}
 
 
 def parse_address(raw) -> str:
@@ -340,6 +358,12 @@ def _header_value(headers, name: str) -> str | None:
     return None
 
 
+def parse_references(received: dict) -> tuple[str, ...]:
+    """The ids in the fetched mail's ``References`` header, in order; () when there are none."""
+    value = _header_value(received.get("headers") if isinstance(received, dict) else None, "References")
+    return tuple(value.split()) if value else ()
+
+
 def is_auto_submitted(received: dict) -> bool:
     """True for an ``Auto-Submitted`` header with any value other than "no" (RFC 3834)."""
     value = _header_value(received.get("headers") if isinstance(received, dict) else None, "Auto-Submitted")
@@ -426,24 +450,64 @@ async def count_reply(redis, account_id: int, now: datetime | None = None) -> in
 # --- Thread memory (phase 27) -----------------------------------------------------
 
 
-def thread_key(received: dict, event: InboundEvent) -> str | None:
-    """The id this mail's thread is remembered under: the first id in ``References``,
-    else ``In-Reply-To``, else the inbound message id. None when there is none at all."""
+def thread_candidates(received: dict, event: InboundEvent) -> list[str]:
+    """Every id this mail's thread could be remembered under, in lookup order: the
+    ``References`` ids first to last, then ``In-Reply-To``, then the inbound message id.
+    No repeats; [] when the mail carries no ids at all."""
     headers = received.get("headers") if isinstance(received, dict) else None
-    references = _header_value(headers, "References")
-    if references and references.split():
-        return references.split()[0]
-    in_reply_to = _header_value(headers, "In-Reply-To")
-    if in_reply_to and in_reply_to.strip():
-        return in_reply_to.strip()
-    message_id = event.message_id or _header_value(headers, "Message-Id")
-    if message_id and message_id.strip():
-        return message_id.strip()
-    return None
+    raw = list(parse_references(received))
+    raw.append(_header_value(headers, "In-Reply-To"))
+    raw.append(event.message_id or _header_value(headers, "Message-Id"))
+    candidates: list[str] = []
+    for item in raw:
+        item = item.strip() if isinstance(item, str) else ""
+        if item and item not in candidates:
+            candidates.append(item)
+    return candidates
+
+
+def thread_key(received: dict, event: InboundEvent) -> str | None:
+    """The root id a new thread is remembered under: the first id in ``References``,
+    else ``In-Reply-To``, else the inbound message id. None when there is none at all."""
+    candidates = thread_candidates(received, event)
+    return candidates[0] if candidates else None
 
 
 def thread_redis_key(account_id: int, key: str) -> str:
     return f"{_THREAD_PREFIX}:{account_id}:{key}"
+
+
+def thread_alias_key(account_id: int, key: str) -> str:
+    return f"{_THREAD_ALIAS_PREFIX}:{account_id}:{key}"
+
+
+def _as_text(raw) -> str:
+    return raw.decode() if isinstance(raw, bytes) else str(raw)
+
+
+async def resolve_thread(redis, account_id: int, candidates: list[str], root: str | None) -> tuple[str | None, str]:
+    """Which key holds this mail's thread, and how it was found (phase 27).
+
+    Mail clients rewrite ``References`` from hop to hop, so the root id a thread was
+    saved under is not always the first id of the next reply. Each candidate is tried in
+    order: an alias written at save time wins ("alias"), else a turns key under that id
+    ("direct"). Nothing found, no Redis, no candidates, or Redis down: the root key logic
+    ("none"), which is where a new thread starts. Never raises.
+    """
+    if redis is None or not candidates:
+        return root, "none"
+    try:
+        aliases = await redis.mget(*[thread_alias_key(account_id, item) for item in candidates])
+        direct = await redis.mget(*[thread_redis_key(account_id, item) for item in candidates])
+    except Exception as exc:  # noqa: BLE001, a Redis outage means no memory, nothing more.
+        _thread_unavailable(exc)
+        return root, "none"
+    for item, alias, turns in zip(candidates, aliases, direct):
+        if alias:
+            return _as_text(alias), "alias"
+        if turns:
+            return item, "direct"
+    return root, "none"
 
 
 def _trim_turn(turn) -> dict | None:
@@ -472,7 +536,7 @@ async def load_thread(redis, account_id: int, key: str | None) -> list[dict]:
     if not raw:
         return []
     try:
-        data = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        data = json.loads(_as_text(raw))
     except (ValueError, UnicodeDecodeError):
         return []
     if not isinstance(data, list):
@@ -481,12 +545,15 @@ async def load_thread(redis, account_id: int, key: str | None) -> list[dict]:
     return turns[-THREAD_MAX_TURNS:]
 
 
-async def remember_turn(redis, account_id: int, key: str | None, question: str, answer: str) -> int | None:
+async def remember_turn(redis, account_id: int, key: str | None, question: str, answer: str, aliases=()) -> int | None:
     """Append one answered turn to the thread and return how many are stored.
 
     Only the last ``THREAD_MAX_TURNS`` are kept, each side cut at ``THREAD_TURN_CHARS``,
-    and the key lives ``THREAD_TTL_SECONDS``. None when nothing was stored (no Redis, no
-    key, or Redis unreachable): the reply has already gone out, so this fails open.
+    and the key lives ``THREAD_TTL_SECONDS``. ``aliases`` are the other ids this mail
+    carried (its References, In-Reply-To and message id); each gets an alias key pointing
+    at ``key`` with the same TTL, so the next hop finds the thread whatever its first
+    References id is. None when nothing was stored (no Redis, no key, or Redis
+    unreachable): the reply has already gone out, so this fails open.
     """
     if redis is None or not key:
         return None
@@ -495,6 +562,9 @@ async def remember_turn(redis, account_id: int, key: str | None, question: str, 
     turns = turns[-THREAD_MAX_TURNS:]
     try:
         await redis.set(thread_redis_key(account_id, key), json.dumps(turns), ex=THREAD_TTL_SECONDS)
+        for item in aliases or ():
+            if item and item != key:
+                await redis.set(thread_alias_key(account_id, item), key, ex=THREAD_TTL_SECONDS)
     except Exception as exc:  # noqa: BLE001
         _thread_unavailable(exc)
         return None
@@ -634,11 +704,8 @@ class EmailAssistant:
         return self.db is not None and getattr(self.db, "enabled", False)
 
     async def _reply(self, event: InboundEvent, text: str) -> DeliveryResult:
-        headers = {}
-        if event.message_id:
-            headers = {"In-Reply-To": event.message_id, "References": event.message_id}
         return await self.send_reply(
-            to=event.sender, subject=reply_subject(event.subject), text=text, headers=headers
+            to=event.sender, subject=reply_subject(event.subject), text=text, headers=event.reply_headers()
         )
 
     async def handle(self, event: InboundEvent) -> str:
@@ -709,6 +776,9 @@ class EmailAssistant:
         if is_auto_submitted(received):
             self._log("loop_guard", event, account_id, VERDICT_IGNORED, reason="auto_submitted_header")
             raise _Stop(VERDICT_IGNORED)
+        # The mail's References chain rides on the event from here: every reply below
+        # (the answer, the fixed line, the limit line) threads with the whole chain.
+        event = replace(event, references=parse_references(received))
         question = new_text(received)
         if not question:
             self._log("fetch", event, account_id, VERDICT_IGNORED, reason="empty_body")
@@ -728,11 +798,14 @@ class EmailAssistant:
             raise _Stop(VERDICT_LIMIT_SILENCED)
 
         # h. Thread memory (phase 27): the last few answered turns of this thread, oldest
-        # first, loaded once here for the topic rail and the answer prompt alike. No
-        # Redis, or Redis down, means none. The count is logged, never the text.
-        key = thread_key(received, event)
+        # first, loaded once here for the topic rail and the answer prompt alike. The
+        # thread is looked up under any id the mail carries (alias, then direct), else
+        # the root key logic. No Redis, or Redis down, means none. The count and how the
+        # key was found are logged, never the text or the ids.
+        candidates = thread_candidates(received, event)
+        key, via = await resolve_thread(self.redis, account_id, candidates, thread_key(received, event))
         turns = await load_thread(self.redis, account_id, key)
-        self._log("thread_load", event, account_id, None, turns=len(turns), keyed=key is not None)
+        self._log("thread_load", event, account_id, None, turns=len(turns), keyed=key is not None, via=via)
 
         # i. Input rail (the topic rail), now a three-way sort, with the earlier turns so
         # a follow-up is read in context. No engine, an error, a block, or an answer that
@@ -782,7 +855,7 @@ class EmailAssistant:
 
         # n. Remember the turn (phase 27). Only an answered reply lands here, so blocked,
         # limit and error turns are never stored. Redis down: logged, nothing else.
-        stored = await remember_turn(self.redis, account_id, key, question, answer)
+        stored = await remember_turn(self.redis, account_id, key, question, answer, aliases=candidates)
         self._log("thread_save", event, account_id, None, turns=stored, saved=stored is not None)
         return verdict
 
