@@ -37,7 +37,7 @@ from app.guardrails import RailOutcome
 from app.guardrails import engine as guardrails_engine
 from app.guardrails import events as guardrail_events
 from app.guardrails import LABEL_BLOCKED, LABEL_GENERAL, LABEL_OWN_DATA, LABELS, parse_label
-from app.guardrails.engine import GuardrailEngine, build_engine
+from app.guardrails.engine import GuardrailEngine, build_engine, format_thread_turns
 from app.main import app
 from app.rules import RulesCache, SwitchRule
 
@@ -309,15 +309,18 @@ async def test_engine_timeout_fails_open():
 
 
 def _classifier(behavior):
-    """A fake ``classify`` collaborator: returns ``behavior``, raises it, or hangs."""
+    """A fake ``classify`` collaborator: returns ``behavior``, raises it, or hangs. Records
+    each (prompt, turns) it was given on ``classify.calls``."""
 
-    async def classify(prompt):
+    async def classify(prompt, turns=()):
+        classify.calls.append((prompt, list(turns)))
         if isinstance(behavior, Exception):
             raise behavior
         if behavior == "hang":
             await asyncio.sleep(10)
         return behavior
 
+    classify.calls = []
     return classify
 
 
@@ -343,6 +346,62 @@ async def test_classify_input_returns_the_label():
     assert own.passed and own.label == LABEL_OWN_DATA
     general = await _label_engine("Answer: GENERAL").classify_input("is opus worth it?")
     assert general.passed and general.label == LABEL_GENERAL
+
+
+async def test_classify_input_hands_the_earlier_turns_to_the_classifier():
+    """Phase 27: the turns travel to the classifier as a list; none means an empty list."""
+    classify = _classifier("GENERAL")
+    engine = GuardrailEngine(FakeRails([]), object(), object(), 5.0, classify=classify)
+    turns = [{"q": "Is Opus worth it?", "a": "Sonnet is cheaper."}]
+    outcome = await engine.classify_input("the cheaper one you mentioned?", turns=turns)
+    assert outcome.passed and outcome.label == LABEL_GENERAL
+    assert (await engine.classify_input("hello")).passed
+    assert classify.calls == [("the cheaper one you mentioned?", turns), ("hello", [])]
+
+
+def test_format_thread_turns_is_oldest_first_plain_text():
+    assert format_thread_turns([]) == "" and format_thread_turns(None) == ""
+    text = format_thread_turns([{"q": "first?", "a": "one."}, {"q": "second?", "a": "two."}])
+    assert text == "Turn 1. The user wrote:\nfirst?\nslice replied:\none.\nTurn 2. The user wrote:\nsecond?\nslice replied:\ntwo."
+
+
+async def test_real_engine_topic_rail_renders_the_earlier_turns(monkeypatch):
+    """The real NeMo engine in email mode: with turns, the rendered topic-rail prompt has
+    the thread section and the judge-by-subject rule; without them it is exactly as before."""
+    monkeypatch.setattr(config, "GUARDRAILS_ENABLED", True)
+    monkeypatch.setattr(config, "GUARDRAILS_MODEL", "claude-sonnet-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    replies = iter(["GENERAL", "BLOCKED"])
+
+    def respond(request):
+        return httpx.Response(200, json=_anthropic_reply(next(replies)))
+
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post(url__regex=r".*/v1/messages$").mock(side_effect=respond)
+        engine = build_engine(mode="email")
+        assert engine is not None
+        turns = [{"q": "Is Opus worth it over Sonnet?", "a": "General advice, not from your account.\n\nSonnet is the cheaper option."}]
+        with_turns = await engine.classify_input("And the cheaper option you mentioned, how do I turn it on?", turns=turns)
+        assert with_turns.passed and with_turns.label == LABEL_GENERAL
+        alone = await engine.classify_input("And the cheaper option you mentioned, how do I turn it on?")
+        assert alone.blocked and alone.label == LABEL_BLOCKED
+
+    # The prompt is line-wrapped in prompts.yml, so compare on collapsed whitespace.
+    first, second = (
+        " ".join(json.loads(c.request.content)["messages"][0]["content"].split()) for c in route.calls
+    )
+    assert "Earlier in this email thread:" in first
+    assert "Turn 1. The user wrote:" in first and "Is Opus worth it over Sonnet?" in first
+    assert "Sonnet is the cheaper option." in first
+    assert "Use the earlier turns only to work out what the new question refers to." in first
+    assert "it is BLOCKED even if the earlier turns were fine." in first
+    assert first.index("Earlier in this email thread:") < first.index("User message:")
+    assert "OWN_DATA, GENERAL, or BLOCKED" in first
+    # No turns: no section, no rule, the same three labels.
+    assert "Earlier in this email thread:" not in second
+    assert "Use the earlier turns" not in second and "Turn 1." not in second
+    assert "how do I turn it on?" in second and "OWN_DATA, GENERAL, or BLOCKED" in second
+    assert "{%" not in first and "{%" not in second and "earlier_turns" not in second
 
 
 async def test_classify_input_blocked_label_blocks():

@@ -21,12 +21,15 @@ nothing, or sends the fixed line where the spec says so):
    AWS cost), ``general`` (a general question about AWS setup, cloud cost, AI models or
    AI cost), or ``blocked`` (everything else). No engine, an error, a block, or an answer
    that is not one of the labels: the fixed line goes back and the pipeline stops (fail
-   closed, unlike the agent loop).
+   closed, unlike the agent loop). The rail sees the remembered turns of the thread
+   (phase 27, loaded just before it) so a follow-up like "the cheaper option you
+   mentioned" is read for what it refers to, but the new question is still judged by
+   its own subject. No turns, or Redis down: the rail prompt is exactly what it was.
 7. **Context**: for ``own_data``, a read-only plain-text summary of this account's
    own data. For ``general`` (phase 27), only what the scanner already knows about a
    connected AWS account (the latest findings and the cost figures), and nothing at all
-   when no AWS account is connected. Both buckets also get the last three turns of this
-   email thread from Redis (``slice:email_thread:{account_id}:{thread_key}``, seven
+   when no AWS account is connected. Both buckets also get the same last three turns of
+   this email thread from Redis (``slice:email_thread:{account_id}:{thread_key}``, seven
    days), so a follow-up can lean on the earlier answers.
 8. **Answer**: one model call, 450 tokens max, through langchain-anthropic:
    ``EMAIL_ASSISTANT_MODEL`` from the context for ``own_data``,
@@ -67,7 +70,15 @@ import httpx
 from app import config
 from app.alerts.channels import FOOTER_AI_SETUP, FOOTER_GENERAL, DeliveryResult, ResendEmailChannel
 from app.email_assistant.context import build_context, build_general_context
-from app.guardrails import EMAIL_GENERAL_MODE, EMAIL_MODE, LABEL_GENERAL, LABEL_OWN_DATA, build_engine
+from app.guardrails import (
+    EMAIL_GENERAL_MODE,
+    EMAIL_MODE,
+    LABEL_GENERAL,
+    LABEL_OWN_DATA,
+    THREAD_HEADING,
+    build_engine,
+    format_thread_turns,
+)
 
 logger = logging.getLogger("slice.gateway")
 
@@ -87,9 +98,9 @@ GENERAL_TAILORED_OPENER = "Based on what slice sees in your AWS account,"
 GENERAL_TAILORED_FALLBACK = GENERAL_TAILORED_OPENER + " here is the short answer."
 # Phase 27: the line right before the footer when no AWS account is connected.
 GENERAL_CONNECT_LINE = "Connect AWS in Settings and slice can tailor this to your account."
-# Phase 27: the headings the user prompt uses for the AWS context and the thread memory.
+# Phase 27: the heading the user prompt uses for the AWS context. The thread memory's
+# heading (THREAD_HEADING) is the guardrails package's, shared with the topic rail.
 GENERAL_CONTEXT_HEADING = "What slice sees in this user's AWS account:"
-THREAD_HEADING = "Earlier in this email thread:"
 
 VERDICT_NO_ACCOUNT = "no_account"
 VERDICT_IGNORED = "ignored"
@@ -491,13 +502,11 @@ async def remember_turn(redis, account_id: int, key: str | None, question: str, 
 
 
 def thread_section(turns) -> str:
-    """The "earlier turns" block of a user prompt, oldest first; "" when there are none."""
+    """The "earlier turns" block of a user prompt, oldest first; "" when there are none.
+    The same layout the topic rail sees (``format_thread_turns``)."""
     if not turns:
         return ""
-    lines = [THREAD_HEADING]
-    for index, turn in enumerate(turns, 1):
-        lines.append(f"Turn {index}. The user wrote:\n{turn['q']}\nslice replied:\n{turn['a']}")
-    return "\n".join(lines) + "\n\n"
+    return f"{THREAD_HEADING}\n{format_thread_turns(turns)}\n\n"
 
 
 # --- Default collaborators (the real network calls) ------------------------------
@@ -718,18 +727,20 @@ class EmailAssistant:
             self._log("daily_limit", event, account_id, VERDICT_LIMIT_SILENCED, count=count, limit=limit)
             raise _Stop(VERDICT_LIMIT_SILENCED)
 
-        # h. Input rail (the topic rail), now a three-way sort. No engine, an error, a
-        # block, or an answer that is not a known label all fail closed.
-        bucket = await self._classify(question, event, account_id)
-        if bucket not in (LABEL_OWN_DATA, LABEL_GENERAL):
-            await self._send(event, account_id, FIXED_LINE, VERDICT_BLOCKED_INPUT)
-            raise _Stop(VERDICT_BLOCKED_INPUT)
-
-        # i. Thread memory (phase 27): the last few answered turns of this thread, oldest
-        # first. No Redis, or Redis down, means none. The count is logged, never the text.
+        # h. Thread memory (phase 27): the last few answered turns of this thread, oldest
+        # first, loaded once here for the topic rail and the answer prompt alike. No
+        # Redis, or Redis down, means none. The count is logged, never the text.
         key = thread_key(received, event)
         turns = await load_thread(self.redis, account_id, key)
         self._log("thread_load", event, account_id, None, turns=len(turns), keyed=key is not None)
+
+        # i. Input rail (the topic rail), now a three-way sort, with the earlier turns so
+        # a follow-up is read in context. No engine, an error, a block, or an answer that
+        # is not a known label all fail closed.
+        bucket = await self._classify(question, turns, event, account_id)
+        if bucket not in (LABEL_OWN_DATA, LABEL_GENERAL):
+            await self._send(event, account_id, FIXED_LINE, VERDICT_BLOCKED_INPUT)
+            raise _Stop(VERDICT_BLOCKED_INPUT)
 
         # j. The prompt for the bucket: own data gets the read-only context and the
         # context model; a general question gets the general model and (phase 27) only
@@ -775,13 +786,15 @@ class EmailAssistant:
         self._log("thread_save", event, account_id, None, turns=stored, saved=stored is not None)
         return verdict
 
-    async def _classify(self, question: str, event: InboundEvent, account_id: int) -> str | None:
-        """The topic rail's label for the question, or None for anything that must block."""
+    async def _classify(self, question: str, turns, event: InboundEvent, account_id: int) -> str | None:
+        """The topic rail's label for the question, or None for anything that must block.
+        ``turns`` are the thread's earlier turns, oldest first, for the rail to read the
+        question in context; an empty list leaves the rail prompt exactly as it was."""
         step = "guardrail_input"
         if self.guardrails is None:
             self._log(step, event, account_id, "blocked", reason="no_engine")
             return None
-        outcome = await self.guardrails.classify_input(question)
+        outcome = await self.guardrails.classify_input(question, turns=turns)
         if outcome.errored:
             self._log(step, event, account_id, "blocked", reason=f"rail_error: {outcome.reason}")
             return None

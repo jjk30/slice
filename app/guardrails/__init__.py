@@ -27,9 +27,11 @@ from app.guardrails.engine import (
     LABELS,
     RAIL_INPUT,
     RAIL_OUTPUT,
+    THREAD_HEADING,
     GuardrailEngine,
     RailOutcome,
     build_engine,
+    format_thread_turns,
     parse_label,
 )
 from app.guardrails.events import record_event
@@ -45,8 +47,10 @@ __all__ = [
     "parse_label",
     "RAIL_INPUT",
     "RAIL_OUTPUT",
+    "THREAD_HEADING",
     "GuardrailEngine",
     "RailOutcome",
     "build_engine",
+    "format_thread_turns",
     "record_event",
 ]

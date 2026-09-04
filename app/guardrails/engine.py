@@ -70,6 +70,19 @@ EMAIL_GENERAL_MODE = "email_general"
 
 _LABEL_RE = re.compile(r"\b(OWN_DATA|GENERAL|BLOCKED)\b", re.IGNORECASE)
 
+# The heading the email prompts put over the remembered turns of a thread (phase 27).
+THREAD_HEADING = "Earlier in this email thread:"
+
+
+def format_thread_turns(turns) -> str:
+    """The remembered turns of an email thread as plain text, oldest first, one block per
+    turn. "" when there are none. Shared by the topic rail prompt and the answer prompts
+    so the model sees the same layout in both places."""
+    blocks = []
+    for index, turn in enumerate(turns or (), 1):
+        blocks.append(f"Turn {index}. The user wrote:\n{turn['q']}\nslice replied:\n{turn['a']}")
+    return "\n".join(blocks)
+
 
 def parse_label(text) -> str | None:
     """The first label word in the rail's answer, lowercased, or None when there is none."""
@@ -118,7 +131,7 @@ class GuardrailEngine:
         options_input,
         options_output,
         timeout: float,
-        classify: "Callable[[str], Awaitable[str]] | None" = None,
+        classify: "Callable[..., Awaitable[str]] | None" = None,
         general_rails=None,
     ):
         self._rails = rails
@@ -166,13 +179,21 @@ class GuardrailEngine:
             rails=rails,
         )
 
-    async def classify_input(self, prompt: str) -> RailOutcome:
+    async def classify_input(self, prompt: str, turns=()) -> RailOutcome:
         """Run the input rail as a three-way sort (phase 26): the rail answers with a label.
 
         The email topic rail's prompt (``prompts.yml``, mode "email") answers OWN_DATA,
         GENERAL or BLOCKED instead of Yes/No. This renders that same task prompt and makes
         the same one small LLM call NeMo's self-check would, but keeps the answer as a
-        label instead of collapsing it to a boolean:
+        label instead of collapsing it to a boolean.
+
+        ``turns`` (phase 27) are the remembered earlier turns of the email thread, oldest
+        first, each ``{"q", "a"}``. They go into the prompt under "Earlier in this email
+        thread:" so a follow-up ("the cheaper option you mentioned") can be read for what
+        it refers to; the prompt still judges the new question by its own subject. No
+        turns means no section, and the prompt is exactly what it was.
+
+        Outcomes:
 
         - ``own_data`` / ``general``: passed, ``label`` set.
         - ``blocked``: ``blocked`` with ``label="blocked"``.
@@ -187,7 +208,7 @@ class GuardrailEngine:
         if self._classify is None:
             return RailOutcome(errored=True, reason="no classifier")
         try:
-            raw = await asyncio.wait_for(self._classify(prompt), timeout=self._timeout)
+            raw = await asyncio.wait_for(self._classify(prompt, turns=list(turns or ())), timeout=self._timeout)
         except Exception as exc:  # noqa: BLE001, timeout, transport, LLM, anything.
             reason = _format_error(exc)
             logger.warning(json.dumps({"event": "guardrail_error", "rail": RAIL_INPUT, "error": reason}))
@@ -309,9 +330,10 @@ def build_engine(mode: str | None = None, general_mode: str | None = None) -> "G
         # NoSamplingAdapter), just a small token cap for the one-word answer.
         task_manager = rails.runtime.llm_task_manager
 
-        async def classify(user_input: str) -> str:
+        async def classify(user_input: str, turns=()) -> str:
             prompt = task_manager.render_task_prompt(
-                task=Task.SELF_CHECK_INPUT, context={"user_input": user_input}
+                task=Task.SELF_CHECK_INPUT,
+                context={"user_input": user_input, "earlier_turns": format_thread_turns(turns)},
             )
             stop = task_manager.get_stop_tokens(task=Task.SELF_CHECK_INPUT)
             response = await llm_call(rails.llm, prompt, stop=stop, llm_params={"max_tokens": 16})
