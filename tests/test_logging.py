@@ -267,3 +267,14 @@ async def test_missing_database_url_disables_logging(client, monkeypatch, caplog
 
     warnings = [json.loads(record.message) for record in caplog.records]
     assert {"event": "logging_disabled", "reason": "DATABASE_URL is not set"} in warnings
+
+
+def test_httpx_logger_is_quiet_after_startup():
+    """httpx logs every request URL at INFO, and those include Resend's signed raw-mail
+    download links (phase 27). Importing the app sets the httpx logger to WARNING so the
+    links never reach the gateway log; the app's own logger stays at INFO."""
+    import app.main  # noqa: F401, the import is the startup step that sets the level.
+
+    assert logging.getLogger("httpx").level == logging.WARNING
+    assert logging.getLogger("httpx").getEffectiveLevel() == logging.WARNING
+    assert logging.getLogger("slice.gateway").getEffectiveLevel() == logging.INFO

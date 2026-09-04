@@ -1096,9 +1096,11 @@ async def test_earlier_turns_go_into_the_prompt_oldest_first(client, env):
 
 
 def _thread_aware_rail(question, turns):
-    """A stand-in for the topic rail's judgement (phase 27): an injection is BLOCKED
-    whatever came before; a follow-up that leans on "you mentioned" is GENERAL only when
-    the earlier turns are there to say what it refers to; a plain question is OWN_DATA."""
+    """A stand-in for the topic rail's judgement (phase 27): the rail fills in what the
+    question refers to from the earlier turns and judges the filled-in question. An
+    instruction to ignore rules is BLOCKED whatever came before. A follow-up that leans
+    on "you mentioned" fills in to an on-topic how-to when the earlier turns are there
+    (GENERAL) and cannot be filled in without them (BLOCKED). A plain question is GENERAL."""
     lowered = question.lower()
     if "ignore" in lowered or "reveal" in lowered:
         return RailOutcome(blocked=True, reason="topic rail", label=LABEL_BLOCKED)
@@ -1111,8 +1113,9 @@ def _thread_aware_rail(question, turns):
 
 async def test_follow_up_is_judged_with_the_earlier_turns(client, env):
     """The topic rail runs after the thread load and gets the turns, so a follow-up that
-    refers to an earlier on-topic answer is sorted as GENERAL. The same follow-up with no
-    turns behind it is blocked, and an injection is blocked whatever the thread holds."""
+    refers to an earlier on-topic answer fills in to an on-topic question and is sorted as
+    GENERAL. The same follow-up with no turns behind it cannot be filled in and is
+    blocked, and an instruction to ignore rules is blocked whatever the thread holds."""
     redis = fakeredis.aioredis.FakeRedis()
     env.install(redis=redis)
     env.engine.input_rule = _thread_aware_rail
@@ -1132,7 +1135,7 @@ async def test_follow_up_is_judged_with_the_earlier_turns(client, env):
     assert [turn["q"] for turn in env.engine.input_turns[1]] == ["Is Opus worth it over Sonnet for coding?"]
     assert env.engine.input_turns[1][0]["a"].startswith(GENERAL_DISCLAIMER)
 
-    # The same follow-up in a thread slice has no memory of: judged alone, blocked.
+    # The same follow-up in a thread slice has no memory of: nothing to fill in, blocked.
     env.fakes.received["headers"] = {"References": "<other@slice>"}
     await post(client, received_event(email_id="em_3", message_id="<other-msg@mail>"))
     assert env.db.replies["em_3"]["verdict"] == "blocked_input"

@@ -49,6 +49,9 @@ from app.openai_inbound import (
 from app.usage import StreamUsage, usage_from_body
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+# httpx logs every request URL at INFO. Those include Resend's signed raw-mail download
+# links (phase 27), which must not land in the gateway log, so httpx speaks only above.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("slice.gateway")
 
 # Recomputed by the framework, or invalid after httpx decodes the body.
