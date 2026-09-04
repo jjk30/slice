@@ -619,6 +619,26 @@ def test_scan_email_singular_and_more_line(monkeypatch):
     assert "And 4 more like these." in body_for(more)
 
 
+def test_scan_email_expected_findings_line():
+    """Phase 24b: one plain line says how many new highs were left out as expected."""
+    one = _scan_alert({**SCAN_DETAIL, "expected_skipped": 1})
+    body = body_for(one)
+    assert "1 expected finding not shown. Manage them on the dashboard." in body
+    # It follows the findings list and sits above the footer.
+    assert body.index("Read more:") < body.index("1 expected finding not shown.") < body.index(FOOTER_NOTE)
+    assert EM_DASH not in body
+
+    three = _scan_alert({**SCAN_DETAIL, "expected_skipped": 3})
+    assert "3 expected findings not shown. Manage them on the dashboard." in body_for(three)
+
+    # Absent, zero, or garbage: no line at all.
+    for value in (0, None, "many"):
+        detail = dict(SCAN_DETAIL)
+        if value is not None:
+            detail["expected_skipped"] = value
+        assert "expected finding" not in body_for(_scan_alert(detail))
+
+
 ACCOUNT_BPA_FINDING = {"check": "s3_public", "resource": "account", "region": "us-east-1", "severity": "high"}
 
 

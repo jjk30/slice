@@ -466,6 +466,11 @@ class FakeScannerDB:
         self.order: list[str] = []
         self.connections: dict[int, dict] = {}
         self.costs: dict = {}  # (account_id, date) -> amount
+        # Phase 24b: (scope, check, resource_id) -> {note, created_at, removed_at}; soft
+        # delete like the real table, so the re-arm read can see when one was undone.
+        self.expectations: dict = {}
+        self.run_times: dict[str, datetime] = {}
+        self.fail_expectation_writes = False
 
     # --- findings ---
     async def record_findings(self, account_id, run_id, findings):
@@ -473,6 +478,41 @@ class FakeScannerDB:
         self.runs[run_id] = (account_id, list(existing) + list(findings))
         if run_id not in self.order:
             self.order.append(run_id)
+        self.run_times.setdefault(run_id, datetime.now(timezone.utc))
+
+    # --- expectations (phase 24b) ---
+    async def list_expectations(self, account_id):
+        return [
+            {"check": c, "resource_id": r, "note": v["note"], "created_at": v["created_at"]}
+            for (a, c, r), v in self.expectations.items()
+            if a == account_id and v["removed_at"] is None
+        ]
+
+    async def add_expectation(self, account_id, check, resource_id, note=None):
+        if self.fail_expectation_writes:
+            raise RuntimeError("database is down")
+        row = {"note": note, "created_at": datetime.now(timezone.utc), "removed_at": None}
+        self.expectations[(account_id, check, resource_id)] = row
+        return {"check": check, "resource_id": resource_id, "note": note, "created_at": row["created_at"]}
+
+    async def remove_expectation(self, account_id, check, resource_id):
+        if self.fail_expectation_writes:
+            raise RuntimeError("database is down")
+        row = self.expectations.get((account_id, check, resource_id))
+        if row is None or row["removed_at"] is not None:
+            return False
+        row["removed_at"] = datetime.now(timezone.utc)
+        return True
+
+    async def rearmed_expectations_since(self, account_id, run_id):
+        since = self.run_times.get(run_id)
+        if since is None:
+            return set()
+        return {
+            (c, r)
+            for (a, c, r), v in self.expectations.items()
+            if a == account_id and v["removed_at"] is not None and v["removed_at"] >= since
+        }
 
     async def previous_run_id(self, account_id, current):
         prev = [r for r in self.order if r != current and self.runs[r][0] == account_id]
@@ -668,6 +708,112 @@ async def test_scan_email_renders_s3_public_doc_link(monkeypatch, scan_alerts_on
         "access-control-block-public-access.html" in body
     )
     assert "—" not in body  # no em dash anywhere
+
+
+# --- Phase 24b: expectations ------------------------------------------------
+
+
+async def test_expected_high_is_skipped_in_the_new_high_diff(monkeypatch, scan_alerts_on):
+    """An expected (check, resource) is recorded like any finding but never alerted."""
+    channel = scan_alerts_on
+    highs = [Finding(check=CHECK_SG_OPEN, resource_id="sg-1", severity=SEVERITY_HIGH, summary="world-open ssh")]
+    monkeypatch.setattr(service, "run_scan_graph", _async_return(highs))
+
+    db = FakeScannerDB()
+    await db.add_expectation(None, CHECK_SG_OPEN, "sg-1", "bastion, on purpose")
+    result = await service.run_scan(object(), db, None, run_id="run1")
+    await alerts_engine.drain()
+
+    assert result.new_highs == []
+    assert result.expected_skipped == 1
+    assert channel.sent == []
+    # Still recorded: the record is untouched by expectations.
+    assert [f.resource_id for f in db.runs["run1"][1]] == ["sg-1"]
+
+
+async def test_expectation_matches_check_and_resource_together(monkeypatch, scan_alerts_on):
+    """Expecting sg-1 for one check does not silence a different check on the same resource."""
+    channel = scan_alerts_on
+    highs = [Finding(check=CHECK_SG_OPEN, resource_id="sg-1", severity=SEVERITY_HIGH, summary="open")]
+    monkeypatch.setattr(service, "run_scan_graph", _async_return(highs))
+
+    db = FakeScannerDB()
+    await db.add_expectation(None, CHECK_S3_PUBLIC, "sg-1")
+    result = await service.run_scan(object(), db, None, run_id="run1")
+    await alerts_engine.drain()
+
+    assert [f.resource_id for f in result.new_highs] == ["sg-1"]
+    assert result.expected_skipped == 0
+    assert len(channel.sent) == 1
+
+
+async def test_undoing_an_expectation_brings_the_finding_back_once(monkeypatch, scan_alerts_on):
+    """Expected: quiet. Un-expected: the next scan alerts even though the previous run had it. Then quiet."""
+    channel = scan_alerts_on
+    highs = [Finding(check=CHECK_SG_OPEN, resource_id="sg-1", severity=SEVERITY_HIGH, summary="open")]
+    monkeypatch.setattr(service, "run_scan_graph", _async_return(highs))
+
+    db = FakeScannerDB()
+    await db.add_expectation(None, CHECK_SG_OPEN, "sg-1")
+    await service.run_scan(object(), db, None, run_id="run1")
+    await alerts_engine.drain()
+    assert channel.sent == []
+
+    assert await db.remove_expectation(None, CHECK_SG_OPEN, "sg-1") is True
+    result = await service.run_scan(object(), db, None, run_id="run2")
+    await alerts_engine.drain()
+    assert [f.resource_id for f in result.new_highs] == ["sg-1"]
+    assert len(channel.sent) == 1
+
+    # The run after that sees it in the previous run and stays quiet, as before.
+    result3 = await service.run_scan(object(), db, None, run_id="run3")
+    await alerts_engine.drain()
+    assert result3.new_highs == []
+    assert len(channel.sent) == 1
+
+
+async def test_email_says_how_many_expected_findings_were_skipped(monkeypatch, scan_alerts_on):
+    channel = scan_alerts_on
+    highs = [
+        Finding(check=CHECK_SG_OPEN, resource_id="sg-1", severity=SEVERITY_HIGH, summary="a"),
+        Finding(check=CHECK_S3_PUBLIC, resource_id="acme-site", severity=SEVERITY_HIGH, summary="b"),
+    ]
+    monkeypatch.setattr(service, "run_scan_graph", _async_return(highs))
+
+    db = FakeScannerDB()
+    await db.add_expectation(None, CHECK_S3_PUBLIC, "acme-site", "public website bucket")
+    await service.run_scan(object(), db, None, run_id="run1")
+    await alerts_engine.drain()
+
+    from app.alerts.channels import body_for, subject_for
+
+    assert len(channel.sent) == 1
+    alert = channel.sent[0]
+    assert alert.detail["count"] == 1
+    assert alert.detail["expected_skipped"] == 1
+    assert subject_for(alert) == "slice found 1 thing to check in your AWS account"
+    body = body_for(alert)
+    assert "1 expected finding not shown. Manage them on the dashboard." in body
+    assert "acme-site" not in body
+    assert "—" not in body
+
+
+async def test_expectations_read_failure_skips_nothing(monkeypatch, scan_alerts_on):
+    """A broken expectations read fails open: the finding is alerted rather than lost."""
+    channel = scan_alerts_on
+    highs = [Finding(check=CHECK_SG_OPEN, resource_id="sg-1", severity=SEVERITY_HIGH, summary="a")]
+    monkeypatch.setattr(service, "run_scan_graph", _async_return(highs))
+
+    db = FakeScannerDB()
+
+    async def broken(account_id):
+        raise RuntimeError("db down")
+
+    db.list_expectations = broken
+    result = await service.run_scan(object(), db, None, run_id="run1")
+    await alerts_engine.drain()
+    assert [f.resource_id for f in result.new_highs] == ["sg-1"]
+    assert len(channel.sent) == 1
 
 
 async def test_repeat_high_does_not_fire(monkeypatch, scan_alerts_on):
@@ -1070,6 +1216,122 @@ async def test_cost_isolation_between_accounts(client, monkeypatch, set_db):
     assert r3.json()["daily"] == []
 
 
+async def test_findings_json_carries_title_and_expected(client, monkeypatch, set_db):
+    """Each finding carries the email's plain-words line and its expected flag; expected rows stay listed."""
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    db = set_db(FakeScannerDB())
+    await db.record_findings(5, "r1", [
+        Finding(check=CHECK_S3_PUBLIC, resource_id="acme-site", severity=SEVERITY_HIGH, summary="public"),
+        Finding(check=CHECK_SG_OPEN, resource_id="sg-1", severity=SEVERITY_HIGH, summary="open"),
+    ])
+    await db.add_expectation(5, CHECK_S3_PUBLIC, "acme-site", "website")
+
+    r = await client.get("/scanner/findings")
+    assert r.status_code == 200
+    rows = {f["resource_id"]: f for f in r.json()["findings"]}
+    assert set(rows) == {"acme-site", "sg-1"}
+    assert rows["acme-site"]["expected"] is True
+    assert rows["sg-1"]["expected"] is False
+    assert rows["acme-site"]["title"] == (
+        f"Your S3 storage bucket acme-site in {config.AWS_REGION} is open to the internet."
+    )
+    assert rows["sg-1"]["title"].startswith("A firewall rule on sg-1")
+
+
+async def test_expectations_post_and_delete_round_trip(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    db = set_db(FakeScannerDB())
+
+    r = await client.post(
+        "/scanner/expectations",
+        json={"check": CHECK_S3_PUBLIC, "resource_id": " acme-site ", "note": "website"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["expected"] is True
+    assert body["check"] == CHECK_S3_PUBLIC and body["resource_id"] == "acme-site"
+    assert body["note"] == "website"
+    assert (5, CHECK_S3_PUBLIC, "acme-site") in db.expectations  # the caller's own scope
+
+    r = await client.request(
+        "DELETE", "/scanner/expectations", json={"check": CHECK_S3_PUBLIC, "resource_id": "acme-site"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"expected": False, "check": CHECK_S3_PUBLIC, "resource_id": "acme-site", "removed": True}
+    assert await db.list_expectations(5) == []
+
+    # Removing it again is a no-op, said plainly.
+    r = await client.request(
+        "DELETE", "/scanner/expectations", json={"check": CHECK_S3_PUBLIC, "resource_id": "acme-site"}
+    )
+    assert r.status_code == 200 and r.json()["removed"] is False
+
+
+async def test_expectations_unknown_check_is_rejected(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    db = set_db(FakeScannerDB())
+    for body in (
+        {"check": "made_up", "resource_id": "x"},
+        {"check": "connection", "resource_id": "x"},  # a finding kind, not an expectable check
+        {"check": CHECK_S3_PUBLIC, "resource_id": ""},
+        {"check": CHECK_S3_PUBLIC},
+        ["not", "an", "object"],
+    ):
+        r = await client.post("/scanner/expectations", json=body)
+        assert r.status_code == 400, body
+    assert db.expectations == {}
+
+
+async def test_expectations_are_scoped_to_the_signed_in_account(client, monkeypatch, set_db):
+    """Account B cannot see, flag, or remove account A's expectation; each writes its own scope."""
+    db = set_db(FakeScannerDB())
+    for acct in (2, 3):
+        await db.record_findings(acct, f"r{acct}", [
+            Finding(check=CHECK_S3_PUBLIC, resource_id="shared-name", severity=SEVERITY_HIGH, summary="p"),
+        ])
+
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=2, login="a")))
+    r = await client.post("/scanner/expectations", json={"check": CHECK_S3_PUBLIC, "resource_id": "shared-name"})
+    assert r.status_code == 200
+
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=3, login="b")))
+    assert (await client.get("/scanner/findings")).json()["findings"][0]["expected"] is False
+    r = await client.request(
+        "DELETE", "/scanner/expectations", json={"check": CHECK_S3_PUBLIC, "resource_id": "shared-name"}
+    )
+    assert r.status_code == 200 and r.json()["removed"] is False
+
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=2, login="a")))
+    assert (await client.get("/scanner/findings")).json()["findings"][0]["expected"] is True
+    assert (2, CHECK_S3_PUBLIC, "shared-name") in db.expectations
+    assert (3, CHECK_S3_PUBLIC, "shared-name") not in db.expectations
+
+
+async def test_expectations_operator_writes_under_the_own_scope(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    db = set_db(FakeScannerDB())
+    r = await client.post("/scanner/expectations", json={"check": CHECK_SG_OPEN, "resource_id": "sg-1"})
+    assert r.status_code == 200
+    assert (None, CHECK_SG_OPEN, "sg-1") in db.expectations
+
+
+async def test_expectations_write_failure_is_a_500(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    db = set_db(FakeScannerDB())
+    db.fail_expectation_writes = True
+    r = await client.post("/scanner/expectations", json={"check": CHECK_SG_OPEN, "resource_id": "sg-1"})
+    assert r.status_code == 500 and r.json() == {"error": {"message": "Could not save the expectation."}}
+    r = await client.request("DELETE", "/scanner/expectations", json={"check": CHECK_SG_OPEN, "resource_id": "sg-1"})
+    assert r.status_code == 500 and r.json() == {"error": {"message": "Could not remove the expectation."}}
+
+
+async def test_expectations_without_a_database_are_a_503(client, monkeypatch, set_db):
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    set_db(None)
+    r = await client.post("/scanner/expectations", json={"check": CHECK_SG_OPEN, "resource_id": "sg-1"})
+    assert r.status_code == 503
+
+
 async def test_findings_endpoint_no_db_is_empty(client, monkeypatch, set_db):
     monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
     set_db(None)
@@ -1083,6 +1345,7 @@ async def test_scanner_endpoints_require_auth(client, monkeypatch):
     calls = [
         ("GET", "/scanner/findings"), ("GET", "/scanner/cost"), ("POST", "/scanner/run"),
         ("GET", "/scanner/connect"), ("POST", "/scanner/connect"), ("DELETE", "/scanner/connect"),
+        ("POST", "/scanner/expectations"), ("DELETE", "/scanner/expectations"),
     ]
     for method, path in calls:
         r = await client.request(method, path)

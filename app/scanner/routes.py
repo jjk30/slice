@@ -22,7 +22,16 @@ Scan/read:
 
 - ``POST /scanner/run``       kick a scan on the caller's account (background); 202 + run_id.
 - ``GET  /scanner/findings``  the caller's findings for a run (``?run_id=``), or their newest.
+                              Each carries ``title`` (the email's plain-words line) and
+                              ``expected`` (phase 24b).
 - ``GET  /scanner/cost``      the caller's latest AWS spend: yesterday and month-to-date.
+
+Expectations (phase 24b): "this finding is on purpose, stop emailing me about it".
+
+- ``POST   /scanner/expectations`` {check, resource_id, note?} marks one finding expected.
+- ``DELETE /scanner/expectations`` {check, resource_id} undoes it.
+
+Expected findings are still recorded and still listed; they only leave the alert email.
 """
 
 from __future__ import annotations
@@ -40,8 +49,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app import config
+from app.alerts.channels import finding_title
 from app.auth.middleware import read_account
 from app.scanner import service
+from app.scanner.models import ALL_CHECKS
 
 logger = logging.getLogger("slice.gateway")
 
@@ -237,7 +248,98 @@ async def findings(request: Request, run_id: str | None = None):
     except Exception:  # noqa: BLE001 — a read failure degrades to empty, not a 500.
         return _findings_response(run_id, [])
 
-    return _findings_response(run_id, [_finding_json(row) for row in rows])
+    expected = await _expected_keys(db, scope)
+    return _findings_response(run_id, [_finding_json(row, expected) for row in rows])
+
+
+# --- Expectations (phase 24b) ------------------------------------------------
+
+MAX_RESOURCE_ID_CHARS = 512
+MAX_NOTE_CHARS = 500
+
+
+async def _expected_keys(db, scope) -> set[tuple[str, str]]:
+    """The scope's live expectations as (check, resource_id) pairs; empty on any read failure."""
+    try:
+        return {(e["check"], e["resource_id"]) for e in await db.list_expectations(scope)}
+    except Exception:  # noqa: BLE001 — the findings list still answers, just without flags.
+        return set()
+
+
+async def _expectation_body(request: Request):
+    """Parse and validate {check, resource_id, note?}; a JSONResponse error when it is bad."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return _error(400, "Request body is not valid JSON.")
+    if not isinstance(body, dict):
+        return _error(400, "Request body must be a JSON object with 'check' and 'resource_id'.")
+    check = body.get("check")
+    if check not in ALL_CHECKS:
+        return _error(400, f"'check' must be one of: {', '.join(ALL_CHECKS)}.")
+    resource_id = body.get("resource_id")
+    if not isinstance(resource_id, str) or not resource_id.strip():
+        return _error(400, "'resource_id' must be a non-empty string.")
+    resource_id = resource_id.strip()
+    if len(resource_id) > MAX_RESOURCE_ID_CHARS:
+        return _error(400, f"'resource_id' must be at most {MAX_RESOURCE_ID_CHARS} characters.")
+    note = body.get("note")
+    if note is not None:
+        if not isinstance(note, str):
+            return _error(400, "'note' must be a string when given.")
+        note = note.strip() or None
+        if note is not None and len(note) > MAX_NOTE_CHARS:
+            return _error(400, f"'note' must be at most {MAX_NOTE_CHARS} characters.")
+    return check, resource_id, note
+
+
+@router.post("/expectations")
+async def add_expectation(request: Request):
+    """Mark one (check, resource_id) as expected for the caller: recorded, listed, never emailed."""
+    account = _account(request)
+    if account is None:
+        return _error(401, "Missing slice key. Send it as 'Authorization: Bearer slk_...'.")
+    parsed = await _expectation_body(request)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    check, resource_id, note = parsed
+    db = _get_db(request)
+    if not _db_ready(db):
+        return _error(503, "Expectation storage is unavailable (database not connected).")
+    try:
+        row = await db.add_expectation(_storage_scope(account.id), check, resource_id, note)
+    except Exception as exc:  # noqa: BLE001 — a user action: say it failed, never pretend.
+        logger.warning(json.dumps({"event": "scanner_expectation_write_error", "error": str(exc)}))
+        return _error(500, "Could not save the expectation.")
+    created = row.get("created_at")
+    return {
+        "expected": True,
+        "check": check,
+        "resource_id": resource_id,
+        "note": row.get("note"),
+        "created_at": created.isoformat() if hasattr(created, "isoformat") else created,
+    }
+
+
+@router.delete("/expectations")
+async def remove_expectation(request: Request):
+    """Undo an expectation: the finding goes back into the next alert email if still there."""
+    account = _account(request)
+    if account is None:
+        return _error(401, "Missing slice key. Send it as 'Authorization: Bearer slk_...'.")
+    parsed = await _expectation_body(request)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    check, resource_id, _note = parsed
+    db = _get_db(request)
+    if not _db_ready(db):
+        return _error(503, "Expectation storage is unavailable (database not connected).")
+    try:
+        removed = await db.remove_expectation(_storage_scope(account.id), check, resource_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(json.dumps({"event": "scanner_expectation_write_error", "error": str(exc)}))
+        return _error(500, "Could not remove the expectation.")
+    return {"expected": False, "check": check, "resource_id": resource_id, "removed": bool(removed)}
 
 
 @router.get("/cost")
@@ -300,7 +402,8 @@ def _waste_sum(findings: list[dict]) -> float:
     return round(total, 2)
 
 
-def _finding_json(row: dict) -> dict:
+def _finding_json(row: dict, expected: set[tuple[str, str]] | None = None) -> dict:
+    """One finding row as JSON, plus the email's plain-words ``title`` and its ``expected`` flag."""
     detail = row.get("detail")
     if isinstance(detail, str):
         try:
@@ -308,11 +411,15 @@ def _finding_json(row: dict) -> dict:
         except ValueError:
             pass
     created = row.get("created_at")
+    check = row.get("check")
+    resource_id = row.get("resource_id")
     return {
-        "check": row.get("check"),
-        "resource_id": row.get("resource_id"),
+        "check": check,
+        "resource_id": resource_id,
         "severity": row.get("severity"),
         "summary": row.get("summary"),
+        "title": finding_title(check, resource_id, config.AWS_REGION),
+        "expected": (check, resource_id) in (expected or set()),
         "detail": detail,
         "created_at": created.isoformat() if hasattr(created, "isoformat") else created,
     }

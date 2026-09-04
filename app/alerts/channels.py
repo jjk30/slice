@@ -319,6 +319,26 @@ def _footer_lines(alert: Alert) -> list[str]:
     return [FOOTER_NOTE, "", f"Sent {format_time(alert.ts)}"]
 
 
+def _scan_copy(check: str | None, resource: str) -> dict | None:
+    """The copy entry for a finding: the account-wide wording when the resource is the account."""
+    copy = SCAN_ACCOUNT_COPY.get(check) if resource == ACCOUNT_RESOURCE else None
+    return copy if copy is not None else SCAN_CHECK_COPY.get(check)
+
+
+def finding_title(check: str | None, resource: str | None, region: str | None) -> str:
+    """The plain-words "what" line for one finding, exactly as the email says it.
+
+    Phase 24b: the dashboard's findings panel shows this same line (the findings endpoint
+    carries it as ``title``), so the wording lives here once.
+    """
+    resource = resource or "a resource"
+    region = region or "your region"
+    copy = _scan_copy(check, resource)
+    if copy is None:
+        return f"slice flagged {resource} in {region} and thinks it is worth a look."
+    return copy["what"].format(resource=resource, region=region)
+
+
 def _scan_finding_block(finding: dict) -> list[str]:
     """One finding as three short lines plus a Read more link, in plain words.
 
@@ -329,9 +349,7 @@ def _scan_finding_block(finding: dict) -> list[str]:
     resource = finding.get("resource") or "a resource"
     region = finding.get("region") or "your region"
     check = finding.get("check")
-    copy = SCAN_ACCOUNT_COPY.get(check) if resource == ACCOUNT_RESOURCE else None
-    if copy is None:
-        copy = SCAN_CHECK_COPY.get(check)
+    copy = _scan_copy(check, resource)
     if copy is None:
         # A check we have no wording for: still say something plain, and skip the doc line
         # rather than guess at a link.
@@ -368,8 +386,22 @@ def _scan_body(alert: Alert) -> str:
         for summary in detail.get("summaries") or []:
             lines += [summary, ""]
 
+    # Phase 24b: new highs the user marked expected are left out of the list above; say
+    # how many, and where to manage them, in one line.
+    skipped = _scan_skipped(alert)
+    if skipped > 0:
+        noun = "finding" if skipped == 1 else "findings"
+        lines += [f"{skipped} expected {noun} not shown. Manage them on the dashboard.", ""]
+
     lines += _footer_lines(alert)
     return "\n".join(lines)
+
+
+def _scan_skipped(alert: Alert) -> int:
+    try:
+        return max(0, int((alert.detail or {}).get("expected_skipped", 0)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def subject_for(alert: Alert) -> str:

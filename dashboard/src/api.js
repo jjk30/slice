@@ -50,13 +50,22 @@ export async function getJson(path) {
 
 // POST a JSON endpoint (no request body) and read its JSON reply. Same error and 401
 // handling as getJson: a 401 drops the session so the app returns to the login screen.
-export async function postJson(path) {
+export function postJson(path) {
+  return sendJson('POST', path)
+}
+
+// Send `method` to a JSON endpoint, with an optional JSON body, and read its JSON reply.
+// Same error and 401 handling as getJson.
+export async function sendJson(method, path, payload) {
   let res
   try {
-    res = await fetch(apiBase() + path, {
-      method: 'POST',
-      headers: { Accept: 'application/json' },
-    })
+    const headers = { Accept: 'application/json' }
+    const init = { method, headers }
+    if (payload !== undefined) {
+      headers['Content-Type'] = 'application/json'
+      init.body = JSON.stringify(payload)
+    }
+    res = await fetch(apiBase() + path, init)
   } catch (e) {
     throw new Error(`Cannot reach the gateway at ${apiBase() || window.location.origin}.`)
   }
@@ -87,4 +96,23 @@ export async function postJson(path) {
 // when AWS is not connected or nothing has been fetched yet; the tile says so.
 export function getAwsCost() {
   return getJson('/dashboard/aws_cost')
+}
+
+// Phase 24b: the AWS findings panel. The connection status decides whether the panel
+// shows at all; the findings list is the newest run, each row carrying `title` (the
+// email's plain-words line) and `expected`. Marking a finding expected (or undoing it)
+// is a POST or DELETE of the same {check, resource_id} body.
+export function getScannerConnect() {
+  return getJson('/scanner/connect')
+}
+
+export function getFindings() {
+  return getJson('/scanner/findings')
+}
+
+export function setExpected(check, resourceId, expected) {
+  return sendJson(expected ? 'POST' : 'DELETE', '/scanner/expectations', {
+    check,
+    resource_id: resourceId,
+  })
 }

@@ -55,6 +55,8 @@ class ScanResult:
     # "ok" | "not_connected" | "error". Part-A callers get the default "ok".
     status: str = "ok"
     error: str | None = None
+    # Phase 24b: how many new highs were left out of the alert because they are expected.
+    expected_skipped: int = 0
 
 
 @dataclass(frozen=True)
@@ -193,10 +195,12 @@ async def run_scan(
         )
     )
 
-    new_highs = await _persist_and_diff(db, account_id, run_id, findings)
+    new_highs, skipped = await _persist_and_diff(db, account_id, run_id, findings)
     if alert and new_highs:
-        _fire_new_high_alert(account_id, run_id, new_highs)
-    return ScanResult(run_id=run_id, findings=findings, new_highs=new_highs)
+        _fire_new_high_alert(account_id, run_id, new_highs, expected_skipped=len(skipped))
+    return ScanResult(
+        run_id=run_id, findings=findings, new_highs=new_highs, expected_skipped=len(skipped)
+    )
 
 
 async def run_scan_for_account(
@@ -226,37 +230,67 @@ async def run_scan_for_account(
         session, db, redis, run_id=run_id, alert=alert, account_id=target.storage_account_id
     )
     return ScanResult(
-        run_id=result.run_id, findings=result.findings, new_highs=result.new_highs, status="ok"
+        run_id=result.run_id,
+        findings=result.findings,
+        new_highs=result.new_highs,
+        status="ok",
+        expected_skipped=result.expected_skipped,
     )
 
 
-async def _persist_and_diff(db, account_id, run_id: str, findings: list[Finding]) -> list[Finding]:
-    """Write the findings and return this account's HIGH findings whose resource is new."""
+async def _persist_and_diff(
+    db, account_id, run_id: str, findings: list[Finding]
+) -> tuple[list[Finding], list[Finding]]:
+    """Write the findings; return (new HIGHs to alert on, new HIGHs skipped as expected).
+
+    "New" means the resource had no HIGH in this account's previous run. Phase 24b: a
+    (check, resource) the user marked expected is recorded like any other finding but
+    left out of the alert; and one un-expected since the previous run counts as new
+    again, so undoing an expectation brings the email back once. Every history read
+    fails open: no history means nothing is new, no expectations means nothing is skipped.
+    """
     current_highs = [f for f in findings if f.severity == SEVERITY_HIGH]
 
     previous_high_ids: set[str] = set()
+    expected: set[tuple[str, str]] = set()
     if _db_ready(db):
         try:
             previous_run = await db.previous_run_id(account_id, run_id)
             if previous_run is not None:
                 previous_high_ids = await db.high_resource_ids(account_id, previous_run)
+                rearmed = await db.rearmed_expectations_since(account_id, previous_run)
+                previous_high_ids -= {resource for _check, resource in rearmed}
         except Exception as exc:  # noqa: BLE001 — no history read: treat nothing as new.
             logger.warning(json.dumps({"event": "scanner_diff_error", "error": str(exc)}))
             previous_high_ids = set()
+        try:
+            expected = {(e["check"], e["resource_id"]) for e in await db.list_expectations(account_id)}
+        except Exception as exc:  # noqa: BLE001 — no expectations read: skip nothing.
+            logger.warning(json.dumps({"event": "scanner_expectations_error", "error": str(exc)}))
+            expected = set()
         await db.record_findings(account_id, run_id, findings)
 
     seen: set[str] = set()
     new_highs: list[Finding] = []
+    skipped: list[Finding] = []
     for finding in current_highs:
         if finding.resource_id in previous_high_ids or finding.resource_id in seen:
             continue
         seen.add(finding.resource_id)
-        new_highs.append(finding)
-    return new_highs
+        if (finding.check, finding.resource_id) in expected:
+            skipped.append(finding)
+        else:
+            new_highs.append(finding)
+    return new_highs, skipped
 
 
-def _fire_new_high_alert(account_id, run_id: str, new_highs: list[Finding]) -> None:
+def _fire_new_high_alert(
+    account_id, run_id: str, new_highs: list[Finding], *, expected_skipped: int = 0
+) -> None:
     """Fire one per-account ``aws_scan`` alert for the new highs, fire-and-forget.
+
+    ``expected_skipped`` (phase 24b) is how many new highs were left out because the
+    user marked them expected; the email says so in one line after the findings.
 
     The detail carries structured ``findings`` (one dict per new high: check, resource,
     region, severity) so the email can write a real block per finding. The scanner is
@@ -277,7 +311,13 @@ def _fire_new_high_alert(account_id, run_id: str, new_highs: list[Finding]) -> N
     alerts.fire(
         _scan_team(account_id),
         alerts.KIND_SCAN,
-        {"count": len(new_highs), "findings": findings, "summaries": summaries, "run_id": run_id},
+        {
+            "count": len(new_highs),
+            "findings": findings,
+            "summaries": summaries,
+            "run_id": run_id,
+            "expected_skipped": int(expected_skipped),
+        },
         account_id=account_id,
     )
 

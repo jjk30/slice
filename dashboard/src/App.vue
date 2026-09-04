@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { getJson, getAwsCost, AuthError } from './api.js'
+import { getJson, getAwsCost, getScannerConnect, getFindings, AuthError } from './api.js'
 import { useLiveEvents } from './live.js'
 import { session, loadSession, logout } from './auth.js'
 import { money, dollars, percent, integer } from './format.js'
@@ -10,6 +10,7 @@ import TeamBudgets from './components/TeamBudgets.vue'
 import ModelsChart from './components/ModelsChart.vue'
 import RecentCalls from './components/RecentCalls.vue'
 import GuardrailsTile from './components/GuardrailsTile.vue'
+import FindingsPanel from './components/FindingsPanel.vue'
 import SliceKeyCard from './components/SliceKeyCard.vue'
 import LoginScreen from './components/LoginScreen.vue'
 import SetupScreen from './components/SetupScreen.vue'
@@ -79,6 +80,7 @@ async function onLogout() {
   profileConfirmed.value = false
   settingsOpen.value = false
   summary.value = models.value = teams.value = awsCost.value = recent.value = null
+  awsConn.value = findings.value = null
   recentLoaded = false
   error.value = ''
   // `session` is now null, so `view` flips to 'login'; this shows the "Signed out" note
@@ -94,6 +96,10 @@ const summary = ref(null)
 const models = ref(null)
 const teams = ref(null)
 const awsCost = ref(null)
+// Phase 24b: the AWS connection status (decides whether the findings panel shows) and
+// the newest run's findings.
+const awsConn = ref(null)
+const findings = ref(null)
 const recent = ref(null)
 const error = ref('')
 // True after a load failed: cards render dashes instead of "Loading…".
@@ -111,17 +117,21 @@ let recentLoaded = false
 
 async function loadAggregates() {
   const seq = ++aggSeq
-  const [s, m, t, a] = await Promise.all([
+  const [s, m, t, a, conn, f] = await Promise.all([
     getJson('/dashboard/summary'),
     getJson('/dashboard/models'),
     getJson('/dashboard/teams'),
     getAwsCost(),
+    getScannerConnect(),
+    getFindings(),
   ])
   if (seq !== aggSeq) return false
   summary.value = s
   models.value = m
   teams.value = t
   awsCost.value = a
+  awsConn.value = conn
+  findings.value = f
   error.value = ''
   return true
 }
@@ -156,6 +166,7 @@ async function loadRecent() {
 function markFailed(e) {
   if (e instanceof AuthError) {
     summary.value = models.value = teams.value = awsCost.value = null
+    awsConn.value = findings.value = null
     return
   }
   error.value = e && e.message ? e.message : 'Backend unavailable.'
@@ -163,6 +174,8 @@ function markFailed(e) {
   models.value = null
   teams.value = null
   awsCost.value = null
+  awsConn.value = null
+  findings.value = null
 }
 
 async function loadAll() {
@@ -311,6 +324,12 @@ const awsBillSub = computed(() => {
   const y = usd(awsCost.value.yesterday)
   return y === null ? '' : `yesterday ${y}`
 })
+// Phase 24b: the findings panel shows once AWS is connected, or for the operator account
+// (which scans slice's own infrastructure). Before the status is known it stays hidden.
+const awsPanelVisible = computed(() => {
+  const c = awsConn.value
+  return Boolean(c && (c.mode === 'operator' || c.status === 'connected'))
+})
 // A loaded summary with no guardrails object renders dashes, not "Loading…".
 const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {} : null))
 </script>
@@ -357,6 +376,8 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
 
       <TeamBudgets class="span-2" :data="teams" :failed="failed" />
       <ModelsChart class="span-2" :data="models" :failed="failed" />
+
+      <FindingsPanel v-if="awsPanelVisible" class="span-4" :data="findings" :failed="failed" />
 
       <RecentCalls class="span-4" :rows="recent" :failed="failed" />
 

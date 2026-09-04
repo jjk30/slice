@@ -30,6 +30,19 @@ CHECK_IDLE_INSTANCES = "idle_instances"
 # role, so the failure is visible in their findings rather than silently swallowed.
 CHECK_CONNECTION = "connection"
 
+# Every check a user can mark as expected (phase 24b). The connection kind is left out:
+# it is an error about the connection itself, not something to expect and ignore.
+ALL_CHECKS = (
+    CHECK_S3_PUBLIC,
+    CHECK_SG_OPEN,
+    CHECK_UNENCRYPTED,
+    CHECK_IAM_RISK,
+    CHECK_EBS_WASTE,
+    CHECK_EIP_WASTE,
+    CHECK_SNAPSHOT_WASTE,
+    CHECK_IDLE_INSTANCES,
+)
+
 
 @dataclass(frozen=True)
 class Finding:

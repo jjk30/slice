@@ -77,6 +77,12 @@ Fires when a scan finds new HIGH findings for an account, one per account per
 The body renders one short block per finding, up to `SCANNER_ALERT_TOP_N`; if there are more
 than that, a final `And {n} more like these.` line stands in for the rest.
 
+Phase 24b: a finding the user marked as expected on the dashboard (`POST
+/scanner/expectations`) is still recorded and still listed on the dashboard, but it is left
+out of this email. When any new highs were skipped that way, one line follows the list:
+`{n} expected finding(s) not shown. Manage them on the dashboard.` If every new high was
+expected, no email is sent at all.
+
 **Subject:** `slice found {count} thing(s) to check in your AWS account`
 
 **Opening line:** `slice looked at your AWS account and found {count} thing(s) worth a look.`

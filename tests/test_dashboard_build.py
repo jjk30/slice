@@ -48,3 +48,27 @@ def test_production_bundle_has_no_gateway_host():
         + ", ".join(offenders)
         + ". Ensure VITE_API_BASE_URL is empty for the production build (dashboard/.env.production)."
     )
+
+
+# Phase 24b: the AWS findings panel. Its title, the endpoints it reads and writes, its
+# empty-state copy, and the switch label must all be in the shipped bundle; if any is
+# missing the panel was dropped or rewired. Same skip rule as above when dist is absent.
+FINDINGS_PANEL_STRINGS = [
+    "AWS findings",
+    "/scanner/findings",
+    "/scanner/expectations",
+    "/scanner/connect",
+    "No findings yet. The first scan runs within an hour of connecting AWS.",
+    "expected",
+]
+
+
+@pytest.mark.parametrize("needle", FINDINGS_PANEL_STRINGS)
+def test_production_bundle_ships_the_findings_panel(needle):
+    js_files = _built_js()
+    if not js_files:
+        pytest.skip(
+            f"no built dashboard assets at {ASSETS_DIR}; run `cd dashboard && npm run build`"
+        )
+    bundle = "".join(p.read_text(encoding="utf-8", errors="ignore") for p in js_files)
+    assert needle in bundle, f"{needle!r} is not in the built dashboard bundle"

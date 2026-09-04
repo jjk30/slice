@@ -121,6 +121,45 @@ WHERE run_id = $1 AND account_id IS NOT DISTINCT FROM $2 AND severity = 'high'
 # insert, scoped by account) rather than relying on ON CONFLICT, so the NULL own-account
 # key is handled the same as a real id.
 DELETE_AWS_COST_DAY = "DELETE FROM aws_costs WHERE account_id IS NOT DISTINCT FROM $1 AND date = $2"
+
+# Phase 24b: scan expectations, scoped exactly like scan_findings (NULL = own account).
+# Removal is a soft delete (removed_at) so the next scan can tell a finding was just
+# un-expected and alert on it once more; marking it again revives the same row.
+SELECT_EXPECTATIONS = """
+SELECT "check", resource_id, note, created_at
+FROM scan_expectations
+WHERE account_id IS NOT DISTINCT FROM $1 AND removed_at IS NULL
+ORDER BY created_at, id
+"""
+REVIVE_EXPECTATION = """
+UPDATE scan_expectations
+SET note = $4, removed_at = NULL, created_at = now()
+WHERE account_id IS NOT DISTINCT FROM $1 AND "check" = $2 AND resource_id = $3
+RETURNING "check", resource_id, note, created_at
+"""
+INSERT_EXPECTATION = """
+INSERT INTO scan_expectations (account_id, "check", resource_id, note)
+VALUES ($1, $2, $3, $4)
+RETURNING "check", resource_id, note, created_at
+"""
+REMOVE_EXPECTATION = """
+UPDATE scan_expectations
+SET removed_at = now()
+WHERE account_id IS NOT DISTINCT FROM $1 AND "check" = $2 AND resource_id = $3
+  AND removed_at IS NULL
+RETURNING id
+"""
+# Expectations removed at or after the moment ``run_id`` was recorded: their findings
+# count as new again on the next scan even though the previous run already had them.
+SELECT_REARMED_SINCE_RUN = """
+SELECT "check", resource_id
+FROM scan_expectations
+WHERE account_id IS NOT DISTINCT FROM $1 AND removed_at IS NOT NULL
+  AND removed_at >= (
+      SELECT MIN(created_at) FROM scan_findings
+      WHERE run_id = $2 AND account_id IS NOT DISTINCT FROM $1
+  )
+"""
 INSERT_AWS_COST = """
 INSERT INTO aws_costs (account_id, date, amount_usd, fetched_at)
 VALUES ($1, $2, $3, now())
@@ -873,6 +912,39 @@ class Database:
     async def aws_cost_rows_since(self, account_id, since) -> list[dict]:
         """One account's cost rows on or after ``since``, newest day first. Raises if unavailable."""
         return await self._fetch(SELECT_AWS_COSTS_SINCE, since, account_id)
+
+    # --- Scan expectations (phase 24b) --------------------------------------
+    # The list and the re-arm read back the alert diff and the findings endpoint; they
+    # raise like the other reads and their callers fail open. add/remove are user actions
+    # from the dashboard, so they raise on failure and the route answers a 500.
+
+    async def list_expectations(self, account_id) -> list[dict]:
+        """The account's live expectations: (check, resource_id, note, created_at). Raises if unavailable."""
+        return await self._fetch(SELECT_EXPECTATIONS, account_id)
+
+    async def add_expectation(self, account_id, check: str, resource_id: str, note: str | None = None) -> dict:
+        """Mark one (check, resource) expected for the account; idempotent. Raises on failure."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(REVIVE_EXPECTATION, account_id, check, resource_id, note)
+                if row is None:
+                    row = await connection.fetchrow(INSERT_EXPECTATION, account_id, check, resource_id, note)
+        return dict(row)
+
+    async def remove_expectation(self, account_id, check: str, resource_id: str) -> bool:
+        """Un-expect one (check, resource). True when a live expectation was removed. Raises on failure."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            removed = await connection.fetchval(REMOVE_EXPECTATION, account_id, check, resource_id)
+        return removed is not None
+
+    async def rearmed_expectations_since(self, account_id, run_id: str) -> set[tuple[str, str]]:
+        """(check, resource_id) pairs un-expected since ``run_id`` was recorded. Raises if unavailable."""
+        rows = await self._fetch(SELECT_REARMED_SINCE_RUN, account_id, run_id)
+        return {(row["check"], row["resource_id"]) for row in rows}
 
     # --- AWS connections (phase 18b) ---------------------------------------
     # The connect flow's reads/writes. They raise on failure like the other reads the
