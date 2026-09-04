@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app import config, redis_layer
+from app import budget, config, redis_layer
 from app.auth.keys import KEY_PREFIX, hash_key, key_last4, key_prefix, mint_key
 from app.auth.middleware import get_authenticator, read_account
 from app.auth.routes import DASHBOARD_KEY_NAME
@@ -192,16 +192,25 @@ async def teams(request: Request):
 
     buckets, unattributed = stats.per_team(rows)
     redis = getattr(request.app.state, "redis", None)
-    budget = config.BUDGET_MONTHLY_USD
+    # Phase 25: the account's own cap, or the config default when it has not set one.
+    cap = await budget.resolve_cap(account.id, db=db, redis=redis)
     gate_spend = await redis_layer.get_spend(redis, account.scope, month)
     account_bucket = stats.account_bucket(rows, label=account.label)
-    budget_view = stats.team_view(account_bucket, budget, gate_spend)
+    budget_view = stats.team_view(account_bucket, cap.cap, gate_spend)
     budget_view["account"] = budget_view.pop("team")
+    remaining = stats.as_decimal(budget_view.get("remaining_usd"))
     return {
         "month": month,
-        "budget_usd": stats.money(budget),
+        "budget_usd": stats.money(cap.cap),
+        "budget_default": cap.is_default,
+        "default_budget_usd": stats.money(budget.default_cap()),
         "warn_ratio": config.BUDGET_WARN_RATIO,
         "budget": budget_view,
+        # Phase 25: "about N tokens on <family>", one row per Anthropic family in the
+        # pricing table, at the blend the tooltip states. Refetched on every live event,
+        # so they move with the dollars.
+        "token_blend": dict(budget.TOKEN_BLEND),
+        "token_estimates": budget.token_estimates(remaining),
         "teams": stats.team_shares(buckets, account_bucket["spend"]),
         "unattributed": unattributed,
     }

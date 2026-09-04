@@ -2,7 +2,7 @@ import fakeredis.aioredis
 import httpx
 import pytest
 
-from app import config, redis_layer
+from app import budget, config, redis_layer
 from app.alerts import engine as alerts_engine
 from app.main import app
 
@@ -150,6 +150,21 @@ def isolate_redis(monkeypatch):
     app.state.redis = None
     yield
     app.state.redis = previous
+
+
+@pytest.fixture(autouse=True)
+def budget_cap_handles_reset():
+    """Phase-25 cap resolver: no app-wide database or Redis handle by default.
+
+    ``lifespan`` installs the app's handles module-level (the gate reads the cap from
+    ``app.redis_layer``, which has no app), so a lifespan-running test would otherwise
+    leak them into the next. With none installed every cap resolves to the config
+    default, which is exactly what the older budget suites assert; the phase-25 tests
+    install a fake store explicitly.
+    """
+    budget.configure(None, None)
+    yield
+    budget.configure(None, None)
 
 
 @pytest.fixture

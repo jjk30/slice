@@ -72,3 +72,26 @@ def test_production_bundle_ships_the_findings_panel(needle):
         )
     bundle = "".join(p.read_text(encoding="utf-8", errors="ignore") for p in js_files)
     assert needle in bundle, f"{needle!r} is not in the built dashboard bundle"
+
+
+# Phase 25: the per-account budget cap. The Settings field, its one-line note, the
+# endpoint it saves to, the "(default)" marker on the Account budget header, and the
+# per-model token lines must all be in the shipped bundle.
+BUDGET_CAP_STRINGS = [
+    "Monthly budget cap",
+    "slice blocks your requests when spend reaches this. It warns you by email at 80%.",
+    "/account/budget",
+    "(default)",
+    "tokens on",
+]
+
+
+@pytest.mark.parametrize("needle", BUDGET_CAP_STRINGS)
+def test_production_bundle_ships_the_budget_cap(needle):
+    js_files = _built_js()
+    if not js_files:
+        pytest.skip(
+            f"no built dashboard assets at {ASSETS_DIR}; run `cd dashboard && npm run build`"
+        )
+    bundle = "".join(p.read_text(encoding="utf-8", errors="ignore") for p in js_files)
+    assert needle in bundle, f"{needle!r} is not in the built dashboard bundle"

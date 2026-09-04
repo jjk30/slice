@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from app import config, metrics, pricing, redis_layer
+from app import budget, config, metrics, pricing, redis_layer
 from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import STREAM_DOWNGRADED_HEADER
 from app.admin import router as admin_router
@@ -105,6 +105,11 @@ async def lifespan(app: FastAPI):
     # cache so the proxy resolves a key without a Postgres round trip per request. With
     # no database every lookup is closed (a 401), never open — fail closed for auth.
     app.state.auth = Authenticator(app.state.db)
+
+    # Phase 25: the per-account budget cap resolver. Module-level, like the alerts engine,
+    # because the gate that reads it lives in redis_layer, which has no app. Both handles
+    # fail open inside it: no database or a failed read means the config default.
+    budget.configure(db=app.state.db, redis=app.state.redis)
 
     # Phase 6: load the RAG index once at startup. Fail-open: a missing or broken
     # embedding dependency, a model that won't load, or a load that runs long leaves the

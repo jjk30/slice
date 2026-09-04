@@ -1159,3 +1159,172 @@ def test_config_defaults_follow_the_key():
     assert _config_in_subprocess({"ALERTS_ENABLED": "true"})["enabled"] is True
     assert _config_in_subprocess({"ALERT_COOLDOWN_SECONDS": "60"})["cooldown"] == 60
     assert _config_in_subprocess({"ALERT_TIMEZONE": "Europe/London"})["tz"] == "Europe/London"
+
+
+# --- Phase 25b: per-account email recipient and per-account cooldown -------------------
+
+
+class FakeAccountStore(FakeAlertDB):
+    """The alerts writer plus the accounts rows the recipient lookup reads."""
+
+    def __init__(self, accounts=None, *, lookup_error=None):
+        super().__init__()
+        self.accounts = {int(k): v for k, v in (accounts or {}).items()}
+        self.lookup_error = lookup_error
+        self.lookups: list[int] = []
+
+    async def get_account(self, account_id):
+        self.lookups.append(int(account_id))
+        if self.lookup_error is not None:
+            raise self.lookup_error
+        row = self.accounts.get(int(account_id))
+        return dict(row) if row else None
+
+
+@pytest.fixture
+def operator_is_one(monkeypatch):
+    monkeypatch.setattr(config, "SLICE_OPERATOR_ACCOUNT_ID", 1)
+
+
+def _email_channel():
+    return ResendEmailChannel(api_key="re_test", sender="alerts@slice.test", to="ops@example.com")
+
+
+async def test_warn_for_a_user_account_goes_to_the_account_email(alerts_on, fake_redis, operator_is_one):
+    channel = FakeChannel()
+    db = FakeAccountStore({7: {"id": 7, "github_login": "ada", "email": "ada@example.com"}})
+    engine = make_engine(channel, fake_redis, db)
+
+    records = await engine.send("ada", KIND_WARN, WARN_DETAIL, account_id=7)
+
+    assert [r.status for r in records] == [ALERT_STATUS_SENT]
+    assert channel.sent[0].email_to == ["ada@example.com"]
+    assert db.lookups == [7]
+    # The real email channel addresses the Resend payload to that account, not the list.
+    payload = _email_channel().payload(channel.sent[0])
+    assert payload["to"] == ["ada@example.com"]
+    assert "ada" in payload["subject"]
+
+
+async def test_block_for_a_user_account_goes_to_the_account_email(alerts_on, fake_redis, operator_is_one):
+    channel = FakeChannel()
+    db = FakeAccountStore({7: {"id": 7, "github_login": "ada", "email": " ada@example.com "}})
+    engine = make_engine(channel, fake_redis, db)
+
+    await engine.send("ada", KIND_BLOCK, BLOCK_DETAIL, account_id=7)
+
+    assert channel.sent[0].kind == KIND_BLOCK
+    assert channel.sent[0].email_to == ["ada@example.com"]  # trimmed
+    assert _email_channel().payload(channel.sent[0])["to"] == ["ada@example.com"]
+
+
+async def test_account_without_a_saved_email_falls_back_to_alert_email_to(
+    alerts_on, fake_redis, operator_is_one
+):
+    channel = FakeChannel()
+    db = FakeAccountStore({7: {"id": 7, "github_login": "ada", "email": None}, 8: {"id": 8, "email": "   "}})
+    engine = make_engine(channel, fake_redis, db)
+
+    await engine.send("ada", KIND_WARN, WARN_DETAIL, account_id=7)
+    await engine.send("bob", KIND_WARN, WARN_DETAIL, account_id=8)
+    await engine.send("eve", KIND_WARN, WARN_DETAIL, account_id=9)  # no row at all
+
+    assert [a.email_to for a in channel.sent] == [None, None, None]
+    assert _email_channel().payload(channel.sent[0])["to"] == ["ops@example.com"]
+
+
+async def test_operator_account_uses_alert_email_to(alerts_on, fake_redis, operator_is_one):
+    channel = FakeChannel()
+    db = FakeAccountStore({1: {"id": 1, "github_login": "op", "email": "op@example.com"}})
+    engine = make_engine(channel, fake_redis, db)
+
+    await engine.send("op", KIND_BLOCK, BLOCK_DETAIL, account_id=1)
+    await engine.send("local", KIND_WARN, WARN_DETAIL)  # no account: local mode
+
+    assert [a.email_to for a in channel.sent] == [None, None]
+    assert db.lookups == []  # the operator's row is never consulted
+    assert _email_channel().payload(channel.sent[0])["to"] == ["ops@example.com"]
+
+
+async def test_recipient_lookup_failure_falls_back_and_still_sends(alerts_on, fake_redis, operator_is_one):
+    channel = FakeChannel()
+    db = FakeAccountStore({}, lookup_error=ConnectionError("postgres down"))
+    engine = make_engine(channel, fake_redis, db)
+    records = await engine.send("ada", KIND_WARN, WARN_DETAIL, account_id=7)
+    assert [r.status for r in records] == [ALERT_STATUS_SENT]
+    assert channel.sent[0].email_to is None
+
+
+async def test_cooldowns_for_two_accounts_do_not_collide(alerts_on, fake_redis, operator_is_one):
+    """Two accounts with the same label: each gets its own window, keyed by account id."""
+    channel = FakeChannel()
+    db = FakeAccountStore({
+        7: {"id": 7, "email": "ada@example.com"},
+        8: {"id": 8, "email": "bob@example.com"},
+    })
+    engine = make_engine(channel, fake_redis, db)
+
+    first = await engine.send("same-label", KIND_WARN, WARN_DETAIL, account_id=7)
+    second = await engine.send("same-label", KIND_WARN, WARN_DETAIL, account_id=8)
+    repeat = await engine.send("same-label", KIND_WARN, WARN_DETAIL, account_id=7)
+
+    assert [r.status for r in first + second] == [ALERT_STATUS_SENT, ALERT_STATUS_SENT]
+    assert [r.status for r in repeat] == [ALERT_STATUS_SKIPPED_COOLDOWN]
+    assert [a.email_to for a in channel.sent] == [["ada@example.com"], ["bob@example.com"]]
+    assert await fake_redis.exists(cooldown_key("acct:7", KIND_WARN)) == 1
+    assert await fake_redis.exists(cooldown_key("acct:8", KIND_WARN)) == 1
+    # The label alone never becomes a key once an account id is present.
+    assert await fake_redis.exists(cooldown_key("same-label", KIND_WARN)) == 0
+    assert alerts_engine.cooldown_scope("same-label", 7) == "acct:7"
+    assert alerts_engine.cooldown_scope("same-label", None) == "same-label"
+
+
+async def test_whatsapp_keeps_its_own_recipient(alerts_on, fake_redis, operator_is_one, monkeypatch):
+    """A per-account email recipient never changes where the WhatsApp channel sends."""
+    from app.alerts.whatsapp import TwilioWhatsAppChannel
+
+    seen = []
+
+    async def fake_post(*, account_sid, auth_token, from_, to, body, timeout=None, client=None):
+        seen.append(to)
+        return DeliveryResult(ok=True)
+
+    import app.alerts.whatsapp as whatsapp_module
+
+    monkeypatch.setattr(whatsapp_module, "send_whatsapp_message", fake_post)
+    channel = TwilioWhatsAppChannel(
+        account_sid="AC1", auth_token="tok", from_="whatsapp:+10000000000", to="whatsapp:+19999999999"
+    )
+    db = FakeAccountStore({7: {"id": 7, "email": "ada@example.com"}})
+    engine = make_engine(channel, fake_redis, db)
+    records = await engine.send("ada", KIND_WARN, WARN_DETAIL, account_id=7)
+    assert [r.status for r in records] == [ALERT_STATUS_SENT]
+    assert seen == ["whatsapp:+19999999999"]
+
+
+@respx.mock
+async def test_gateway_block_email_reaches_the_account_email_end_to_end(
+    client, alerts_on, fake_redis, monkeypatch, no_whatsapp_config, operator_is_one
+):
+    """Real engine, real Resend channel (mocked transport), the gateway's own fire: the
+    block email is addressed to the account that hit its cap, not ALERT_EMAIL_TO."""
+    from app import budget
+    from app.auth.resolver import Account
+
+    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
+    monkeypatch.setattr(config, "ALERT_EMAIL_TO", "ops@example.com")
+    db = FakeAccountStore({7: {"id": 7, "github_login": "ada", "email": "ada@example.com"}})
+    alerts_engine.configure(build_engine(redis=fake_redis, database=db))
+    resend = respx.post(RESEND_EMAILS_URL).mock(return_value=httpx.Response(200, json={"id": "e1"}))
+    await fake_redis.set(f"slice:budget:acct:7:{redis_layer.month_key()}", b"30")
+
+    decision = await redis_layer.check_budget(fake_redis, "acct:7", label="ada", account_id=7)
+    assert decision.blocked is True
+    await alerts_engine.drain()
+    alerts_engine.configure(None)
+
+    assert resend.call_count == 1
+    sent = json.loads(resend.calls[0].request.content)
+    assert sent["to"] == ["ada@example.com"]
+    assert "ada" in sent["subject"]
+    assert await fake_redis.exists(cooldown_key("acct:7", KIND_BLOCK)) == 1

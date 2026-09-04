@@ -107,6 +107,8 @@ async def get_spend(client: SliceClient) -> str:
 
     month = data.get("month", "this month")
     budget_cap = data.get("budget_usd")
+    # Phase 25: the cap is per account; the dashboard says whether it is the config default.
+    cap_note = "  (the default cap, set your own in the dashboard's Settings)" if data.get("budget_default") else ""
     warn_ratio = data.get("warn_ratio")
     meter = data.get("budget") or {}
 
@@ -132,7 +134,7 @@ async def get_spend(client: SliceClient) -> str:
 
     lines = [
         f"slice spend — {month}",
-        f"  budget used:  {_money(used)} of {_money(budget_cap)}  (source: {source})",
+        f"  budget used:  {_money(used)} of {_money(budget_cap)}  (source: {source}){cap_note}",
         f"  remaining:    {_money(remaining)}",
         f"  recorded spend (Postgres): {_money(spend)}",
         f"  warn ratio:   {_pct(warn_ratio)}",

@@ -231,6 +231,13 @@ SET email                = COALESCE($2, email),
 WHERE id = $1
 RETURNING id, github_id, github_login, email, whatsapp_number, profile_confirmed_at, created_at
 """
+# Phase 25: the per-account monthly budget cap. NULL means "use the default from config"
+# (migrations/019_budget_cap.sql); the read hands back the raw column so app.budget can
+# tell "no cap set" from a value. Scoped to one account id, the caller's own.
+SELECT_BUDGET_CAP = "SELECT budget_cap_usd FROM accounts WHERE id = $1"
+UPDATE_BUDGET_CAP = """
+UPDATE accounts SET budget_cap_usd = $2 WHERE id = $1 RETURNING budget_cap_usd
+"""
 INSERT_KEY = """
 INSERT INTO slice_keys (account_id, key_hash, key_prefix, name, last4)
 VALUES ($1, $2, $3, $4, $5)
@@ -1142,6 +1149,20 @@ class Database:
                 UPDATE_ACCOUNT_PROFILE, int(account_id), email, whatsapp_number
             )
         return dict(row) if row is not None else None
+
+    async def get_budget_cap(self, account_id: int):
+        """The account's own monthly cap as a Decimal, or None when unset (or no such row)."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            return await connection.fetchval(SELECT_BUDGET_CAP, int(account_id))
+
+    async def set_budget_cap(self, account_id: int, cap):
+        """Set the account's monthly cap (phase 25); returns the stored value, None if no row."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            return await connection.fetchval(UPDATE_BUDGET_CAP, int(account_id), cap)
 
     async def create_key(
         self,

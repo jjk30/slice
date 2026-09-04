@@ -294,7 +294,8 @@ message = client.messages.create(
     </div>
 
     <h3>The account cap</h3>
-    <p>Every account has a monthly cap. The <b>Account budget</b> panel shows what is used, the cap, and what is left.</p>
+    <p>Every account starts on the default cap, $25 a month. Set your own under <b>Monthly budget cap</b> in Settings.</p>
+    <p>The <b>Account budget</b> panel shows what is used, the cap, and what is left.</p>
     <ul>
       <li><b>Near the cap.</b> When spend reaches 80% of the cap, slice sends one warning email for the month. Nothing is blocked yet.</li>
       <li><b>At the cap.</b> slice blocks requests. A blocked request gets a 429 with the message <code>Monthly budget exceeded for this account.</code> and costs nothing. A block email goes out.</li>

@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from app import config, redis_layer
+from app import budget, config, redis_layer
 from app.dashboard import stats
 from app.scanner import service as scanner_service
 from app.scanner.routes import _cost_summary, _storage_scope
@@ -60,14 +60,17 @@ async def _spend_lines(db, redis, account_id: int, scope: str, now: datetime) ->
         return [f"Month: {month}", "AI spend this month: unknown (could not read the request log)"]
 
     totals = stats.summarize_requests(rows)
-    cap = Decimal(config.BUDGET_MONTHLY_USD)
+    # Phase 25: the account's own cap, or the config default when it has not set one.
+    resolved = await budget.resolve_cap(account_id, db=db, redis=redis)
+    cap = resolved.cap
+    cap_note = "the default cap" if resolved.is_default else "the cap set in Settings"
     gate_spend = await redis_layer.get_spend(redis, scope, month)
     bucket = stats.account_bucket(rows)
     view = stats.team_view(bucket, cap, gate_spend)
     lines = [
         f"Month: {month}",
         f"AI spend this month (recorded requests): {_usd(totals['spend_usd'])}",
-        f"Budget used (what the budget gate counts): {_usd(view['budget_used_usd'])} of a {_usd(cap)} monthly cap",
+        f"Budget used (what the budget gate counts): {_usd(view['budget_used_usd'])} of a {_usd(cap)} monthly cap ({cap_note})",
         f"Remaining this month: {_usd(view['remaining_usd'])}",
         f"Warning line: {int(round(float(config.BUDGET_WARN_RATIO) * 100))}% of the cap",
         f"Saved so far this month by routing to cheaper models: {_usd(totals['savings_usd'])}",

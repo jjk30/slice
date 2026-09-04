@@ -21,7 +21,7 @@ from decimal import Decimal
 
 import redis.asyncio as aioredis
 
-from app import config, metrics
+from app import budget, config, metrics
 from app.alerts import engine as alerts
 
 logger = logging.getLogger("slice.gateway")
@@ -147,7 +147,9 @@ async def check_budget(
         month = month_key()
         raw = await redis.get(f"{_BUDGET_PREFIX}:{scope}:{month}")
         spend = Decimal(raw.decode()) if raw else Decimal(0)
-        blocked = spend >= config.BUDGET_MONTHLY_USD
+        # Phase 25: the account's own cap (config.BUDGET_MONTHLY_USD is only the default).
+        cap = await budget.get_cap(account_id, redis=redis)
+        blocked = spend >= cap
         if blocked:
             metrics.record_budget_event("block")
             alerts.fire(
@@ -155,7 +157,7 @@ async def check_budget(
                 alerts.KIND_BLOCK,
                 {
                     "spend_usd": float(spend),
-                    "budget_usd": float(config.BUDGET_MONTHLY_USD),
+                    "budget_usd": float(cap),
                     "month": month,
                 },
                 account_id=account_id,
@@ -217,7 +219,9 @@ async def add_cost(
         new_total = Decimal(str(await redis.incrbyfloat(key, float(cost))))
         await redis.expire(key, _MONTH_KEY_TTL)
 
-        warn_at = config.BUDGET_MONTHLY_USD * Decimal(str(config.BUDGET_WARN_RATIO))
+        # Phase 25: the account's own cap (config.BUDGET_MONTHLY_USD is only the default).
+        cap = await budget.get_cap(account_id, redis=redis)
+        warn_at = cap * Decimal(str(config.BUDGET_WARN_RATIO))
         if new_total >= warn_at:
             warned_key = f"{_WARNED_PREFIX}:{scope}:{month}"
             # SETNX is the atomic once-per-month latch: only the first crosser
@@ -233,7 +237,7 @@ async def add_cost(
                             "scope": scope,
                             "month": month,
                             "spend_usd": float(new_total),
-                            "budget_usd": float(config.BUDGET_MONTHLY_USD),
+                            "budget_usd": float(cap),
                             "warn_ratio": config.BUDGET_WARN_RATIO,
                         }
                     )
@@ -243,7 +247,7 @@ async def add_cost(
                     alerts.KIND_WARN,
                     {
                         "spend_usd": float(new_total),
-                        "budget_usd": float(config.BUDGET_MONTHLY_USD),
+                        "budget_usd": float(cap),
                         "warn_ratio": config.BUDGET_WARN_RATIO,
                         "month": month,
                     },

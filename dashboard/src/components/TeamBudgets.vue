@@ -16,10 +16,11 @@ const props = defineProps({
 const budget = computed(() => (props.data ? props.data.budget || null : null))
 const teams = computed(() => (props.data ? props.data.teams || [] : null))
 
+// Phase 25: the cap is the account's own, or the config default; the header says which.
 const meta = computed(() => {
   if (!props.data) return ''
   const cap = money(props.data.budget_usd)
-  return `account · cap ${cap}`
+  return props.data.budget_default ? `account · cap ${cap} (default)` : `account · cap ${cap}`
 })
 
 // The one account meter: fill ratio, colour band, and aria values. "Used" is
@@ -53,10 +54,24 @@ const sourceNote = computed(() =>
   budget.value?.budget_source === 'postgres' ? 'gate counter unavailable, showing recorded spend' : ''
 )
 
-const tokensLine = computed(() => {
-  const n = budget.value?.estimated_tokens_remaining
-  if (n === null || n === undefined) return '—'
-  return `~${compactInt(n)} tokens left (estimate)`
+// Phase 25: one "about N tokens on <family>" line per Anthropic family in the gateway's
+// pricing table, computed server-side from the dollars left at the stated blend. The
+// tooltip names the blend and the list price the line assumes.
+const blend = computed(() => props.data?.token_blend || { input: 3, output: 1 })
+
+const tokenLines = computed(() => {
+  const rows = props.data?.token_estimates
+  if (!Array.isArray(rows) || rows.length === 0) return []
+  return rows.map((row) => ({
+    key: row.family,
+    text: row.tokens === null || row.tokens === undefined
+      ? `tokens on ${row.family}: unknown`
+      : `about ${compactInt(row.tokens)} tokens on ${row.family}`,
+    title:
+      `Assumes ${blend.value.input} input tokens for every ${blend.value.output} output token ` +
+      `at ${row.model}'s list price: $${row.input_usd_per_million} in and ` +
+      `$${row.output_usd_per_million} out per million tokens. An estimate, not a promise.`,
+  }))
 })
 
 const unattributed = computed(() => {
@@ -100,9 +115,11 @@ function shareLine(t) {
       >
         <div class="meter-fill" :class="meter.tone" :style="{ width: meter.widthPct + '%' }"></div>
       </div>
-      <p class="mono small tokens">
-        <span class="estimate">{{ tokensLine }}</span><span v-if="sourceNote" class="muted"> · {{ sourceNote }}</span>
-      </p>
+      <ul v-if="tokenLines.length" class="token-lines mono small" aria-label="tokens left by model, estimated">
+        <li v-for="line in tokenLines" :key="line.key" class="estimate" :title="line.title">{{ line.text }}</li>
+      </ul>
+      <p v-else class="mono small tokens"><span class="estimate">—</span></p>
+      <p v-if="sourceNote" class="mono small tokens muted">{{ sourceNote }}</p>
 
       <div v-if="teams && teams.length" class="labels">
         <div class="labels-head mono small muted">by team label</div>
@@ -148,6 +165,20 @@ function shareLine(t) {
 
 .tokens .estimate {
   color: var(--amber-text);
+}
+
+.token-lines {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.token-lines .estimate {
+  color: var(--amber-text);
+  cursor: help;
 }
 
 .labels {

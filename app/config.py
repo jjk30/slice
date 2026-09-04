@@ -224,13 +224,15 @@ ALERTS_ENABLED = _bool("ALERTS_ENABLED", RESEND_API_KEY is not None or _WHATSAPP
 # The sender. Resend's onboarding address works out of the box (to the account
 # owner's own email only) with no verified domain; set a verified-domain sender for
 # anything real. Recipients are comma-separated; unset means the email channel is not
-# configured and, with the switch on, a startup warning says so.
+# configured and, with the switch on, a startup warning says so. Phase 25b: a budget or
+# scan alert for a user account goes to that account's saved profile email instead; this
+# list gets the operator's own alerts and is the fallback for an account with no email.
 ALERT_FROM = os.getenv("ALERT_FROM", "onboarding@resend.dev")
 ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO") or None
 
-# Minimum seconds between two alerts of the same kind for the same team. The latch is a
-# Redis key (alert:cooldown:{team}:{kind}) with this TTL; a Redis outage fails open to
-# sending, never to crashing.
+# Minimum seconds between two alerts of the same kind for the same account. The latch is
+# a Redis key (alert:cooldown:acct:{id}:{kind}; the team label stands in when there is no
+# account) with this TTL; a Redis outage fails open to sending, never to crashing.
 ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "3600"))
 
 # The IANA zone the alert's timestamp is rendered in (e.g. "Aug 18, 2026, 3:20 AM EDT"),

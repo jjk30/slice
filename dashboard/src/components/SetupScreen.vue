@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getJson, AuthError } from '../api.js'
+import { getJson, getBudget, putBudget, AuthError } from '../api.js'
 import { apiBase } from '../api.js'
 import { session } from '../auth.js'
 import awsLogo from '../assets/aws-logo.png'
@@ -19,7 +19,9 @@ const props = defineProps({
     default: 'onboarding',
   },
 })
-const emit = defineEmits(['done', 'close'])
+// Phase 25: 'budget-saved' carries the PUT /account/budget reply so the dashboard's
+// Account budget panel can update its cap, used, left and bar without a reload.
+const emit = defineEmits(['done', 'close', 'budget-saved'])
 
 const isSettings = computed(() => props.mode === 'settings')
 
@@ -41,6 +43,58 @@ const connected = ref(false)
 
 const emailValid = computed(() => EMAIL_RE.test(email.value.trim()))
 const showAws = computed(() => awsMode.value === 'connect')
+
+// Phase 25: the monthly budget cap, Settings only. The field holds the current cap
+// (the config default until the user sets one); Save PUTs it and shows the reply.
+const capInput = ref('')
+const capIsDefault = ref(false)
+const capLoaded = ref(false)
+const capSaving = ref(false)
+const capError = ref('')
+const capNotice = ref('')
+
+const capNumber = computed(() => {
+  const raw = String(capInput.value).trim()
+  if (raw === '') return NaN
+  return Number(raw)
+})
+// Mirrors the gateway's rule so the button only enables for a value it will accept.
+const capValid = computed(() => {
+  const n = capNumber.value
+  if (!Number.isFinite(n) || n < 1 || n > 10000) return false
+  return Math.round(n * 100) === n * 100
+})
+
+async function loadBudget() {
+  try {
+    const b = await getBudget()
+    capInput.value = typeof b.cap_usd === 'number' ? b.cap_usd.toFixed(2) : ''
+    capIsDefault.value = Boolean(b.is_default)
+    capLoaded.value = true
+  } catch (e) {
+    if (e instanceof AuthError) session.value = null
+    capError.value = 'Could not read the current cap.'
+  }
+}
+
+async function saveBudget() {
+  if (!capValid.value || capSaving.value) return
+  capSaving.value = true
+  capError.value = ''
+  capNotice.value = ''
+  try {
+    const reply = await putBudget(Number(capNumber.value.toFixed(2)))
+    capInput.value = typeof reply.cap_usd === 'number' ? reply.cap_usd.toFixed(2) : capInput.value
+    capIsDefault.value = Boolean(reply.is_default)
+    capNotice.value = reply.message || 'Saved.'
+    emit('budget-saved', reply)
+  } catch (e) {
+    if (e instanceof AuthError) return
+    capError.value = e && e.message ? e.message : 'Could not save the cap. Try again.'
+  } finally {
+    capSaving.value = false
+  }
+}
 
 // Read GET /scanner/connect and reflect it into the AWS block. Used on mount and
 // again right after a successful connect so the status shows what the backend now sees.
@@ -66,6 +120,7 @@ onMounted(async () => {
     if (e instanceof AuthError) session.value = null
   }
   await loadConnect()
+  if (isSettings.value) await loadBudget()
 })
 
 async function saveAndContinue() {
@@ -188,6 +243,32 @@ async function connectAws() {
         <p v-if="connectError" class="aws-err" role="alert">{{ connectError }}</p>
       </section>
 
+      <section v-if="isSettings" class="budget">
+        <label class="field">
+          <span class="label">Monthly budget cap<span v-if="capLoaded && capIsDefault" class="cap-default"> (default)</span></span>
+          <div class="key-row">
+            <span class="cap-prefix mono">$</span>
+            <input
+              v-model="capInput"
+              type="number"
+              inputmode="decimal"
+              min="1"
+              max="10000"
+              step="0.01"
+              class="input mono"
+              placeholder="25.00"
+              aria-label="Monthly budget cap in dollars"
+            />
+            <button type="button" class="connect" :disabled="!capValid || capSaving" @click="saveBudget">
+              {{ capSaving ? 'Saving' : 'Save' }}
+            </button>
+          </div>
+        </label>
+        <p class="aws-lede">slice blocks your requests when spend reaches this. It warns you by email at 80%.</p>
+        <p v-if="capNotice" class="cap-ok" role="status">{{ capNotice }}</p>
+        <p v-if="capError" class="aws-err" role="alert">{{ capError }}</p>
+      </section>
+
       <p v-if="saveError" class="aws-err" role="alert">{{ saveError }}</p>
       <button type="button" class="submit" :disabled="!emailValid || saving" @click="saveAndContinue">
         {{ saving ? 'Saving…' : (isSettings ? 'Save' : 'Save and continue') }}
@@ -280,6 +361,30 @@ async function connectAws() {
   gap: 8px;
   padding: var(--s2) 0 0;
   border-top: 1px solid var(--line);
+}
+
+.budget {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--s2) 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.cap-prefix {
+  align-self: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cap-default {
+  color: var(--muted);
+}
+
+.cap-ok {
+  margin: 0;
+  font-size: 12px;
+  color: var(--teal);
 }
 
 .aws-lede {

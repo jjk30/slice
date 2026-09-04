@@ -72,6 +72,34 @@ function onSettingsClose() {
   settingsOpen.value = false
 }
 
+// Phase 25: the cap was saved on the Settings screen. Patch the Account budget payload
+// at once (cap, left, default flag) so the panel is right the moment it is shown again,
+// then refetch /dashboard/teams for the per-model token lines. No page reload.
+function onBudgetSaved(reply) {
+  const t = teams.value
+  if (t && typeof reply?.cap_usd === 'number') {
+    const cap = reply.cap_usd
+    const b = t.budget || {}
+    const used = typeof b.budget_used_usd === 'number' ? b.budget_used_usd : 0
+    teams.value = {
+      ...t,
+      budget_usd: cap,
+      budget_default: Boolean(reply.is_default),
+      budget: { ...b, budget_usd: cap, remaining_usd: Math.max(0, cap - used) },
+    }
+  }
+  refreshTeams()
+}
+
+async function refreshTeams() {
+  try {
+    teams.value = await getJson('/dashboard/teams')
+  } catch (e) {
+    // A failed refresh keeps the patched payload; the next live event retries.
+    if (e instanceof AuthError) session.value = null
+  }
+}
+
 async function onLogout() {
   // Close the live stream first, then clear the cookie server-side, so nothing keeps
   // pulling the old session's data on the way out.
@@ -343,6 +371,7 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
     mode="settings"
     @done="onSettingsClose"
     @close="onSettingsClose"
+    @budget-saved="onBudgetSaved"
   />
   <div v-else class="page">
     <header class="header">

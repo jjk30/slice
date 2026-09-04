@@ -45,12 +45,18 @@ class Alert:
     ``detail`` is free-form but the budget paths always put ``spend_usd`` and
     ``budget_usd`` in it (plus ``month`` and, on a warn, ``warn_ratio``); the formatters
     below read those and tolerate their absence.
+
+    ``email_to`` (phase 25b) is the per-account email recipient the engine resolved: the
+    account's saved profile email, or None for "the channel's configured list"
+    (``ALERT_EMAIL_TO``). Only the email channel reads it; WhatsApp and any other channel
+    keep their own recipient rule.
     """
 
     team: str
     kind: str
     detail: dict = field(default_factory=dict)
     ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    email_to: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -462,9 +468,11 @@ class ResendEmailChannel:
         return bool(self._api_key and self._sender and self._to)
 
     def payload(self, alert: Alert) -> dict:
+        # Phase 25b: an alert resolved to an account's own email goes there; anything
+        # else goes to the configured ALERT_EMAIL_TO list.
         return {
             "from": self._sender,
-            "to": list(self._to),
+            "to": list(alert.email_to) if alert.email_to else list(self._to),
             "subject": subject_for(alert),
             "text": body_for(alert),
         }

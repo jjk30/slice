@@ -11,12 +11,20 @@ wrapped, so a broken channel, a down Redis, or a down database ends in a log lin
 a traceback in the request's task. Per call:
 
 1. Kill switch: ``config.ALERTS_ENABLED`` false → no-op.
-2. Cooldown: ``SET alert:cooldown:{team}:{kind} 1 NX EX ALERT_COOLDOWN_SECONDS``, one
+2. Cooldown: ``SET alert:cooldown:{scope}:{kind} 1 NX EX ALERT_COOLDOWN_SECONDS``, one
    atomic Redis op. Key already there → every channel records ``skipped_cooldown`` and
    nothing is sent. Redis unreachable → fail open, send anyway. The latch is set
    *before* sending, on purpose: a failing provider is then tried once per cooldown
-   window per team per kind, not once per blocked request.
-3. Every channel gets the same ``Alert``; its ``DeliveryResult`` becomes one ``alerts``
+   window per scope per kind, not once per blocked request. Phase 25b: the scope is
+   ``acct:<id>`` whenever the alert carries an account id, so two accounts never share
+   a window even if their labels collide; the team label is the scope only for an
+   alert with no account (local single-tenant mode).
+3. Phase 25b: the email recipient is resolved per account — the account's saved
+   profile email (``accounts.email``) — and falls back to the channel's configured
+   ``ALERT_EMAIL_TO`` when the account has no saved email, when the alert carries no
+   account, when the account is the operator (``SLICE_OPERATOR_ACCOUNT_ID``), or when
+   the store cannot be read. Only the email channel uses it.
+4. Every channel gets the same ``Alert``; its ``DeliveryResult`` becomes one ``alerts``
    row (``sent`` or ``failed``), written fire-and-forget like request logging.
 
 The engine is a small object holding its channels, the Redis client, and the database,
@@ -49,7 +57,8 @@ from app.db import (
 
 logger = logging.getLogger("slice.gateway")
 
-# Exact key shape (no "slice:" prefix — this is the documented name).
+# Exact key shape (no "slice:" prefix — this is the documented name). ``{team}`` is the
+# cooldown scope: ``acct:<id>`` for an alert with an account id, else the team label.
 COOLDOWN_KEY = "alert:cooldown:{team}:{kind}"
 
 # Detached tasks are kept referenced until they finish: asyncio only holds a weak
@@ -59,6 +68,20 @@ _pending: set[asyncio.Task] = set()
 
 def cooldown_key(team: str, kind: str) -> str:
     return COOLDOWN_KEY.format(team=team, kind=kind)
+
+
+def cooldown_scope(team: str, account_id: int | None) -> str:
+    """The cooldown key's scope: the account id when there is one, else the team label."""
+    return f"acct:{account_id}" if account_id is not None else team
+
+
+def is_operator(account_id: int | None) -> bool:
+    """The one account whose alerts go to the operator's own ALERT_EMAIL_TO list.
+
+    The same rule the scanner uses for slice's own infrastructure: no account (local
+    single-tenant mode) or ``SLICE_OPERATOR_ACCOUNT_ID``.
+    """
+    return account_id is None or account_id == config.SLICE_OPERATOR_ACCOUNT_ID
 
 
 class AlertEngine:
@@ -92,6 +115,31 @@ class AlertEngine:
                 json.dumps({"event": "redis_skip", "feature": "alert_cooldown", "error": str(exc)})
             )
             return False
+
+    # --- recipient ----------------------------------------------------------------
+
+    async def _email_recipient(self, account_id: int | None) -> list[str] | None:
+        """The account's saved profile email, or None for the configured ALERT_EMAIL_TO.
+
+        None (the fallback) for the operator, for an alert with no account, for an
+        account with no saved email, and for a store that cannot be read.
+        """
+        if is_operator(account_id):
+            return None
+        db = self.database
+        if db is None or not getattr(db, "enabled", False):
+            return None
+        try:
+            row = await db.get_account(account_id)
+        except Exception as exc:  # noqa: BLE001 — a sick store means the operator hears instead.
+            logger.debug(
+                json.dumps({"event": "alert_recipient_lookup_failed", "account_id": account_id, "error": str(exc)})
+            )
+            return None
+        email = (row or {}).get("email")
+        if isinstance(email, str) and email.strip():
+            return [email.strip()]
+        return None
 
     # --- delivery ---------------------------------------------------------------
 
@@ -127,8 +175,10 @@ class AlertEngine:
 
         Returns the attempt records (one per channel), mostly for tests and callers
         that want to look; the request path ignores the return value. ``team`` is the
-        human label the copy and the cooldown key use (the account's login since phase
-        12); ``account_id`` is stamped on every alerts row so the summary can be filtered.
+        human label the copy uses (the account's login since phase 12); ``account_id``
+        is stamped on every alerts row so the summary can be filtered, scopes the
+        cooldown key (phase 25b), and picks the email recipient (the account's saved
+        email, else ALERT_EMAIL_TO).
         """
         records: list[AlertRecord] = []
         try:
@@ -140,9 +190,10 @@ class AlertEngine:
 
             detail = dict(detail or {})
             now = datetime.now(timezone.utc)
-            alert = Alert(team=team, kind=kind, detail=detail, ts=now)
+            email_to = await self._email_recipient(account_id)
+            alert = Alert(team=team, kind=kind, detail=detail, ts=now, email_to=email_to)
 
-            if await self._in_cooldown(team, kind):
+            if await self._in_cooldown(cooldown_scope(team, account_id), kind):
                 for channel in self.channels:
                     record = AlertRecord(
                         team=team, kind=kind, channel=channel.name,

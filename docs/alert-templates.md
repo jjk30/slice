@@ -22,7 +22,8 @@ short, plain, no jargon.
 ## Budget warn — live
 
 Fires once per team per month, the first time spend crosses `BUDGET_WARN_RATIO` (default
-80%) of `BUDGET_MONTHLY_USD`. `{percent}` is that ratio.
+80%) of the account's monthly cap (its own, set in the dashboard's Settings, or the
+`BUDGET_MONTHLY_USD` default). `{cap}` is that account's cap. `{percent}` is that ratio.
 
 **Subject:** `slice: {team} has used {percent}% of its monthly AI budget`
 

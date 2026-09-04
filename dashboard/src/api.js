@@ -116,3 +116,14 @@ export function setExpected(check, resourceId, expected) {
     resource_id: resourceId,
   })
 }
+
+// Phase 25: the account's monthly budget cap. GET says the current cap and whether it is
+// the config default; PUT sets it (a number, 1 to 10000, two decimals) and answers with
+// the new cap plus `below_spend` when this month's spend is already past it.
+export function getBudget() {
+  return getJson('/account/budget')
+}
+
+export function putBudget(capUsd) {
+  return sendJson('PUT', '/account/budget', { cap_usd: capUsd })
+}

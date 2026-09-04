@@ -3,6 +3,11 @@
     GET  /account/profile  -> {login, email, whatsapp_number, aws_connected}
     PUT  /account/profile  <- {email?, whatsapp_number?}
 
+Phase 25: the account's monthly budget cap.
+
+    GET  /account/budget   -> {cap_usd, is_default, default_cap_usd, min_cap_usd, max_cap_usd}
+    PUT  /account/budget   <- {cap_usd: number}  (signed-in dashboard session only)
+
 Both are locked to a slice key (see ``LOCKED_PREFIXES`` in app/auth/middleware.py) and
 strictly per account: every read and write is scoped to the caller's own ``account.id``.
 ``aws_connected`` is a pure read of the Phase 18 connection row — it is never rebuilt here.
@@ -14,12 +19,18 @@ client that already speaks Anthropic errors handles a bad email or phone the sam
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from app import budget, redis_layer
 from app.auth.middleware import read_account
+from app.dashboard import stats
+
+logger = logging.getLogger("slice.gateway")
 
 router = APIRouter(prefix="/account", tags=["account"])
 
@@ -157,4 +168,102 @@ async def put_profile(request: Request):
         "email": saved_email,
         "whatsapp_number": saved_whatsapp,
         "aws_connected": await _aws_connected(db, account.id),
+    }
+
+
+# --- Phase 25: the monthly budget cap ---------------------------------------------
+
+
+def _budget_shape(resolved: budget.CapResolution) -> dict:
+    return {
+        "cap_usd": stats.money(resolved.cap),
+        "is_default": resolved.is_default,
+        "default_cap_usd": stats.money(budget.default_cap()),
+        "min_cap_usd": stats.money(budget.CAP_MIN),
+        "max_cap_usd": stats.money(budget.CAP_MAX),
+    }
+
+
+@router.get("/budget")
+async def get_budget(request: Request):
+    """This account's monthly cap, and whether it is the config default."""
+    account = read_account(request)
+    if account is None or account.id is None:
+        return _unauthorized()
+    db = _db(request)
+    redis = getattr(request.app.state, "redis", None)
+    resolved = await budget.resolve_cap(account.id, db=db, redis=redis)
+    return _budget_shape(resolved)
+
+
+@router.put("/budget")
+async def put_budget(request: Request):
+    """Set this account's monthly cap: a number, 1 to 10000, at most two decimals.
+
+    Only the signed-in dashboard session may set it: a request that authenticated with
+    a slice key is refused, so a leaked key can never raise the cap. A cap below this
+    month's spend is accepted and said so in the response; the next request blocks.
+    """
+    account = read_account(request)
+    if account is None or account.id is None:
+        return _unauthorized()
+    if account.key_id is not None:
+        return _anthropic_error(
+            403, "permission_error",
+            "The budget cap can only be set from the dashboard while signed in, not with a slice key.",
+        )
+
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON is a client error.
+        return _anthropic_error(400, "invalid_request_error", "Request body is not valid JSON.")
+    if not isinstance(body, dict) or "cap_usd" not in body:
+        return _anthropic_error(
+            400, "invalid_request_error", "Request body must be a JSON object with cap_usd."
+        )
+    cap, problem = budget.validate_cap(body.get("cap_usd"))
+    if problem is not None:
+        return _anthropic_error(400, "invalid_request_error", problem)
+
+    db = _db(request)
+    if not _db_ready(db):
+        return _anthropic_error(
+            503, "api_error", "The account store is temporarily unavailable. Try again shortly."
+        )
+    redis = getattr(request.app.state, "redis", None)
+    try:
+        stored = await budget.set_cap(account.id, cap, db=db, redis=redis)
+    except Exception:  # noqa: BLE001 — surface a clean 503 rather than a 500 stack.
+        return _anthropic_error(
+            503, "api_error", "The account store is temporarily unavailable. Try again shortly."
+        )
+
+    # What the gate counts this month, so the response can say when the new cap is
+    # already behind it. Unknown (Redis down) reads as "not below".
+    spend = await redis_layer.get_spend(redis, account.scope)
+    below_spend = spend is not None and spend >= stored
+    if below_spend:
+        message = (
+            f"Cap set to ${stored:,.2f}. Spend this month is already ${spend:,.2f}, "
+            "so the next request will be blocked."
+        )
+    else:
+        message = f"Cap set to ${stored:,.2f}."
+    logger.info(
+        json.dumps(
+            {
+                "event": "budget_cap_set",
+                "account_id": account.id,
+                "cap_usd": float(stored),
+                "spend_usd": stats.money(spend),
+                "below_spend": below_spend,
+            }
+        )
+    )
+    resolved = budget.CapResolution(stored, False, "postgres")
+    return {
+        **_budget_shape(resolved),
+        "spend_usd": stats.money(spend),
+        "below_spend": below_spend,
+        "message": message,
     }
