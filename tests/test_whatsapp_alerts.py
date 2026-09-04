@@ -125,7 +125,7 @@ async def test_send_builds_expected_url_auth_and_form_body():
     form = {k: v[0] for k, v in parse_qs(sent.content.decode()).items()}
     assert form["From"] == FROM
     assert form["To"] == TO
-    assert "team-a" in form["Body"] and "$21.00 of its $25.00" in form["Body"]
+    assert "You have spent $21.00 of your $25.00" in form["Body"]
     assert set(form) == {"From", "To", "Body"}
 
 

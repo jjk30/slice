@@ -33,9 +33,13 @@ MAX_FINDINGS = 10
 
 
 def _usd(value) -> str:
+    """``$12.34``; a positive amount under one cent is ``less than a cent`` (phase 26), never
+    a false ``$0.00``. An exact zero is still ``$0.00``."""
     amount = stats.as_decimal(value)
     if amount is None:
         return "unknown"
+    if Decimal("0") < amount < Decimal("0.01"):
+        return "less than a cent"
     return f"${amount.quantize(Decimal('0.01')):,}"
 
 

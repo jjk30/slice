@@ -19,16 +19,26 @@ from __future__ import annotations
 
 from app.guardrails.engine import (
     GUARDRAIL_HEADER,
+    LABEL_BLOCKED,
+    LABEL_GENERAL,
+    LABEL_OWN_DATA,
+    LABELS,
     RAIL_INPUT,
     RAIL_OUTPUT,
     GuardrailEngine,
     RailOutcome,
     build_engine,
+    parse_label,
 )
 from app.guardrails.events import record_event
 
 __all__ = [
     "GUARDRAIL_HEADER",
+    "LABEL_BLOCKED",
+    "LABEL_GENERAL",
+    "LABEL_OWN_DATA",
+    "LABELS",
+    "parse_label",
     "RAIL_INPUT",
     "RAIL_OUTPUT",
     "GuardrailEngine",

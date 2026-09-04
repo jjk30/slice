@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 WEBSITE = ROOT / "website"
 HOW_TO = WEBSITE / "how-to.html"
 INDEX = WEBSITE / "index.html"
+# The email logo (phase 26): served at https://sliceapp.dev/logo.png, shown at 48 CSS px.
+LOGO = WEBSITE / "logo.png"
 DASHBOARD_APP = ROOT / "dashboard" / "src" / "App.vue"
 PYPROJECT = ROOT / "pyproject.toml"
 
@@ -54,6 +56,23 @@ def how_to() -> str:
     return HOW_TO.read_text(encoding="utf-8")
 
 
+def test_logo_png_exists_and_is_192px_wide():
+    """The email HTML points at https://sliceapp.dev/logo.png (app/alerts/channels.py); the
+    file must exist here, be a real PNG (not JPEG bytes under a .png name), and be 192px
+    wide so it stays sharp at 48 CSS px on 2x and 3x screens."""
+    import struct
+
+    from app.alerts.channels import LOGO_URL
+
+    assert LOGO.is_file(), f"missing {LOGO}"
+    assert LOGO_URL == "https://sliceapp.dev/logo.png"
+    head = LOGO.read_bytes()[:24]
+    assert head[:8] == b"\x89PNG\r\n\x1a\n", "logo.png is not a PNG"
+    width, height = struct.unpack(">II", head[16:24])
+    assert width == 192 and height >= 96
+    assert LOGO.stat().st_size < 100 * 1024
+
+
 def test_how_to_page_exists_and_is_html(how_to):
     assert how_to.lstrip().lower().startswith("<!doctype html>")
     assert "<title>" in how_to
@@ -74,6 +93,12 @@ def test_how_to_sections_are_in_order(how_to):
 def test_how_to_page_carries_no_secret(how_to, name, pattern):
     hit = re.search(pattern, how_to)
     assert hit is None, f"{name} shaped string on the page: {hit.group(0)[:12]}..."
+
+
+def test_how_to_step_04_says_spend_is_an_estimate(how_to):
+    """Phase 26: the spend tile is honest about where its number comes from."""
+    assert "slice's estimate, worked out from token counts at list prices" in how_to
+    assert "your Anthropic bill is the true figure" in how_to
 
 
 def test_how_to_page_has_no_em_dash(how_to):

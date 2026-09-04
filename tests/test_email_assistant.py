@@ -14,24 +14,32 @@ import json
 import time
 from decimal import Decimal
 
+import fakeredis.aioredis
 import httpx
 import pytest
 
 from app import config
-from app.alerts.channels import FOOTER_NOTE, DeliveryResult, ResendEmailChannel
+from app.alerts.channels import FOOTER_AI_SETUP, FOOTER_GENERAL, FOOTER_NOTE, DeliveryResult, ResendEmailChannel, render_html
 from app.email_assistant import service
+from app.email_assistant.context import _usd
 from app.email_assistant.service import (
     FIXED_LINE,
+    GENERAL_DISCLAIMER,
+    GENERAL_SYSTEM_PROMPT,
+    LIMIT_LINE,
     SYSTEM_PROMPT,
     EmailAssistant,
     InboundEvent,
+    count_reply,
+    daily_key,
     new_text,
     reply_subject,
     strip_quoted,
     tidy_answer,
+    tidy_general,
 )
 from app.email_assistant.signature import verify_signature
-from app.guardrails import RailOutcome
+from app.guardrails import LABEL_BLOCKED, LABEL_GENERAL, LABEL_OWN_DATA, RailOutcome
 from app.main import app
 
 SECRET_BYTES = b"0123456789abcdef0123456789abcdef"
@@ -131,15 +139,20 @@ class FakeEmailDB:
 
 
 class FakeEngine:
+    """The email rails engine: ``classify_input`` (the three-way topic rail) and ``check_output``."""
+
     def __init__(self, input_outcome=None, output_outcome=None):
-        self.input_outcome = input_outcome or RailOutcome()
+        self.input_outcome = input_outcome or RailOutcome(label=LABEL_OWN_DATA)
         self.output_outcome = output_outcome or RailOutcome()
         self.input_calls: list[str] = []
         self.output_calls: list[str] = []
 
-    async def check_input(self, prompt):
+    async def classify_input(self, prompt):
         self.input_calls.append(prompt)
         return self.input_outcome
+
+    async def check_input(self, prompt):  # the Yes/No form; the assistant no longer calls it
+        raise AssertionError("the email assistant must use classify_input")
 
     async def check_output(self, answer):
         self.output_calls.append(answer)
@@ -153,7 +166,7 @@ class Fakes:
         self.received = {"text": text, "html": html, "headers": headers or {}}
         self.fetch_calls: list[str] = []
         self.sent: list[dict] = []
-        self.answer_calls: list[tuple[str, str]] = []
+        self.answer_calls: list[tuple[str, str, str]] = []
         self.canned_answer = answer
         self.answer_error = answer_error
         self.send_ok = True
@@ -166,8 +179,8 @@ class Fakes:
         self.sent.append({"to": to, "subject": subject, "text": text, "headers": dict(headers or {})})
         return DeliveryResult(ok=self.send_ok, error=None if self.send_ok else "HTTP 500: boom")
 
-    async def answer(self, system, user):
-        self.answer_calls.append((system, user))
+    async def answer(self, system, user, model):
+        self.answer_calls.append((system, user, model))
         if self.answer_error is not None:
             raise self.answer_error
         return self.canned_answer
@@ -187,9 +200,9 @@ def env(monkeypatch):
     prev_db, prev_assistant = getattr(app.state, "db", None), getattr(app.state, "email_assistant", None)
     app.state.db = db
 
-    def install(*, engine=engine, fakes=fakes):
+    def install(*, engine=engine, fakes=fakes, redis=None):
         assistant = EmailAssistant(
-            db=db, redis=None, guardrails=engine,
+            db=db, redis=redis, guardrails=engine,
             fetch_body=fakes.fetch_body, send_reply=fakes.send_reply, answer=fakes.answer,
         )
         app.state.email_assistant = assistant
@@ -286,9 +299,28 @@ def test_reply_subject_and_tidy_answer():
     assert reply_subject(SUBJECT) == "Re: " + SUBJECT
     assert reply_subject("Re: " + SUBJECT) == "Re: " + SUBJECT
     assert reply_subject("") == "Re: your slice alert"
-    assert tidy_answer("You spent $1 — about half.").endswith(FOOTER_NOTE)
+    # Phase 26: an own-data reply ends with the AI setup line, not the AWS line.
+    assert tidy_answer("You spent $1 \u2014 about half.").endswith(FOOTER_AI_SETUP)
+    assert FOOTER_NOTE not in tidy_answer("hi")
     assert "—" not in tidy_answer("a — b")
-    assert tidy_answer("Done.\n\n" + FOOTER_NOTE).count(FOOTER_NOTE) == 1
+    assert tidy_answer("Done.\n\n" + FOOTER_AI_SETUP).count(FOOTER_AI_SETUP) == 1
+    # A general reply starts with the disclaimer and ends with the general line, once each.
+    general = tidy_general("Sonnet is fine for most work.")
+    assert general.startswith(GENERAL_DISCLAIMER + "\n\n")
+    assert general.endswith("\n\n" + FOOTER_GENERAL)
+    already = tidy_general(GENERAL_DISCLAIMER + "\nSonnet is fine.\n\n" + FOOTER_GENERAL)
+    assert already.count(GENERAL_DISCLAIMER) == 1 and already.count(FOOTER_GENERAL) == 1
+    assert already.startswith(GENERAL_DISCLAIMER)
+
+
+def test_context_money_under_a_cent():
+    """Phase 26: a positive amount under one cent reads "less than a cent", never $0.00."""
+    assert _usd(Decimal("0.0045")) == "less than a cent"
+    assert _usd(0.001) == "less than a cent"
+    assert _usd(Decimal("0.01")) == "$0.01"
+    assert _usd(0) == "$0.00"
+    assert _usd(Decimal("12.34")) == "$12.34" and _usd(1234.5) == "$1,234.50"
+    assert _usd(None) == "unknown"
 
 
 # --- Route: gates before the pipeline ----------------------------------------
@@ -355,7 +387,7 @@ async def test_unknown_sender_sends_nothing(client, env):
 
 
 async def test_blocked_input_sends_the_fixed_line(client, env):
-    env.engine.input_outcome = RailOutcome(blocked=True, reason="self check input")
+    env.engine.input_outcome = RailOutcome(blocked=True, reason="topic rail", label=LABEL_BLOCKED)
     response = await post(client, received_event())
     assert response.status_code == 202
     assert env.db.replies["em_1"]["verdict"] == "blocked_input"
@@ -381,6 +413,21 @@ async def test_errored_or_missing_input_rail_fails_closed(client, env):
     assert env.fakes.answer_calls == []
 
 
+async def test_unknown_label_blocks(client, env):
+    """The rail answered with something that is not one of the three labels: fail closed."""
+    for email_id, outcome in (
+        ("em_u1", RailOutcome(label="maybe")),
+        ("em_u2", RailOutcome(blocked=True, reason="unknown label")),
+        ("em_u3", RailOutcome()),  # a bare pass with no label is not a bucket either
+    ):
+        env.engine.input_outcome = outcome
+        await post(client, received_event(email_id=email_id))
+        assert env.db.replies[email_id]["verdict"] == "blocked_input"
+        assert env.fakes.sent[-1]["text"] == FIXED_LINE
+    assert env.fakes.answer_calls == []
+    assert len(env.fakes.sent) == 3
+
+
 async def test_blocked_output_sends_the_fixed_line(client, env):
     env.engine.output_outcome = RailOutcome(blocked=True, reason="self check output")
     await post(client, received_event())
@@ -389,7 +436,7 @@ async def test_blocked_output_sends_the_fixed_line(client, env):
     assert len(env.fakes.sent) == 1
     assert env.fakes.sent[0]["text"] == FIXED_LINE
     # The output rail saw the tidied answer (footer included), not the fixed line.
-    assert env.engine.output_calls[0].endswith(FOOTER_NOTE)
+    assert env.engine.output_calls[0].endswith(FOOTER_AI_SETUP)
 
 
 async def test_answered_path_sends_a_threaded_reply(client, env):
@@ -414,19 +461,23 @@ async def test_answered_path_sends_a_threaded_reply(client, env):
     assert response.status_code == 202
     assert response.json() == {"status": "accepted"}
     assert env.fakes.fetch_calls == ["em_1"]
-    assert env.db.replies["em_1"]["verdict"] == "answered"
+    assert env.db.replies["em_1"]["verdict"] == "answered_own"
     assert env.db.replies["em_1"]["account_id"] == 7
 
     # The rails saw the new text only, then the tidied answer.
     assert env.engine.input_calls == ["What did I spend this month?"]
-    assert env.engine.output_calls[0].endswith(FOOTER_NOTE)
+    assert env.engine.output_calls[0].endswith(FOOTER_AI_SETUP)
 
-    # One model call: the fixed system prompt, and a user turn built from the read-only context.
+    # One model call on the context model: the fixed system prompt, and a user turn built
+    # from the read-only context.
     assert len(env.fakes.answer_calls) == 1
-    system, user = env.fakes.answer_calls[0]
+    system, user, model = env.fakes.answer_calls[0]
     assert system == SYSTEM_PROMPT
+    assert model == config.EMAIL_ASSISTANT_MODEL
     assert "Account: ada" in user
-    assert "$0.00" in user or "$0.0045" in user or "AI spend this month" in user
+    # Phase 26: $0.0045 of spend is "less than a cent", never a false $0.00.
+    assert "AI spend this month (recorded requests): less than a cent" in user
+    assert "$0.00" not in user
     assert "$25.00 monthly cap" in user
     assert "routed down 3" in user
     assert "claude-haiku-4-5-20251001: 3 requests" in user
@@ -442,7 +493,128 @@ async def test_answered_path_sends_a_threaded_reply(client, env):
     assert sent["subject"] == "Re: " + SUBJECT
     assert sent["headers"] == {"In-Reply-To": MESSAGE_ID, "References": MESSAGE_ID}
     assert sent["text"].startswith("You spent $1.50 this month.")
-    assert sent["text"].endswith(FOOTER_NOTE)
+    assert sent["text"].endswith(FOOTER_AI_SETUP)
+    assert GENERAL_DISCLAIMER not in sent["text"]
+
+
+async def test_general_question_goes_to_the_general_model_with_the_disclaimer(client, env, monkeypatch):
+    """Phase 26: a general question is answered by EMAIL_ASSISTANT_GENERAL_MODEL from its own
+    knowledge, with no account data in the prompt, the disclaimer first, the general footer last."""
+    monkeypatch.setattr(config, "EMAIL_ASSISTANT_GENERAL_MODEL", "claude-sonnet-5")
+    monkeypatch.setattr(config, "EMAIL_ASSISTANT_MODEL", "claude-haiku-4-5-20251001")
+    env.db.rows = [{"team": "core", "model": "m", "status": 200, "cached": False, "routed_from": None,
+                    "n": 1, "input_tokens": 10, "output_tokens": 1, "cost_usd": Decimal("0.5")}]
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.fakes.received["text"] = "Is Opus worth it over Sonnet for coding?"
+    env.fakes.canned_answer = GENERAL_DISCLAIMER + "\n\nFor most coding Sonnet is enough.\n\n" + FOOTER_GENERAL
+
+    await post(client, received_event())
+    assert env.db.replies["em_1"]["verdict"] == "answered_general"
+
+    assert len(env.fakes.answer_calls) == 1
+    system, user, model = env.fakes.answer_calls[0]
+    assert system == GENERAL_SYSTEM_PROMPT
+    assert model == "claude-sonnet-5"
+    # The general rules: disclaimer first, no claim to know the setup, same plain-words
+    # rules, the general footer last.
+    assert "Start the reply with exactly this line" in system and GENERAL_DISCLAIMER in system
+    assert "must not claim to" in system
+    assert "under 150 words" in system and "No em dashes" in system
+    assert "Never give AWS commands, CLI commands, scripts, code, or policy text" in system
+    assert system.endswith(FOOTER_GENERAL)
+    # No account data at all in the user turn: only the question.
+    assert "Is Opus worth it over Sonnet for coding?" in user
+    assert "Account:" not in user and "$0.50" not in user and "Context" not in user
+
+    # The output rail still runs, on the tidied general reply.
+    assert env.engine.output_calls == [env.fakes.sent[0]["text"]]
+    text = env.fakes.sent[0]["text"]
+    assert text.startswith(GENERAL_DISCLAIMER + "\n")
+    assert text.endswith(FOOTER_GENERAL)
+    assert FOOTER_AI_SETUP not in text
+
+
+async def test_general_reply_gets_the_disclaimer_even_when_the_model_forgets(client, env):
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.fakes.canned_answer = "Pick Postgres unless you need a document store \u2014 it is the safe default."
+    await post(client, received_event())
+    text = env.fakes.sent[0]["text"]
+    assert text.startswith(GENERAL_DISCLAIMER + "\n\nPick Postgres")
+    assert "\u2014" not in text
+    assert text.endswith(FOOTER_GENERAL)
+    assert env.db.replies["em_1"]["verdict"] == "answered_general"
+
+
+async def test_blocked_output_on_a_general_reply_sends_the_fixed_line(client, env):
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.engine.output_outcome = RailOutcome(blocked=True, reason="self check output")
+    await post(client, received_event())
+    assert env.db.replies["em_1"]["verdict"] == "blocked_output"
+    assert env.fakes.sent[0]["text"] == FIXED_LINE
+    assert env.fakes.answer_calls[0][2] == config.EMAIL_ASSISTANT_GENERAL_MODEL
+
+
+async def test_daily_limit_replies_once_then_stays_silent(client, env, monkeypatch):
+    """Phase 26: at most EMAIL_ASSISTANT_DAILY_LIMIT replies per account per UTC day."""
+    monkeypatch.setattr(config, "EMAIL_ASSISTANT_DAILY_LIMIT", 2)
+    redis = fakeredis.aioredis.FakeRedis()
+    env.install(redis=redis)
+
+    # Two replies fit (a blocked one counts too: it is still a reply).
+    await post(client, received_event(email_id="em_1"))
+    env.engine.input_outcome = RailOutcome(blocked=True, reason="topic rail", label=LABEL_BLOCKED)
+    await post(client, received_event(email_id="em_2"))
+    env.engine.input_outcome = RailOutcome(label=LABEL_OWN_DATA)
+    assert env.db.replies["em_1"]["verdict"] == "answered_own"
+    assert env.db.replies["em_2"]["verdict"] == "blocked_input"
+    assert [m["text"] for m in env.fakes.sent] == [env.fakes.sent[0]["text"], FIXED_LINE]
+
+    # The third gets exactly the limit line, threaded like any reply, and no model call.
+    await post(client, received_event(email_id="em_3"))
+    assert env.db.replies["em_3"]["verdict"] == "limit_reached"
+    assert env.fakes.sent[-1]["text"] == LIMIT_LINE
+    assert env.fakes.sent[-1]["headers"] == {"In-Reply-To": MESSAGE_ID, "References": MESSAGE_ID}
+    assert len(env.fakes.answer_calls) == 1
+    assert len(env.engine.input_calls) == 2
+
+    # Every later mail that day: nothing at all, no rail, no model, no send.
+    await post(client, received_event(email_id="em_4"))
+    await post(client, received_event(email_id="em_5"))
+    assert env.db.replies["em_4"]["verdict"] == "limit_silenced"
+    assert env.db.replies["em_5"]["verdict"] == "limit_silenced"
+    assert len(env.fakes.sent) == 3
+    assert len(env.fakes.answer_calls) == 1
+    assert len(env.engine.input_calls) == 2
+
+    # The counter is per account per UTC day, under a slice: key that expires on its own.
+    assert int(await redis.get(daily_key(7))) == 5
+    assert daily_key(7).startswith("slice:email_replies:acct:7:")
+    ttl = await redis.ttl(daily_key(7))
+    assert 0 < ttl <= 60 * 60 * 48
+    # A different day is a fresh count, and the count includes the mail being counted.
+    from datetime import datetime, timezone
+
+    tomorrow = datetime(2099, 1, 2, tzinfo=timezone.utc)
+    assert await count_reply(redis, 7, tomorrow) == 1
+    assert daily_key(7, tomorrow).endswith(":2099-01-02")
+    # Strangers never touch the counter: the limit sits after identity.
+    await post(client, received_event(email_id="em_s", sender="nobody@example.org"))
+    assert int(await redis.get(daily_key(7))) == 5
+
+
+async def test_daily_limit_fails_open_without_redis(client, env, monkeypatch):
+    monkeypatch.setattr(config, "EMAIL_ASSISTANT_DAILY_LIMIT", 1)
+    assert await count_reply(None, 7) is None
+    for email_id in ("em_1", "em_2", "em_3"):
+        await post(client, received_event(email_id=email_id))
+        assert env.db.replies[email_id]["verdict"] == "answered_own"
+    assert len(env.fakes.sent) == 3
+
+    class Broken:
+        async def incr(self, key):
+            raise ConnectionError("redis down")
+
+    assert await count_reply(Broken(), 7) is None
 
 
 async def test_model_failure_sends_nothing(client, env):
@@ -461,7 +633,7 @@ async def test_send_failure_is_recorded_as_error(client, env):
 async def test_duplicate_email_id_skipped(client, env):
     first = await post(client, received_event())
     assert first.status_code == 202
-    assert env.db.replies["em_1"]["verdict"] == "answered"
+    assert env.db.replies["em_1"]["verdict"] == "answered_own"
     second = await post(client, received_event())
     assert second.status_code == 200
     assert second.json() == {"status": "duplicate"}
@@ -504,10 +676,13 @@ async def test_resend_send_email_payload_is_threaded_from_alert_from():
     assert result.ok
     assert seen["url"] == "https://api.resend.com/emails"
     assert seen["auth"] == "Bearer re_test"
+    # Phase 26: the HTML version rides alongside the text, rendered from it.
     assert seen["json"] == {
         "from": OWN_ADDRESS, "to": [USER_ADDRESS], "subject": "Re: hi", "text": "body",
+        "html": render_html("body"),
         "headers": {"In-Reply-To": MESSAGE_ID, "References": MESSAGE_ID},
     }
+    assert 'alt="slice"' in seen["json"]["html"] and ">body</p>" in seen["json"]["html"]
     # The alert path is unchanged: no recipients means not configured.
     assert channel.configured is False
     unsent = await ResendEmailChannel(api_key="", sender=OWN_ADDRESS, to=None).send_email(to=USER_ADDRESS, subject="s", text="t")

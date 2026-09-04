@@ -394,3 +394,17 @@ RESEND_WEBHOOK_SECRET = os.getenv("RESEND_WEBHOOK_SECRET") or None
 # router judge model. One call per answered email, capped at 300 output tokens; its cost
 # is slice's own, out-of-band from the account budget.
 EMAIL_ASSISTANT_MODEL = os.getenv("EMAIL_ASSISTANT_MODEL", JUDGE_MODEL)
+
+# Phase 26: the topic rail sorts a question into one of three buckets. A question about
+# the sender's own data is answered from that data by EMAIL_ASSISTANT_MODEL, as before. A
+# general question about AWS setup, cloud cost, AI models or AI cost is answered by this
+# model instead, from its own knowledge, with a disclaimer line first and no account data
+# in the prompt at all. Defaults to the Sonnet model already in the pricing table. Same
+# 300-token cap, same output rail, same out-of-band cost.
+EMAIL_ASSISTANT_GENERAL_MODEL = os.getenv("EMAIL_ASSISTANT_GENERAL_MODEL", "claude-sonnet-5")
+
+# At most this many replies per account per UTC day, counted in Redis (the key carries the
+# day, so it resets on its own). The first mail over the line gets one fixed sentence
+# saying so; every later one that day gets nothing. A Redis outage fails open to replying,
+# the same rule the alert cooldown latch uses.
+EMAIL_ASSISTANT_DAILY_LIMIT = int(os.getenv("EMAIL_ASSISTANT_DAILY_LIMIT", "20"))

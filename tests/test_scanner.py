@@ -314,6 +314,49 @@ async def test_iam_risk_flags_old_key_and_direct_admin():
     assert "AKIAEXAMPLENEW01" not in by_resource  # recent key not flagged
 
 
+async def test_iam_key_finding_is_about_age_and_titled_as_a_key(monkeypatch):
+    """Phase 26: the key finding names the key (not the user) as its resource, carries the
+    age and the owner in its detail, and its email/dashboard title is the key wording, never
+    "full admin access"."""
+    from app.alerts.channels import SCAN_KEY_COPY, finding_title, is_access_key_id
+
+    monkeypatch.setattr(config, "SCANNER_IAM_KEY_MAX_AGE_DAYS", 90)
+    iam = _client("iam")
+    stub = Stubber(iam)
+    old = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    stub.add_response("list_users", {"Users": [
+        {"UserName": "deploy", "UserId": "AIDAEXAMPLEDEPLOY", "Arn": "arn:aws:iam::1:user/deploy", "Path": "/", "CreateDate": old}
+    ]})
+    stub.add_response(
+        "list_access_keys",
+        {"AccessKeyMetadata": [{"UserName": "deploy", "AccessKeyId": "AKIAIOSFODNN7EXAMPLE", "Status": "Active", "CreateDate": old}]},
+        {"UserName": "deploy"},
+    )
+    stub.add_response(
+        "get_access_key_last_used",
+        {"UserName": "deploy", "AccessKeyLastUsed": {"ServiceName": "s3", "Region": "us-east-1", "LastUsedDate": old}},
+        {"AccessKeyId": "AKIAIOSFODNN7EXAMPLE"},
+    )
+    stub.add_response("list_attached_user_policies", {"AttachedPolicies": []}, {"UserName": "deploy"})
+    stub.activate()
+
+    findings = check_iam_risk(FakeSession({"iam": iam}))
+    stub.assert_no_pending_responses()
+
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.resource_id == "AKIAIOSFODNN7EXAMPLE" and is_access_key_id(finding.resource_id)
+    assert finding.severity == SEVERITY_MED
+    assert finding.detail["user"] == "deploy" and finding.detail["age_days"] > 90
+    assert finding.detail["status"] == "Active" and finding.detail["last_used"].startswith("2020-01-01")
+    assert "days old" in finding.summary and "Administrator" not in finding.summary
+
+    title = finding_title(finding.check, finding.resource_id, config.AWS_REGION)
+    assert title == "The access key AKIAIOSFODNN7EXAMPLE is more than 90 days old."
+    assert "full admin access" not in title
+    assert SCAN_KEY_COPY["iam_risk"]["doc"].startswith("https://docs.aws.amazon.com/IAM/")
+
+
 async def test_iam_risk_key_age_threshold_is_config(monkeypatch):
     monkeypatch.setattr(config, "SCANNER_IAM_KEY_MAX_AGE_DAYS", 3650)  # 10 years
     iam = _client("iam")

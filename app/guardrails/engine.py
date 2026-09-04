@@ -33,7 +33,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 from app import config
 
@@ -54,6 +56,24 @@ def _format_error(exc: BaseException) -> str:
     return f"{name}: {message}" if message else name
 
 
+# Phase 26: the labels the email topic rail can answer with (see ``classify_input``).
+# The prompt asks for exactly one of these words; anything else parses to None.
+LABEL_OWN_DATA = "own_data"
+LABEL_GENERAL = "general"
+LABEL_BLOCKED = "blocked"
+LABELS = (LABEL_OWN_DATA, LABEL_GENERAL, LABEL_BLOCKED)
+
+_LABEL_RE = re.compile(r"\b(OWN_DATA|GENERAL|BLOCKED)\b", re.IGNORECASE)
+
+
+def parse_label(text) -> str | None:
+    """The first label word in the rail's answer, lowercased, or None when there is none."""
+    if not isinstance(text, str):
+        return None
+    match = _LABEL_RE.search(text)
+    return match.group(1).lower() if match else None
+
+
 @dataclass(frozen=True)
 class RailOutcome:
     """The result of running one rail.
@@ -62,11 +82,15 @@ class RailOutcome:
     raised or timed out and the loop fails open (treated as passed); the two are never
     both true. Neither being true means the rail ran and passed. ``reason`` is a short
     note: the rail name for a block, the error string for an error.
+
+    ``label`` (phase 26) is set only by ``classify_input``: the topic rail's own answer,
+    one of ``LABELS``, or None when the answer was not one of them (or the rail errored).
     """
 
     blocked: bool = False
     errored: bool = False
     reason: str | None = None
+    label: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -83,11 +107,19 @@ class GuardrailEngine:
     log, the reliable signal NeMo sets when a rail stops the request.
     """
 
-    def __init__(self, rails, options_input, options_output, timeout: float):
+    def __init__(
+        self,
+        rails,
+        options_input,
+        options_output,
+        timeout: float,
+        classify: "Callable[[str], Awaitable[str]] | None" = None,
+    ):
         self._rails = rails
         self._options_input = options_input
         self._options_output = options_output
         self._timeout = timeout
+        self._classify = classify
 
     async def check_input(self, prompt: str) -> RailOutcome:
         """Run only the input rail on ``prompt``. Never raises; fails open on any trouble."""
@@ -111,6 +143,39 @@ class GuardrailEngine:
             ],
             options=self._options_output,
         )
+
+    async def classify_input(self, prompt: str) -> RailOutcome:
+        """Run the input rail as a three-way sort (phase 26): the rail answers with a label.
+
+        The email topic rail's prompt (``prompts.yml``, mode "email") answers OWN_DATA,
+        GENERAL or BLOCKED instead of Yes/No. This renders that same task prompt and makes
+        the same one small LLM call NeMo's self-check would, but keeps the answer as a
+        label instead of collapsing it to a boolean:
+
+        - ``own_data`` / ``general``: passed, ``label`` set.
+        - ``blocked``: ``blocked`` with ``label="blocked"``.
+        - anything else the model said: ``blocked`` with ``label=None`` (an unknown answer
+          is never a pass; ``reason`` says so).
+        - an error or a timeout: ``errored``, exactly like the other checks. Whether that
+          fails open or closed is the caller's call; the email assistant fails closed.
+
+        Never raises. An engine built without a classifier (``classify=None``) reports an
+        error outcome rather than guessing.
+        """
+        if self._classify is None:
+            return RailOutcome(errored=True, reason="no classifier")
+        try:
+            raw = await asyncio.wait_for(self._classify(prompt), timeout=self._timeout)
+        except Exception as exc:  # noqa: BLE001, timeout, transport, LLM, anything.
+            reason = _format_error(exc)
+            logger.warning(json.dumps({"event": "guardrail_error", "rail": RAIL_INPUT, "error": reason}))
+            return RailOutcome(errored=True, reason=reason)
+        label = parse_label(raw)
+        if label is None:
+            return RailOutcome(blocked=True, reason="unknown label")
+        if label == LABEL_BLOCKED:
+            return RailOutcome(blocked=True, reason="topic rail", label=label)
+        return RailOutcome(label=label)
 
     async def _run(self, rail: str, *, messages, options) -> RailOutcome:
         try:
@@ -162,7 +227,9 @@ def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
     try:
         from langchain_anthropic import ChatAnthropic
         from nemoguardrails import LLMRails, RailsConfig
+        from nemoguardrails.actions.llm.utils import llm_call
         from nemoguardrails.integrations.langchain.llm_adapter import LangChainLLMAdapter
+        from nemoguardrails.llm.types import Task
         from nemoguardrails.rails.llm.options import GenerationOptions
 
         rails_config = RailsConfig.from_path(config.GUARDRAILS_CONFIG_DIR)
@@ -183,6 +250,25 @@ def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
             rails={"input": False, "output": True, "dialog": False, "retrieval": False},
             log={"activated_rails": True},
         )
+
+        # Phase 26: the label-returning form of the input rail. The same task prompt NeMo's
+        # self_check_input action renders (so the mode's prompt from prompts.yml is what
+        # runs), the same rails LLM, the same lowest temperature; only the parsing differs.
+        task_manager = rails.runtime.llm_task_manager
+        temperature = rails_config.lowest_temperature
+        if temperature is None:
+            temperature = 0.0
+
+        async def classify(user_input: str) -> str:
+            prompt = task_manager.render_task_prompt(
+                task=Task.SELF_CHECK_INPUT, context={"user_input": user_input}
+            )
+            stop = task_manager.get_stop_tokens(task=Task.SELF_CHECK_INPUT)
+            response = await llm_call(
+                rails.llm, prompt, stop=stop, llm_params={"temperature": temperature, "max_tokens": 16}
+            )
+            return getattr(response, "content", response)
+
     except Exception as exc:  # noqa: BLE001 — a broken build just disables the rails.
         logger.warning(
             json.dumps({"event": "guardrail_engine_unavailable", "error": _format_error(exc)})
@@ -195,5 +281,5 @@ def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
         )
     )
     return GuardrailEngine(
-        rails, options_input, options_output, config.GUARDRAILS_TIMEOUT_SECONDS
+        rails, options_input, options_output, config.GUARDRAILS_TIMEOUT_SECONDS, classify=classify
     )

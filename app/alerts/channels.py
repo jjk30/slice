@@ -14,8 +14,10 @@ engine to record as ``failed``.
 
 from __future__ import annotations
 
+import html as html_lib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
@@ -140,21 +142,40 @@ def _percent(alert: Alert) -> int | None:
     return None
 
 
-# The same sign-off on every email slice sends (phase 23a), in place of the old
-# "Best regards" line: one plain sentence, then a blank line, then the send time.
-FOOTER_NOTE = "slice is an AI. Please double check before you change anything in AWS."
+# The sign-off on every email slice sends (phase 23a), in place of the old "Best
+# regards" line: one plain sentence, then a blank line, then the send time. Phase 26:
+# the sentence depends on what the email is about, so the reader is told to double
+# check the thing they are about to change.
+#   - scan emails (findings in AWS): the AWS line
+#   - budget warn and block, and reply-by-email answers about the user's own data: the
+#     AI setup line
+#   - reply-by-email general advice: the general line
+FOOTER_AWS = "slice is an AI. Please double check before you change anything in AWS."
+FOOTER_AI_SETUP = "slice is an AI. Please double check before you change your AI setup."
+FOOTER_GENERAL = "slice is an AI. This is general advice. Please double check before you act on it."
+# The old single name, kept for anything still importing it: the AWS line.
+FOOTER_NOTE = FOOTER_AWS
 
-WARN_SUBJECT = "slice: {team} has used {percent}% of its monthly AI budget"
+
+def footer_for(kind: str) -> str:
+    """The footer sentence for an alert kind: the AWS line on a scan, the AI setup line otherwise."""
+    return FOOTER_AWS if kind == KIND_SCAN else FOOTER_AI_SETUP
+
+
+# Phase 26: a budget email speaks to the person it lands with (since phase 25b that is
+# the account's own inbox), so it says "you", never "Team {team}". The account label
+# still rides on the Alert (``team``) for the alert row and the WhatsApp channel.
+WARN_SUBJECT = "slice: you have used {percent}% of your monthly AI budget"
 WARN_BODY = """\
-Team {team} has spent {spend} of its {cap} monthly AI budget. About {left} is left for {month}.
+You have spent {spend} of your {cap} monthly AI budget. About {left} is left for {month}.
 
-Nothing is blocked yet. This is an early heads up. At this pace the team will hit its cap before the month ends, and slice will then block its AI requests until the new month or a higher cap.
+Nothing is blocked yet. This is an early heads up. At this pace you will hit your cap before the month ends, and slice will then block your AI requests until the new month or a higher cap.
 
 Three ways to keep working for less:
 
 1. Leave auto-routing on. slice already sends easy work to cheaper models.
 
-2. If most of this team's work is coding in a tool like Claude Code (https://claude.com/product/claude-code), a flat monthly fee can beat paying per token. These work as a substitute if you have a plan:
+2. If most of your work is coding in a tool like Claude Code (https://claude.com/product/claude-code), a flat monthly fee can beat paying per token. These work as a substitute if you have a plan:
    - GitHub Copilot: https://github.com/features/copilot
    - Codex: https://openai.com/codex
 
@@ -166,14 +187,14 @@ Three ways to keep working for less:
 
 Sent {time}"""
 
-BLOCK_SUBJECT = "slice: {team} hit its budget cap. AI requests are blocked"
+BLOCK_SUBJECT = "slice: you hit your budget cap. AI requests are blocked"
 BLOCK_BODY = """\
-Team {team} hit its monthly AI budget cap. Spend: {spend} of {cap}.
+You hit your monthly AI budget cap. Spend: {spend} of {cap}.
 
-slice is now blocking this team's AI requests. Blocked requests return a clear error and cost nothing. Other teams are not affected.
+slice is now blocking your AI requests. Blocked requests return a clear error and cost nothing.
 
 To unblock:
-- Raise this team's cap and restart the gateway, or
+- Raise your cap in Settings on the dashboard, or
 - Wait for the new month. The counter resets on its own.
 
 {footer}
@@ -219,7 +240,7 @@ def _fields(alert: Alert) -> dict:
         "left": _left(spend, cap),
         "month": _month_name(alert),
         "time": format_time(alert.ts),
-        "footer": FOOTER_NOTE,
+        "footer": footer_for(alert.kind),
     }
 
 
@@ -259,6 +280,8 @@ SCAN_CHECK_COPY = {
         "todo": "Turn on default encryption for it in the AWS console.",
         "doc": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/default-bucket-encryption.html",
     },
+    # The user variant: AdministratorAccess attached straight to the user. A finding whose
+    # resource is an access key id uses SCAN_KEY_COPY instead (phase 26).
     "iam_risk": {
         "what": "The user {resource} has full admin access attached straight to their account.",
         "why": "If that one login is stolen, an attacker gets the keys to everything.",
@@ -308,6 +331,36 @@ SCAN_ACCOUNT_COPY = {
 }
 
 
+# Phase 26: the iam_risk check raises two shapes of finding (``app/scanner/checks.py``,
+# check_iam_risk). One is a USER with AdministratorAccess attached directly (resource:
+# the user name; SCAN_CHECK_COPY above). The other is an ACCESS KEY older than
+# SCANNER_IAM_KEY_MAX_AGE_DAYS (resource: the key id, AKIA... or ASIA...; the detail
+# carries the owning user, the age and the last-used date). A key finding is about age,
+# not about admin rights, so it must not borrow the user wording. ``{key_age}`` is the
+# configured age line at format time.
+SCAN_KEY_COPY = {
+    "iam_risk": {
+        "what": "The access key {resource} is more than {key_age} days old.",
+        "why": "Old keys end up copied into scripts and laptops nobody remembers, and the longer a key lives the more places it can leak from.",
+        "todo": "In IAM, open the user the key belongs to, make a new key, switch your tools to it, then make the old one inactive and delete it.",
+        "doc": "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html#Using_RotateAccessKey",
+    },
+}
+
+# An IAM access key id: 20 characters, AKIA (long-term) or ASIA (temporary) then upper
+# case letters and digits. The scanner's own fixtures use shorter ids, so 12 or more.
+_ACCESS_KEY_ID = re.compile(r"^(AKIA|ASIA)[A-Z0-9]{12,}$")
+
+
+def is_access_key_id(resource: str | None) -> bool:
+    return bool(resource) and _ACCESS_KEY_ID.match(resource) is not None
+
+
+def _copy_fields(resource: str, region: str) -> dict:
+    """Everything a copy line may name: the resource, the region, the key age line."""
+    return {"resource": resource, "region": region, "key_age": config.SCANNER_IAM_KEY_MAX_AGE_DAYS}
+
+
 def _scan_count(alert: Alert) -> int:
     try:
         return max(0, int((alert.detail or {}).get("count", 0)))
@@ -321,13 +374,18 @@ def _scan_subject(alert: Alert) -> str:
 
 
 def _footer_lines(alert: Alert) -> list[str]:
-    """The shared sign-off: the AI note, a blank line, then the send time."""
-    return [FOOTER_NOTE, "", f"Sent {format_time(alert.ts)}"]
+    """The shared sign-off: the AI note for this kind, a blank line, then the send time."""
+    return [footer_for(alert.kind), "", f"Sent {format_time(alert.ts)}"]
 
 
 def _scan_copy(check: str | None, resource: str) -> dict | None:
-    """The copy entry for a finding: the account-wide wording when the resource is the account."""
-    copy = SCAN_ACCOUNT_COPY.get(check) if resource == ACCOUNT_RESOURCE else None
+    """The copy entry for a finding: the account-wide wording when the resource is the
+    account, the access-key wording when it is a key id, else the check's own."""
+    copy = None
+    if resource == ACCOUNT_RESOURCE:
+        copy = SCAN_ACCOUNT_COPY.get(check)
+    elif is_access_key_id(resource):
+        copy = SCAN_KEY_COPY.get(check)
     return copy if copy is not None else SCAN_CHECK_COPY.get(check)
 
 
@@ -342,7 +400,7 @@ def finding_title(check: str | None, resource: str | None, region: str | None) -
     copy = _scan_copy(check, resource)
     if copy is None:
         return f"slice flagged {resource} in {region} and thinks it is worth a look."
-    return copy["what"].format(resource=resource, region=region)
+    return copy["what"].format(**_copy_fields(resource, region))
 
 
 def _scan_finding_block(finding: dict) -> list[str]:
@@ -365,7 +423,7 @@ def _scan_finding_block(finding: dict) -> list[str]:
             "Open the AWS console and take a look when you can.",
         ]
     return [
-        copy["what"].format(resource=resource, region=region),
+        copy["what"].format(**_copy_fields(resource, region)),
         copy["why"],
         copy["todo"],
         f"Read more: {copy['doc']} ",
@@ -426,6 +484,66 @@ def body_for(alert: Alert) -> str:
     return template.format(**_fields(alert))
 
 
+# --- HTML rendering (phase 26) ----------------------------------------------------
+# Every email goes out as both text and HTML. The HTML is the plain body, verbatim, in a
+# simple readable layout: the cake logo and the word slice at the top, then one paragraph
+# per blank-line-separated block, line breaks kept, URLs turned into links. Inline styles
+# only (mail clients drop external CSS), a system font, 600px wide at most. The text
+# version stays the fallback for clients that do not render HTML.
+
+LOGO_URL = "https://sliceapp.dev/logo.png"
+LOGO_ALT = "slice"
+LOGO_SIZE = 48
+HTML_MAX_WIDTH = 600
+HTML_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+
+# A URL in body text: http(s) up to whitespace, minus a trailing sentence mark.
+_URL = re.compile(r"https?://[^\s<>\"]+")
+_TRAILING_PUNCT = ".,;:!?)"
+
+
+def _link_line(line: str) -> str:
+    """One escaped line with every URL wrapped in an anchor; leading spaces (the indented
+    list items) kept as non-breaking spaces so the shape survives HTML whitespace rules."""
+    stripped = line.lstrip(" ")
+    out: list[str] = ["&nbsp;" * (len(line) - len(stripped))]
+    line = stripped
+    last = 0
+    for match in _URL.finditer(line):
+        url = match.group(0)
+        end = match.end()
+        while url and url[-1] in _TRAILING_PUNCT:
+            url = url[:-1]
+            end -= 1
+        out.append(html_lib.escape(line[last:match.start()]))
+        href = html_lib.escape(url, quote=True)
+        out.append(f'<a href="{href}" style="color:#1a56db;">{href}</a>')
+        last = end
+    out.append(html_lib.escape(line[last:]))
+    return "".join(out)
+
+
+def render_html(text: str) -> str:
+    """The HTML version of a plain-text email body. Same words, a readable layout."""
+    blocks = [block for block in re.split(r"\n\s*\n", (text or "").strip()) if block.strip()]
+    paragraphs = []
+    for block in blocks:
+        lines = [_link_line(line) for line in block.split("\n")]
+        paragraphs.append('<p style="margin:0 0 16px 0;">' + "<br>".join(lines) + "</p>")
+    body = "\n".join(paragraphs)
+    return (
+        f'<div style="max-width:{HTML_MAX_WIDTH}px;margin:0 auto;padding:24px 16px;'
+        f'font-family:{HTML_FONT};font-size:15px;line-height:1.5;color:#111111;">\n'
+        '<div style="margin:0 0 24px 0;">\n'
+        f'<img src="{LOGO_URL}" width="{LOGO_SIZE}" height="{LOGO_SIZE}" alt="{LOGO_ALT}" '
+        f'style="width:{LOGO_SIZE}px;height:{LOGO_SIZE}px;vertical-align:middle;border:0;">'
+        '<span style="font-size:22px;font-weight:600;margin-left:12px;vertical-align:middle;">slice</span>\n'
+        "</div>\n"
+        f"{body}\n"
+        "</div>"
+    )
+
+
 # --- Resend email --------------------------------------------------------------
 
 
@@ -470,11 +588,13 @@ class ResendEmailChannel:
     def payload(self, alert: Alert) -> dict:
         # Phase 25b: an alert resolved to an account's own email goes there; anything
         # else goes to the configured ALERT_EMAIL_TO list.
+        text = body_for(alert)
         return {
             "from": self._sender,
             "to": list(alert.email_to) if alert.email_to else list(self._to),
             "subject": subject_for(alert),
-            "text": body_for(alert),
+            "text": text,
+            "html": render_html(text),
         }
 
     async def send(self, alert: Alert) -> DeliveryResult:
@@ -490,7 +610,10 @@ class ResendEmailChannel:
         text: str,
         headers: dict[str, str] | None = None,
     ) -> DeliveryResult:
-        """One arbitrary plain-text email from the configured sender (phase 23b). Never raises.
+        """One arbitrary email from the configured sender (phase 23b). Never raises.
+
+        ``text`` is the body; the HTML version is rendered from it (phase 26), so both
+        go to Resend and the text stays the fallback.
 
         The reply-by-email assistant answers the sender of an inbound mail, so the
         recipient is per call rather than the channel's fixed ``to`` list; ``headers``
@@ -501,7 +624,13 @@ class ResendEmailChannel:
         recipients = _recipients(to)
         if not (self._api_key and self._sender and recipients):
             return DeliveryResult(ok=False, error="email channel not configured")
-        payload = {"from": self._sender, "to": recipients, "subject": subject, "text": text}
+        payload = {
+            "from": self._sender,
+            "to": recipients,
+            "subject": subject,
+            "text": text,
+            "html": render_html(text),
+        }
         if headers:
             payload["headers"] = dict(headers)
         return await self._post(payload)

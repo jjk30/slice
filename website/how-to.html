@@ -286,7 +286,7 @@ message = client.messages.create(
 
     <h3>The five tiles</h3>
     <div class="tiles">
-      <div class="tile"><span class="k">spend this month</span><span class="v">What your requests through slice have cost so far this month. Cache hits count as $0. If a model has no price in slice's table, the tile says how many requests were left out.</span></div>
+      <div class="tile"><span class="k">spend this month</span><span class="v">What your requests through slice have cost so far this month. Cache hits count as $0. If a model has no price in slice's table, the tile says how many requests were left out. This number is slice's estimate, worked out from token counts at list prices, and your Anthropic bill is the true figure.</span></div>
       <div class="tile"><span class="k">AWS bill this month</span><span class="v">Your AWS spend for the month so far, from Cost Explorer, with yesterday's total under it. It reads "not connected" until you connect AWS in step 05.</span></div>
       <div class="tile"><span class="k">saved this month</span><span class="v">For each request slice routed to a cheaper model: what the model you asked for would have cost, minus what you paid. Only successful requests count.</span></div>
       <div class="tile"><span class="k">requests</span><span class="v">How many calls went through slice this month, with how many were cache hits and how many were routed to a cheaper model.</span></div>

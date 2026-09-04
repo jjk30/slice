@@ -46,12 +46,19 @@ from app.alerts import (
 from app.alerts import channels as alert_channels
 from app.alerts import engine as alerts_engine
 from app.alerts.channels import (
+    FOOTER_AI_SETUP,
+    FOOTER_AWS,
+    FOOTER_GENERAL,
     FOOTER_NOTE,
     RESEND_EMAILS_URL,
     SCAN_ACCOUNT_COPY,
     SCAN_CHECK_COPY,
     _money,
     body_for,
+    finding_title,
+    footer_for,
+    is_access_key_id,
+    render_html,
     format_time,
     subject_for,
 )
@@ -486,18 +493,18 @@ def _alert(kind=KIND_WARN, detail=None):
 def test_subject_and_body_templates(monkeypatch):
     monkeypatch.setattr(config, "ALERT_TIMEZONE", "America/New_York")
     warn = _alert()  # 12:00 UTC on Aug 18 -> 8:00 AM EDT
-    assert subject_for(warn) == "slice: team-a has used 80% of its monthly AI budget"
+    assert subject_for(warn) == "slice: you have used 80% of your monthly AI budget"
     assert body_for(warn) == (
-        "Team team-a has spent $21.00 of its $25.00 monthly AI budget. About $4.00 is left for August 2026.\n"
+        "You have spent $21.00 of your $25.00 monthly AI budget. About $4.00 is left for August 2026.\n"
         "\n"
-        "Nothing is blocked yet. This is an early heads up. At this pace the team will hit its cap before "
-        "the month ends, and slice will then block its AI requests until the new month or a higher cap.\n"
+        "Nothing is blocked yet. This is an early heads up. At this pace you will hit your cap before "
+        "the month ends, and slice will then block your AI requests until the new month or a higher cap.\n"
         "\n"
         "Three ways to keep working for less:\n"
         "\n"
         "1. Leave auto-routing on. slice already sends easy work to cheaper models.\n"
         "\n"
-        "2. If most of this team's work is coding in a tool like Claude Code "
+        "2. If most of your work is coding in a tool like Claude Code "
         "(https://claude.com/product/claude-code), a flat monthly fee can beat paying per token. These "
         "work as a substitute if you have a plan:\n"
         "   - GitHub Copilot: https://github.com/features/copilot\n"
@@ -507,34 +514,39 @@ def test_subject_and_body_templates(monkeypatch):
         "   - Ollama: https://ollama.com. One download, then Llama or Mistral runs on your own machine for free.\n"
         "   - NVIDIA model catalog: https://build.nvidia.com. Hosted Llama, Mistral and Nemotron, with free credits.\n"
         "\n"
-        "slice is an AI. Please double check before you change anything in AWS.\n"
+        "slice is an AI. Please double check before you change your AI setup.\n"
         "\n"
         "Sent Aug 18, 2026, 8:00 AM EDT"
     )
 
     block = _alert(KIND_BLOCK, BLOCK_DETAIL)
-    assert subject_for(block) == "slice: team-a hit its budget cap. AI requests are blocked"
+    assert subject_for(block) == "slice: you hit your budget cap. AI requests are blocked"
     assert body_for(block) == (
-        "Team team-a hit its monthly AI budget cap. Spend: $25.50 of $25.00.\n"
+        "You hit your monthly AI budget cap. Spend: $25.50 of $25.00.\n"
         "\n"
-        "slice is now blocking this team's AI requests. Blocked requests return a "
-        "clear error and cost nothing. Other teams are not affected.\n"
+        "slice is now blocking your AI requests. Blocked requests return a "
+        "clear error and cost nothing.\n"
         "\n"
         "To unblock:\n"
-        "- Raise this team's cap and restart the gateway, or\n"
+        "- Raise your cap in Settings on the dashboard, or\n"
         "- Wait for the new month. The counter resets on its own.\n"
         "\n"
-        "slice is an AI. Please double check before you change anything in AWS.\n"
+        "slice is an AI. Please double check before you change your AI setup.\n"
         "\n"
         "Sent Aug 18, 2026, 8:00 AM EDT"
     )
+    # Phase 26: a budget email speaks to the person. No team in the third person, no
+    # restart step (the cap lives in Settings now).
+    for alert in (warn, block):
+        assert "Team " not in body_for(alert) and "team" not in subject_for(alert)
+        assert "restart" not in body_for(alert)
 
     # Missing numbers never break formatting: the configured warn line and "unknown" fill in,
     # and the month falls back to the alert's own.
     monkeypatch.setattr(config, "BUDGET_WARN_RATIO", 0.8)
     bare = Alert(team="t", kind=KIND_WARN, detail={}, ts=warn.ts)
-    assert subject_for(bare) == "slice: t has used 80% of its monthly AI budget"
-    assert "has spent unknown of its unknown monthly AI budget. About unknown is left for August 2026." in body_for(bare)
+    assert subject_for(bare) == "slice: you have used 80% of your monthly AI budget"
+    assert "You have spent unknown of your unknown monthly AI budget. About unknown is left for August 2026." in body_for(bare)
 
 
 # The character we must never emit anywhere in an email: U+2014, the em dash.
@@ -579,13 +591,109 @@ def test_scan_email_has_no_em_dash():
 
 
 def test_footer_line_is_on_every_email():
+    """Phase 26: one AI note per email kind. Scan emails keep the AWS line; the budget
+    emails tell the reader to check their AI setup instead."""
+    assert FOOTER_NOTE == FOOTER_AWS == "slice is an AI. Please double check before you change anything in AWS."
+    assert FOOTER_AI_SETUP == "slice is an AI. Please double check before you change your AI setup."
+    assert FOOTER_GENERAL == "slice is an AI. This is general advice. Please double check before you act on it."
+    expected = {
+        KIND_WARN: FOOTER_AI_SETUP,
+        KIND_BLOCK: FOOTER_AI_SETUP,
+        KIND_SCAN: FOOTER_AWS,
+    }
     for alert in (_alert(), _alert(KIND_BLOCK, BLOCK_DETAIL), _scan_alert()):
         body = body_for(alert)
-        assert FOOTER_NOTE == "slice is an AI. Please double check before you change anything in AWS."
-        assert FOOTER_NOTE in body
-        # The footer note sits just above the "Sent ..." line, and there is no old sign-off.
+        footer = expected[alert.kind]
+        assert footer_for(alert.kind) == footer
+        assert body.rstrip().endswith(f"{footer}\n\nSent Aug 18, 2026, 8:00 AM EDT")
+        # Exactly one AI note, the right one; no old sign-off.
+        assert body.count("slice is an AI.") == 1
         assert "Best regards" not in body
-        assert body.rstrip().endswith("Sent Aug 18, 2026, 8:00 AM EDT")
+
+
+# --- HTML version (phase 26) -------------------------------------------------------
+
+
+def test_render_html_has_logo_word_and_the_same_words():
+    body = body_for(_alert(KIND_BLOCK, BLOCK_DETAIL))
+    html = render_html(body)
+    # The cake logo at the top, 48px, alt "slice", and the word slice next to it.
+    assert '<img src="https://sliceapp.dev/logo.png" width="48" height="48" alt="slice"' in html
+    logo_at = html.index("<img ")
+    assert html.index(">slice</span>") > logo_at
+    assert logo_at < html.index("You hit your monthly AI budget cap")
+    # A simple readable layout: 600px wide at most, a system font, inline styles only.
+    assert "max-width:600px" in html
+    assert "-apple-system" in html
+    assert "<link" not in html and "<style" not in html and "@import" not in html
+    # Every line of the plain body is in the HTML, in order, and nothing else was added.
+    position = 0
+    for line in body.splitlines():
+        if line.strip():
+            index = html.index(_escape(line.strip()), position)
+            assert index >= position
+            position = index
+    assert EM_DASH not in html
+
+
+def _escape(text):
+    import html as html_lib
+
+    return html_lib.escape(text)
+
+
+def test_render_html_links_and_escapes():
+    html = render_html(body_for(_alert()))
+    # URLs become links, with the trailing full stop left outside the anchor.
+    assert '<a href="https://claude.com/product/claude-code" style="color:#1a56db;">https://claude.com/product/claude-code</a>)' in html
+    assert '<a href="https://ollama.com" style="color:#1a56db;">https://ollama.com</a>. One download' in html
+    # Indented list items keep their shape; paragraphs split on blank lines.
+    assert "<br>&nbsp;&nbsp;&nbsp;- GitHub Copilot:" in html
+    assert html.count("<p ") == body_for(_alert()).count("\n\n") + 1
+    # Anything HTML-special in the words is escaped, never interpreted.
+    scan = _scan_alert({"count": 1, "findings": [{"check": "sg_open", "resource": "<sg&1>", "region": "us-east-1", "severity": "high"}]})
+    rendered = render_html(body_for(scan))
+    assert "&lt;sg&amp;1&gt;" in rendered and "<sg&1>" not in rendered
+    assert 'href="https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"' in rendered
+
+
+@respx.mock
+async def test_resend_payload_carries_text_and_html():
+    channel = ResendEmailChannel(api_key="re_test", sender="slice@example.com", to="ops@example.com")
+    route = respx.post(RESEND_EMAILS_URL).mock(return_value=httpx.Response(200, json={"id": "email_02"}))
+    await channel.send(_scan_alert())
+    payload = json.loads(route.calls.last.request.content)
+    assert set(payload) == {"from", "to", "subject", "text", "html"}
+    assert payload["text"] == body_for(_scan_alert())
+    assert payload["html"] == render_html(payload["text"])
+    assert 'alt="slice"' in payload["html"]
+
+
+# --- Access key wording (phase 26) -------------------------------------------------
+
+
+def test_iam_key_finding_uses_the_key_wording_not_the_admin_wording(monkeypatch):
+    """check_iam_risk flags a KEY for its age (resource: the key id), and a USER for a
+    directly attached AdministratorAccess. Only the user finding may say "full admin"."""
+    monkeypatch.setattr(config, "SCANNER_IAM_KEY_MAX_AGE_DAYS", 90)
+    assert is_access_key_id("AKIAIOSFODNN7EXAMPLE") and is_access_key_id("ASIAIOSFODNN7EXAMPLE")
+    assert not is_access_key_id("admin-user") and not is_access_key_id("akiaiosfodnn7example") and not is_access_key_id(None)
+
+    key_title = finding_title("iam_risk", "AKIAIOSFODNN7EXAMPLE", "us-east-1")
+    assert key_title == "The access key AKIAIOSFODNN7EXAMPLE is more than 90 days old."
+    assert "admin" not in key_title
+    monkeypatch.setattr(config, "SCANNER_IAM_KEY_MAX_AGE_DAYS", 30)
+    assert finding_title("iam_risk", "AKIAIOSFODNN7EXAMPLE", None) == "The access key AKIAIOSFODNN7EXAMPLE is more than 30 days old."
+    assert finding_title("iam_risk", "admin-user", None) == "The user admin-user has full admin access attached straight to their account."
+
+    scan = _scan_alert({"count": 1, "findings": [{"check": "iam_risk", "resource": "AKIAIOSFODNN7EXAMPLE", "region": "us-east-1", "severity": "med"}]})
+    body = body_for(scan)
+    assert "The access key AKIAIOSFODNN7EXAMPLE is more than 30 days old." in body
+    assert "the longer a key lives the more places it can leak from." in body
+    assert "make a new key, switch your tools to it, then make the old one inactive and delete it." in body
+    assert "Read more: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html#Using_RotateAccessKey " in body
+    assert "full admin access" not in body
+    assert EM_DASH not in body
 
 
 def test_scan_email_subject_and_first_block(monkeypatch):
@@ -774,9 +882,9 @@ async def test_resend_channel_posts_expected_request():
     payload = json.loads(sent.content)
     assert payload["from"] == "slice@example.com"
     assert payload["to"] == ["ops@example.com"]
-    assert payload["subject"] == "slice: team-a has used 80% of its monthly AI budget"
-    assert "team-a" in payload["text"] and "$21.00 of its $25.00" in payload["text"]
-    assert set(payload) == {"from", "to", "subject", "text"}
+    assert payload["subject"] == "slice: you have used 80% of your monthly AI budget"
+    assert "$21.00 of your $25.00" in payload["text"]
+    assert set(payload) == {"from", "to", "subject", "text", "html"}
 
 
 @respx.mock
@@ -968,7 +1076,7 @@ async def test_gateway_warn_reaches_resend_end_to_end(
 
     assert resend.call_count == 1
     payload = json.loads(resend.calls.last.request.content)
-    assert payload["subject"] == "slice: team-a has used 80% of its monthly AI budget"
+    assert payload["subject"] == "slice: you have used 80% of your monthly AI budget"
     assert payload["to"] == ["ops@example.com"]
     assert [(a.kind, a.channel, a.status) for a in db.alerts] == [(KIND_WARN, "email", ALERT_STATUS_SENT)]
 
@@ -1203,7 +1311,8 @@ async def test_warn_for_a_user_account_goes_to_the_account_email(alerts_on, fake
     # The real email channel addresses the Resend payload to that account, not the list.
     payload = _email_channel().payload(channel.sent[0])
     assert payload["to"] == ["ada@example.com"]
-    assert "ada" in payload["subject"]
+    assert channel.sent[0].team == "ada"
+    assert payload["subject"] == "slice: you have used 80% of your monthly AI budget"
 
 
 async def test_block_for_a_user_account_goes_to_the_account_email(alerts_on, fake_redis, operator_is_one):
@@ -1326,5 +1435,7 @@ async def test_gateway_block_email_reaches_the_account_email_end_to_end(
     assert resend.call_count == 1
     sent = json.loads(resend.calls[0].request.content)
     assert sent["to"] == ["ada@example.com"]
-    assert "ada" in sent["subject"]
+    assert sent["subject"] == "slice: you hit your budget cap. AI requests are blocked"
+    assert "Raise your cap in Settings on the dashboard" in sent["text"]
+    assert 'alt="slice"' in sent["html"]
     assert await fake_redis.exists(cooldown_key("acct:7", KIND_BLOCK)) == 1

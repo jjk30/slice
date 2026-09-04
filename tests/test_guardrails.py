@@ -36,6 +36,7 @@ from app import guardrails
 from app.guardrails import RailOutcome
 from app.guardrails import engine as guardrails_engine
 from app.guardrails import events as guardrail_events
+from app.guardrails import LABEL_BLOCKED, LABEL_GENERAL, LABEL_OWN_DATA, LABELS, parse_label
 from app.guardrails.engine import GuardrailEngine, build_engine
 from app.main import app
 from app.rules import RulesCache, SwitchRule
@@ -302,6 +303,73 @@ async def test_engine_timeout_fails_open():
     eng = _engine("hang", timeout=0.01)
     outcome = await eng.check_output("slow")
     assert outcome.errored and not outcome.blocked
+
+
+# --- Phase 26: the label-returning form of the input rail -------------------
+
+
+def _classifier(behavior):
+    """A fake ``classify`` collaborator: returns ``behavior``, raises it, or hangs."""
+
+    async def classify(prompt):
+        if isinstance(behavior, Exception):
+            raise behavior
+        if behavior == "hang":
+            await asyncio.sleep(10)
+        return behavior
+
+    return classify
+
+
+def _label_engine(behavior, timeout=5.0):
+    return GuardrailEngine(FakeRails([]), object(), object(), timeout, classify=_classifier(behavior))
+
+
+def test_parse_label_reads_one_of_three_words():
+    assert parse_label("OWN_DATA") == LABEL_OWN_DATA
+    assert parse_label(" general\n") == LABEL_GENERAL
+    assert parse_label("Answer: BLOCKED.") == LABEL_BLOCKED
+    assert parse_label("own_data") == "own_data" and LABEL_OWN_DATA == "own_data"
+    # Not a label: Yes/No (the old contract), prose, a partial word, nothing, not a string.
+    assert parse_label("Yes") is None and parse_label("No") is None
+    assert parse_label("I think this is fine") is None
+    assert parse_label("GENERALLY") is None and parse_label("OWN DATA") is None
+    assert parse_label("") is None and parse_label(None) is None
+    assert set(LABELS) == {"own_data", "general", "blocked"}
+
+
+async def test_classify_input_returns_the_label():
+    own = await _label_engine("OWN_DATA").classify_input("what did I spend?")
+    assert own.passed and own.label == LABEL_OWN_DATA
+    general = await _label_engine("Answer: GENERAL").classify_input("is opus worth it?")
+    assert general.passed and general.label == LABEL_GENERAL
+
+
+async def test_classify_input_blocked_label_blocks():
+    outcome = await _label_engine("BLOCKED").classify_input("write me a poem")
+    assert outcome.blocked and not outcome.errored
+    assert outcome.label == LABEL_BLOCKED and outcome.reason == "topic rail"
+
+
+async def test_classify_input_unknown_answer_blocks():
+    for raw in ("Yes", "No", "maybe", "", "OWN DATA"):
+        outcome = await _label_engine(raw).classify_input("hello")
+        assert outcome.blocked and not outcome.errored, raw
+        assert outcome.label is None and outcome.reason == "unknown label"
+
+
+async def test_classify_input_error_and_timeout_are_errored(caplog):
+    with caplog.at_level(logging.WARNING, logger="slice.gateway"):
+        errored = await _label_engine(RuntimeError("nemo melted")).classify_input("hello")
+    assert errored.errored and not errored.blocked and errored.label is None
+    assert "nemo melted" in errored.reason
+    assert any(json.loads(r.message).get("event") == "guardrail_error" for r in caplog.records)
+    slow = await _label_engine("hang", timeout=0.01).classify_input("hello")
+    assert slow.errored and not slow.blocked
+    # An engine built with no classifier at all reports an error, never a pass.
+    bare = GuardrailEngine(FakeRails([]), object(), object(), 1.0)
+    outcome = await bare.classify_input("hello")
+    assert outcome.errored and outcome.reason == "no classifier"
 
 
 async def test_build_engine_kill_switch_returns_none(monkeypatch):
