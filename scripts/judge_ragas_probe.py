@@ -10,7 +10,7 @@ so a live run points at the guilty layer instead of guessing.
 
 Steps (each timed):
   1. Build ChatAnthropic exactly as app/evaluation/evaluator.py does (same
-     EVAL_JUDGE_MODEL, temperature 0) and send the single word "ping".
+     EVAL_JUDGE_MODEL, no temperature) and send the single word "ping".
   2. Turn on INFO logging for the anthropic and httpx loggers, then repeat step 1.
      This surfaces the HTTP request lines, status codes (429s), and retry sleeps.
   3. Build the embedding model the same way the evaluator does and embed one short
@@ -136,7 +136,7 @@ def _build_chat():
     """ChatAnthropic built the same way RagasEvaluator._llm_wrapper builds it."""
     from langchain_anthropic import ChatAnthropic
 
-    return ChatAnthropic(model=config.EVAL_JUDGE_MODEL, temperature=0.0)
+    return ChatAnthropic(model=config.EVAL_JUDGE_MODEL)
 
 
 def _reply_prefix(chat) -> str:

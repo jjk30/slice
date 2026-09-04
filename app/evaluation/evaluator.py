@@ -147,7 +147,9 @@ class RagasEvaluator:
             from langchain_anthropic import ChatAnthropic
 
             ragas = _load_ragas()
-            chat = ChatAnthropic(model=self.judge_model, temperature=0.0)
+            # No temperature: the judge model is config-chosen, and the current Claude
+            # models reject the setting with a 400.
+            chat = ChatAnthropic(model=self.judge_model)
             self._llm = ragas["LangchainLLMWrapper"](chat)
         return self._llm
 

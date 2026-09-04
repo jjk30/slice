@@ -136,6 +136,27 @@ async def _drain_eval() -> None:
 # --- Sampler math -----------------------------------------------------------
 
 
+def test_judge_is_built_without_temperature(monkeypatch):
+    """The RAGAS judge is a config-chosen model; ChatAnthropic is built with the model
+    only, never ``temperature`` (claude-sonnet-5 and up reject it with a 400)."""
+    import langchain_anthropic
+
+    from app.evaluation import evaluator as evaluator_module
+
+    built = {}
+
+    class RecordingChat:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    monkeypatch.setattr(langchain_anthropic, "ChatAnthropic", RecordingChat)
+    monkeypatch.setattr(evaluator_module, "_load_ragas", lambda: {"LangchainLLMWrapper": lambda chat: chat})
+    judge = evaluator_module.RagasEvaluator(judge_model="claude-sonnet-5")
+    wrapped = judge._llm_wrapper()
+    assert isinstance(wrapped, RecordingChat)
+    assert built == {"model": "claude-sonnet-5"}
+
+
 def test_rate_zero_samples_none():
     assert all(not should_sample(0.0) for _ in range(100))
 

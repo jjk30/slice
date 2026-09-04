@@ -367,11 +367,16 @@ async def fetch_received_email(email_id: str) -> dict:
 
 
 async def answer_with_model(system: str, user: str, model: str) -> str:
-    """One ChatAnthropic call on ``model`` (the same client/key the guardrails and eval judge use)."""
+    """One ChatAnthropic call on ``model`` (the same client/key the guardrails and eval judge use).
+
+    No sampling settings: ``model`` comes from config, and the current Claude models
+    (Sonnet 5, Opus 5 and up) reject ``temperature`` with a 400, so the request carries
+    only the model, the token cap, and the two messages.
+    """
     from langchain_anthropic import ChatAnthropic
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    chat = ChatAnthropic(model=model, temperature=0.0, max_tokens=MAX_ANSWER_TOKENS)
+    chat = ChatAnthropic(model=model, max_tokens=MAX_ANSWER_TOKENS)
     result = await chat.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
     content = getattr(result, "content", result)
     if isinstance(content, list):

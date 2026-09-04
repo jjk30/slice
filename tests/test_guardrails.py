@@ -372,6 +372,59 @@ async def test_classify_input_error_and_timeout_are_errored(caplog):
     assert outcome.errored and outcome.reason == "no classifier"
 
 
+def _anthropic_reply(text: str) -> dict:
+    return {
+        "id": "msg_01", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+        "content": [{"type": "text", "text": text}], "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 2},
+    }
+
+
+def test_no_sampling_adapter_strips_temperature_only():
+    """The adapter the engine hands NeMo drops ``temperature`` from every call (NeMo adds
+    it itself on every rail action) and keeps everything else."""
+    from langchain_anthropic import ChatAnthropic
+
+    adapter = guardrails_engine._no_sampling_adapter_class()(ChatAnthropic(model="claude-sonnet-5", api_key="sk-ant-test"))
+    params = adapter._prepare_call_params(["\n"], {"temperature": 0.001, "max_tokens": 16})
+    assert "temperature" not in params
+    assert params["max_tokens"] == 16 and params["stop"] == ["\n"]
+    assert adapter._prepare_call_params(None, {}) == {}
+
+
+async def test_real_engine_rail_calls_carry_no_temperature(monkeypatch):
+    """The real NeMo engine, on a config-chosen model that rejects ``temperature``: both the
+    label-returning input rail and the Yes/No output rail reach the API without it."""
+    monkeypatch.setattr(config, "GUARDRAILS_ENABLED", True)
+    monkeypatch.setattr(config, "GUARDRAILS_MODEL", "claude-sonnet-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    replies = iter(["OWN_DATA", "No"])
+
+    def respond(request):
+        return httpx.Response(200, json=_anthropic_reply(next(replies)))
+
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post(url__regex=r".*/v1/messages$").mock(side_effect=respond)
+        engine = build_engine(mode="email")
+        assert engine is not None, "the real email-mode engine must build"
+
+        classified = await engine.classify_input("what did I spend?")
+        assert classified.passed and classified.label == "own_data"
+        checked = await engine.check_output("You spent $1.")
+        assert checked.passed
+
+    assert route.call_count == 2
+    for call in route.calls:
+        body = json.loads(call.request.content)
+        assert "temperature" not in body, body
+        assert "top_p" not in body and "top_k" not in body
+        assert body["model"] == "claude-sonnet-5"
+    first = json.loads(route.calls[0].request.content)
+    assert first["max_tokens"] == 16
+    assert "OWN_DATA, GENERAL, or BLOCKED" in json.dumps(first["messages"])
+
+
 async def test_build_engine_kill_switch_returns_none(monkeypatch):
     # Switch off: build returns None WITHOUT constructing an engine or importing nemo.
     monkeypatch.setattr(config, "GUARDRAILS_ENABLED", False)

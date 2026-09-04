@@ -655,6 +655,40 @@ async def test_no_database_answers_nothing(client, env):
     env.db.enabled = True
 
 
+# --- The real model call ------------------------------------------------------
+
+
+ANTHROPIC_RESPONSE = {
+    "id": "msg_01", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+    "content": [{"type": "text", "text": "General advice, not from your account.\n\nSonnet is fine."}],
+    "stop_reason": "end_turn", "usage": {"input_tokens": 10, "output_tokens": 5},
+}
+
+
+async def test_answer_request_body_has_no_temperature(monkeypatch):
+    """``answer_with_model`` sends only model, max_tokens, system and messages. The model is
+    config-chosen, and claude-sonnet-5 rejects ``temperature`` with a 400, so the request
+    must never carry it (nor top_p / top_k)."""
+    import respx
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post(url__regex=r".*/v1/messages$").mock(return_value=httpx.Response(200, json=ANTHROPIC_RESPONSE))
+        text = await service.answer_with_model(GENERAL_SYSTEM_PROMPT, "Is Opus worth it?", "claude-sonnet-5")
+
+    assert text == "General advice, not from your account.\n\nSonnet is fine."
+    body = json.loads(route.calls.last.request.content)
+    assert "temperature" not in body
+    assert "top_p" not in body and "top_k" not in body
+    assert body["model"] == "claude-sonnet-5"
+    assert body["max_tokens"] == service.MAX_ANSWER_TOKENS
+    assert body["messages"] == [{"role": "user", "content": "Is Opus worth it?"}]
+    system = body["system"]
+    system_text = system if isinstance(system, str) else "".join(part.get("text", "") for part in system)
+    assert system_text == GENERAL_SYSTEM_PROMPT
+    assert set(body) == {"model", "max_tokens", "system", "messages"}
+
+
 # --- The Resend channel's generic send ----------------------------------------
 
 

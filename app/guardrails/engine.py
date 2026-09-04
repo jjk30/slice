@@ -206,6 +206,27 @@ def _blocked(response, rail: str) -> tuple[bool, str | None]:
     return False, None
 
 
+def _no_sampling_adapter_class():
+    """``LangChainLLMAdapter`` minus ``temperature`` (imported lazily, like the rest of NeMo).
+
+    NeMo's own rail actions pass ``temperature=config.lowest_temperature`` on every call,
+    and its adapter only drops it for OpenAI reasoning models. The rails model is
+    config-chosen, and the current Claude models (Sonnet 5, Opus 5 and up) reject the
+    setting with a 400, which would make every rail check error. So the adapter the
+    engine hands NeMo strips ``temperature`` from every call before it reaches
+    langchain-anthropic. Nothing else about the call changes.
+    """
+    from nemoguardrails.integrations.langchain.llm_adapter import LangChainLLMAdapter
+
+    class NoSamplingAdapter(LangChainLLMAdapter):
+        def _prepare_call_params(self, stop, kwargs):
+            params = super()._prepare_call_params(stop, kwargs)
+            params.pop("temperature", None)
+            return params
+
+    return NoSamplingAdapter
+
+
 def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
     """Construct the engine, or return None when guardrails are off or unbuildable.
 
@@ -228,16 +249,15 @@ def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
         from langchain_anthropic import ChatAnthropic
         from nemoguardrails import LLMRails, RailsConfig
         from nemoguardrails.actions.llm.utils import llm_call
-        from nemoguardrails.integrations.langchain.llm_adapter import LangChainLLMAdapter
         from nemoguardrails.llm.types import Task
         from nemoguardrails.rails.llm.options import GenerationOptions
+
+        NoSamplingAdapter = _no_sampling_adapter_class()
 
         rails_config = RailsConfig.from_path(config.GUARDRAILS_CONFIG_DIR)
         if mode:
             rails_config = rails_config.model_copy(update={"prompting_mode": mode})
-        llm = LangChainLLMAdapter(
-            ChatAnthropic(model=config.GUARDRAILS_MODEL, temperature=0.0)
-        )
+        llm = NoSamplingAdapter(ChatAnthropic(model=config.GUARDRAILS_MODEL))
         rails = LLMRails(config=rails_config, llm=llm)
 
         # Each check runs exactly one rail type; everything else (dialog, generation,
@@ -253,20 +273,16 @@ def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
 
         # Phase 26: the label-returning form of the input rail. The same task prompt NeMo's
         # self_check_input action renders (so the mode's prompt from prompts.yml is what
-        # runs), the same rails LLM, the same lowest temperature; only the parsing differs.
+        # runs) and the same rails LLM; only the parsing differs. No temperature (see
+        # NoSamplingAdapter), just a small token cap for the one-word answer.
         task_manager = rails.runtime.llm_task_manager
-        temperature = rails_config.lowest_temperature
-        if temperature is None:
-            temperature = 0.0
 
         async def classify(user_input: str) -> str:
             prompt = task_manager.render_task_prompt(
                 task=Task.SELF_CHECK_INPUT, context={"user_input": user_input}
             )
             stop = task_manager.get_stop_tokens(task=Task.SELF_CHECK_INPUT)
-            response = await llm_call(
-                rails.llm, prompt, stop=stop, llm_params={"temperature": temperature, "max_tokens": 16}
-            )
+            response = await llm_call(rails.llm, prompt, stop=stop, llm_params={"max_tokens": 16})
             return getattr(response, "content", response)
 
     except Exception as exc:  # noqa: BLE001 — a broken build just disables the rails.
