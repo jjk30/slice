@@ -67,6 +67,13 @@ from app.main import app
 ALL_USERS = "http://acs.amazonaws.com/groups/global/AllUsers"
 TEMPLATE_FILE = "infra/user-onboarding/slice-readonly-role.yaml"
 
+# Fake access key ids, built at runtime so secret scanners never match the literal shape.
+OLD_KEY_ID = "AKIA" + "EXAMPLEOLD01"
+NEW_KEY_ID = "AKIA" + "EXAMPLENEW01"
+DEPLOY_KEY_ID = "AKIA" + "IOSFODNN7EXAMPLE"
+STALE_KEY_ID = "AKIA" + "EXAMPLEKEY001"
+TEMP_KEY_ID = "ASIA" + "EXAMPLE000001"
+
 
 def _client_error(code: str, message: str, op: str = "AssumeRole") -> ClientError:
     return ClientError({"Error": {"Code": code, "Message": message}}, op)
@@ -283,13 +290,13 @@ async def test_iam_risk_flags_old_key_and_direct_admin():
     # admin-user: one old key + AdministratorAccess.
     stub.add_response(
         "list_access_keys",
-        {"AccessKeyMetadata": [{"UserName": "admin-user", "AccessKeyId": "AKIAEXAMPLEOLD01", "Status": "Active", "CreateDate": old}]},
+        {"AccessKeyMetadata": [{"UserName": "admin-user", "AccessKeyId": OLD_KEY_ID, "Status": "Active", "CreateDate": old}]},
         {"UserName": "admin-user"},
     )
     stub.add_response(
         "get_access_key_last_used",
         {"UserName": "admin-user", "AccessKeyLastUsed": {"ServiceName": "s3", "Region": "us-east-1", "LastUsedDate": recent}},
-        {"AccessKeyId": "AKIAEXAMPLEOLD01"},
+        {"AccessKeyId": OLD_KEY_ID},
     )
     stub.add_response(
         "list_attached_user_policies",
@@ -299,7 +306,7 @@ async def test_iam_risk_flags_old_key_and_direct_admin():
     # normal: one recent key, no admin.
     stub.add_response(
         "list_access_keys",
-        {"AccessKeyMetadata": [{"UserName": "normal", "AccessKeyId": "AKIAEXAMPLENEW01", "Status": "Active", "CreateDate": recent}]},
+        {"AccessKeyMetadata": [{"UserName": "normal", "AccessKeyId": NEW_KEY_ID, "Status": "Active", "CreateDate": recent}]},
         {"UserName": "normal"},
     )
     stub.add_response("list_attached_user_policies", {"AttachedPolicies": []}, {"UserName": "normal"})
@@ -309,9 +316,9 @@ async def test_iam_risk_flags_old_key_and_direct_admin():
     stub.assert_no_pending_responses()
 
     by_resource = {f.resource_id: f for f in findings}
-    assert "AKIAEXAMPLEOLD01" in by_resource and by_resource["AKIAEXAMPLEOLD01"].severity == SEVERITY_MED
+    assert OLD_KEY_ID in by_resource and by_resource[OLD_KEY_ID].severity == SEVERITY_MED
     assert "admin-user" in by_resource and by_resource["admin-user"].severity == SEVERITY_HIGH
-    assert "AKIAEXAMPLENEW01" not in by_resource  # recent key not flagged
+    assert NEW_KEY_ID not in by_resource  # recent key not flagged
 
 
 async def test_iam_key_finding_is_about_age_and_titled_as_a_key(monkeypatch):
@@ -329,13 +336,13 @@ async def test_iam_key_finding_is_about_age_and_titled_as_a_key(monkeypatch):
     ]})
     stub.add_response(
         "list_access_keys",
-        {"AccessKeyMetadata": [{"UserName": "deploy", "AccessKeyId": "AKIAIOSFODNN7EXAMPLE", "Status": "Active", "CreateDate": old}]},
+        {"AccessKeyMetadata": [{"UserName": "deploy", "AccessKeyId": DEPLOY_KEY_ID, "Status": "Active", "CreateDate": old}]},
         {"UserName": "deploy"},
     )
     stub.add_response(
         "get_access_key_last_used",
         {"UserName": "deploy", "AccessKeyLastUsed": {"ServiceName": "s3", "Region": "us-east-1", "LastUsedDate": old}},
-        {"AccessKeyId": "AKIAIOSFODNN7EXAMPLE"},
+        {"AccessKeyId": DEPLOY_KEY_ID},
     )
     stub.add_response("list_attached_user_policies", {"AttachedPolicies": []}, {"UserName": "deploy"})
     stub.activate()
@@ -345,14 +352,14 @@ async def test_iam_key_finding_is_about_age_and_titled_as_a_key(monkeypatch):
 
     assert len(findings) == 1
     finding = findings[0]
-    assert finding.resource_id == "AKIAIOSFODNN7EXAMPLE" and is_access_key_id(finding.resource_id)
+    assert finding.resource_id == DEPLOY_KEY_ID and is_access_key_id(finding.resource_id)
     assert finding.severity == SEVERITY_MED
     assert finding.detail["user"] == "deploy" and finding.detail["age_days"] > 90
     assert finding.detail["status"] == "Active" and finding.detail["last_used"].startswith("2020-01-01")
     assert "days old" in finding.summary and "Administrator" not in finding.summary
 
     title = finding_title(finding.check, finding.resource_id, config.AWS_REGION)
-    assert title == "The access key AKIAIOSFODNN7EXAMPLE is more than 90 days old."
+    assert title == f"The access key {DEPLOY_KEY_ID} is more than 90 days old."
     assert "full admin access" not in title
     assert SCAN_KEY_COPY["iam_risk"]["doc"].startswith("https://docs.aws.amazon.com/IAM/")
 
@@ -367,7 +374,7 @@ async def test_iam_risk_key_age_threshold_is_config(monkeypatch):
     ]})
     stub.add_response(
         "list_access_keys",
-        {"AccessKeyMetadata": [{"UserName": "u", "AccessKeyId": "AKIAEXAMPLEKEY001", "Status": "Active", "CreateDate": old}]},
+        {"AccessKeyMetadata": [{"UserName": "u", "AccessKeyId": STALE_KEY_ID, "Status": "Active", "CreateDate": old}]},
         {"UserName": "u"},
     )
     stub.add_response("list_attached_user_policies", {"AttachedPolicies": []}, {"UserName": "u"})
@@ -928,7 +935,7 @@ def test_make_session_assumes_with_external_id():
         "assume_role",
         {
             "Credentials": {
-                "AccessKeyId": "ASIAEXAMPLE000001", "SecretAccessKey": "secret",
+                "AccessKeyId": TEMP_KEY_ID, "SecretAccessKey": "secret",
                 "SessionToken": "token", "Expiration": datetime(2030, 1, 1, tzinfo=timezone.utc),
             },
             "AssumedRoleUser": {"AssumedRoleId": "AROAEXAMPLE:slice", "Arn": "arn:aws:sts::111111111111:assumed-role/x/slice"},
@@ -946,7 +953,7 @@ def test_make_session_assumes_with_external_id():
     )
     stub.assert_no_pending_responses()  # proves assume_role was called with ExternalId=ext-123
     creds = session.get_credentials()
-    assert creds.access_key == "ASIAEXAMPLE000001"
+    assert creds.access_key == TEMP_KEY_ID
 
 
 def test_test_role_success(monkeypatch):

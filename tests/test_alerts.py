@@ -676,19 +676,22 @@ def test_iam_key_finding_uses_the_key_wording_not_the_admin_wording(monkeypatch)
     """check_iam_risk flags a KEY for its age (resource: the key id), and a USER for a
     directly attached AdministratorAccess. Only the user finding may say "full admin"."""
     monkeypatch.setattr(config, "SCANNER_IAM_KEY_MAX_AGE_DAYS", 90)
-    assert is_access_key_id("AKIAIOSFODNN7EXAMPLE") and is_access_key_id("ASIAIOSFODNN7EXAMPLE")
-    assert not is_access_key_id("admin-user") and not is_access_key_id("akiaiosfodnn7example") and not is_access_key_id(None)
+    # Fake key ids, built at runtime so secret scanners never match the literal shape.
+    long_term = "AKIA" + "IOSFODNN7EXAMPLE"
+    temporary = "ASIA" + "IOSFODNN7EXAMPLE"
+    assert is_access_key_id(long_term) and is_access_key_id(temporary)
+    assert not is_access_key_id("admin-user") and not is_access_key_id(long_term.lower()) and not is_access_key_id(None)
 
-    key_title = finding_title("iam_risk", "AKIAIOSFODNN7EXAMPLE", "us-east-1")
-    assert key_title == "The access key AKIAIOSFODNN7EXAMPLE is more than 90 days old."
+    key_title = finding_title("iam_risk", long_term, "us-east-1")
+    assert key_title == f"The access key {long_term} is more than 90 days old."
     assert "admin" not in key_title
     monkeypatch.setattr(config, "SCANNER_IAM_KEY_MAX_AGE_DAYS", 30)
-    assert finding_title("iam_risk", "AKIAIOSFODNN7EXAMPLE", None) == "The access key AKIAIOSFODNN7EXAMPLE is more than 30 days old."
+    assert finding_title("iam_risk", long_term, None) == f"The access key {long_term} is more than 30 days old."
     assert finding_title("iam_risk", "admin-user", None) == "The user admin-user has full admin access attached straight to their account."
 
-    scan = _scan_alert({"count": 1, "findings": [{"check": "iam_risk", "resource": "AKIAIOSFODNN7EXAMPLE", "region": "us-east-1", "severity": "med"}]})
+    scan = _scan_alert({"count": 1, "findings": [{"check": "iam_risk", "resource": long_term, "region": "us-east-1", "severity": "med"}]})
     body = body_for(scan)
-    assert "The access key AKIAIOSFODNN7EXAMPLE is more than 30 days old." in body
+    assert f"The access key {long_term} is more than 30 days old." in body
     assert "the longer a key lives the more places it can leak from." in body
     assert "make a new key, switch your tools to it, then make the old one inactive and delete it." in body
     assert "Read more: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html#Using_RotateAccessKey " in body
