@@ -11,7 +11,13 @@ nothing, or sends the fixed line where the spec says so):
 3. **Identity** — the sender must match ``accounts.email`` (case-insensitive). No match:
    log and stop, nothing is sent, so a stranger never learns whether an address exists.
 4. **Body** — fetched from Resend's receiving API (``text``, else stripped ``html``),
-   cut at the first quoted line, trimmed to 2000 characters.
+   cut at the first quoted line, trimmed to 2000 characters. The receiving API's
+   ``headers`` set is small and leaves out the threading headers, so when the JSON has
+   ``raw.download_url`` the raw MIME is fetched too (a signed link, no auth) and
+   ``Message-ID``, ``In-Reply-To`` and ``References`` are read from it, falling back to
+   the ``headers`` dict and last to the webhook's message id. A failed raw download is
+   a fallback, never an error. Every id is normalised (no angle brackets, lower case)
+   before it is used as a key, alias or candidate; outgoing headers keep the brackets.
 5. **Daily limit** (phase 26): at most ``EMAIL_ASSISTANT_DAILY_LIMIT`` replies per
    account per UTC day, counted in Redis. The first mail over the line gets one fixed
    sentence; every later one that day gets nothing at all.
@@ -67,6 +73,8 @@ import logging
 import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from email import message_from_bytes
+from email import policy as email_policy
 from email.utils import parseaddr
 from typing import Awaitable, Callable
 
@@ -123,6 +131,11 @@ MAX_ANSWER_TOKENS = 450
 ANSWER_TIMEOUT_SECONDS = 30.0
 RESEND_RECEIVING_URL = "https://api.resend.com/emails/receiving/{email_id}"
 RESEND_FETCH_TIMEOUT_SECONDS = 10.0
+RESEND_RAW_TIMEOUT_SECONDS = 10.0
+# The threading headers read from the raw MIME (phase 27). They land on the fetched
+# body under this key so the pipeline can prefer them over the receiving API's set.
+RAW_HEADERS_KEY = "raw_headers"
+THREADING_HEADERS = ("Message-ID", "In-Reply-To", "References")
 
 # The daily reply counter (phase 26): one Redis key per account per UTC day. The day is in
 # the key, so a new day starts at zero on its own; the TTL only tidies old keys away.
@@ -251,7 +264,7 @@ class InboundEvent:
     message_id: str | None
     to: tuple[str, ...] = ()
     # The inbound mail's ``References`` ids, in order (phase 27). The webhook does not
-    # carry them; the pipeline fills them in from the fetched mail's headers.
+    # carry them; the pipeline fills them in from the fetched mail (raw MIME first).
     references: tuple[str, ...] = ()
 
     @property
@@ -261,11 +274,20 @@ class InboundEvent:
     def reply_headers(self) -> dict[str, str]:
         """The threading headers of our reply: ``In-Reply-To`` is the inbound message id,
         ``References`` is the inbound chain plus that id (no repeats, order kept), so the
-        client's next reply carries the whole chain. Empty without a message id."""
+        client's next reply carries the whole chain. Every id goes out with its angle
+        brackets, whatever shape it came in. Empty without a message id."""
         if not self.message_id:
             return {}
-        chain = [item for item in self.references if item != self.message_id] + [self.message_id]
-        return {"In-Reply-To": self.message_id, "References": " ".join(chain)}
+        message_id = bracketed_id(self.message_id)
+        chain: list[str] = []
+        seen: set[str] = set()
+        for item in self.references:
+            key = normalise_id(item)
+            if key and key != normalise_id(message_id) and key not in seen:
+                seen.add(key)
+                chain.append(bracketed_id(item))
+        chain.append(message_id)
+        return {"In-Reply-To": message_id, "References": " ".join(chain)}
 
 
 def parse_address(raw) -> str:
@@ -358,10 +380,72 @@ def _header_value(headers, name: str) -> str | None:
     return None
 
 
-def parse_references(received: dict) -> tuple[str, ...]:
-    """The ids in the fetched mail's ``References`` header, in order; () when there are none."""
-    value = _header_value(received.get("headers") if isinstance(received, dict) else None, "References")
-    return tuple(value.split()) if value else ()
+def normalise_id(value) -> str:
+    """One message id as a key: whitespace and angle brackets stripped, lower case; "" for nothing."""
+    if not isinstance(value, str):
+        return ""
+    return value.strip().strip("<>").strip().lower()
+
+
+def bracketed_id(value: str) -> str:
+    """One message id as a header value: the id inside angle brackets, exactly one pair."""
+    inner = (value or "").strip().strip("<>").strip()
+    return f"<{inner}>" if inner else ""
+
+
+@dataclass(frozen=True)
+class ThreadIds:
+    """The threading ids of one inbound mail, as they were seen (brackets and case kept,
+    for the outgoing headers), and where they came from."""
+
+    message_id: str | None
+    in_reply_to: str | None
+    references: tuple[str, ...]
+    # "raw" (the raw MIME), "headers" (the receiving API's set), "webhook" (only the
+    # webhook's message id), or "none" (no id at all). The best source that gave any id.
+    source: str
+
+
+def parse_raw_headers(message) -> dict[str, str]:
+    """``Message-ID``, ``In-Reply-To`` and ``References`` out of a parsed MIME message,
+    unfolded onto one line each; only the ones present."""
+    found: dict[str, str] = {}
+    for name in THREADING_HEADERS:
+        value = message.get(name)
+        if value is not None:
+            text = " ".join(str(value).split())
+            if text:
+                found[name] = text
+    return found
+
+
+def thread_ids(received: dict, event: InboundEvent) -> ThreadIds:
+    """Each threading id from the raw MIME headers, else the receiving API's ``headers``,
+    else (the message id only) the webhook. ``References`` is split into its ids."""
+    raw = received.get(RAW_HEADERS_KEY) if isinstance(received, dict) else None
+    headers = received.get("headers") if isinstance(received, dict) else None
+    lookups = (("raw", raw), ("headers", headers))
+
+    def pick(name: str) -> tuple[str | None, str | None]:
+        for source, lookup in lookups:
+            value = _header_value(lookup, name)
+            if value and value.strip():
+                return " ".join(value.split()), source
+        return None, None
+
+    references, references_source = pick("References")
+    in_reply_to, in_reply_to_source = pick("In-Reply-To")
+    message_id, message_id_source = pick("Message-ID")
+    if not message_id and event.message_id:
+        message_id, message_id_source = event.message_id.strip(), "webhook"
+    sources = {references_source, in_reply_to_source, message_id_source}
+    source = next((name for name in ("raw", "headers", "webhook") if name in sources), "none")
+    return ThreadIds(
+        message_id=message_id,
+        in_reply_to=in_reply_to,
+        references=tuple(references.split()) if references else (),
+        source=source,
+    )
 
 
 def is_auto_submitted(received: dict) -> bool:
@@ -450,20 +534,20 @@ async def count_reply(redis, account_id: int, now: datetime | None = None) -> in
 # --- Thread memory (phase 27) -----------------------------------------------------
 
 
-def thread_candidates(received: dict, event: InboundEvent) -> list[str]:
-    """Every id this mail's thread could be remembered under, in lookup order: the
-    ``References`` ids first to last, then ``In-Reply-To``, then the inbound message id.
-    No repeats; [] when the mail carries no ids at all."""
-    headers = received.get("headers") if isinstance(received, dict) else None
-    raw = list(parse_references(received))
-    raw.append(_header_value(headers, "In-Reply-To"))
-    raw.append(event.message_id or _header_value(headers, "Message-Id"))
+def candidate_ids(ids: ThreadIds) -> list[str]:
+    """Every id this mail's thread could be remembered under, normalised, in lookup order:
+    the ``References`` ids first to last, then ``In-Reply-To``, then the message id. No
+    repeats; [] when the mail carries no ids at all."""
     candidates: list[str] = []
-    for item in raw:
-        item = item.strip() if isinstance(item, str) else ""
-        if item and item not in candidates:
-            candidates.append(item)
+    for item in (*ids.references, ids.in_reply_to, ids.message_id):
+        key = normalise_id(item)
+        if key and key not in candidates:
+            candidates.append(key)
     return candidates
+
+
+def thread_candidates(received: dict, event: InboundEvent) -> list[str]:
+    return candidate_ids(thread_ids(received, event))
 
 
 def thread_key(received: dict, event: InboundEvent) -> str | None:
@@ -474,11 +558,11 @@ def thread_key(received: dict, event: InboundEvent) -> str | None:
 
 
 def thread_redis_key(account_id: int, key: str) -> str:
-    return f"{_THREAD_PREFIX}:{account_id}:{key}"
+    return f"{_THREAD_PREFIX}:{account_id}:{normalise_id(key)}"
 
 
 def thread_alias_key(account_id: int, key: str) -> str:
-    return f"{_THREAD_ALIAS_PREFIX}:{account_id}:{key}"
+    return f"{_THREAD_ALIAS_PREFIX}:{account_id}:{normalise_id(key)}"
 
 
 def _as_text(raw) -> str:
@@ -503,11 +587,11 @@ async def resolve_thread(redis, account_id: int, candidates: list[str], root: st
         _thread_unavailable(exc)
         return root, "none"
     for item, alias, turns in zip(candidates, aliases, direct):
-        if alias:
-            return _as_text(alias), "alias"
+        if alias and normalise_id(_as_text(alias)):
+            return normalise_id(_as_text(alias)), "alias"
         if turns:
-            return item, "direct"
-    return root, "none"
+            return normalise_id(item), "direct"
+    return normalise_id(root) if root else None, "none"
 
 
 def _trim_turn(turn) -> dict | None:
@@ -555,6 +639,7 @@ async def remember_turn(redis, account_id: int, key: str | None, question: str, 
     References id is. None when nothing was stored (no Redis, no key, or Redis
     unreachable): the reply has already gone out, so this fails open.
     """
+    key = normalise_id(key)
     if redis is None or not key:
         return None
     turns = await load_thread(redis, account_id, key)
@@ -563,8 +648,9 @@ async def remember_turn(redis, account_id: int, key: str | None, question: str, 
     try:
         await redis.set(thread_redis_key(account_id, key), json.dumps(turns), ex=THREAD_TTL_SECONDS)
         for item in aliases or ():
-            if item and item != key:
-                await redis.set(thread_alias_key(account_id, item), key, ex=THREAD_TTL_SECONDS)
+            alias = normalise_id(item)
+            if alias and alias != key:
+                await redis.set(thread_alias_key(account_id, alias), key, ex=THREAD_TTL_SECONDS)
     except Exception as exc:  # noqa: BLE001
         _thread_unavailable(exc)
         return None
@@ -583,7 +669,13 @@ def thread_section(turns) -> str:
 
 
 async def fetch_received_email(email_id: str) -> dict:
-    """GET the received mail from Resend: ``text``, ``html``, ``headers``. Raises on failure."""
+    """GET the received mail from Resend: ``text``, ``html``, ``headers``. Raises on failure.
+
+    The receiving API's ``headers`` leave out the threading headers, so when the body
+    has ``raw.download_url`` the raw MIME is fetched as well and its ``Message-ID``,
+    ``In-Reply-To`` and ``References`` land on the body under ``RAW_HEADERS_KEY``. That
+    second fetch never raises: no link, a bad link, or a bad parse just leaves the key out.
+    """
     if not config.RESEND_API_KEY:
         raise RuntimeError("RESEND_API_KEY is not set")
     url = RESEND_RECEIVING_URL.format(email_id=email_id)
@@ -593,7 +685,32 @@ async def fetch_received_email(email_id: str) -> dict:
     body = response.json()
     if not isinstance(body, dict):
         raise RuntimeError("unexpected receiving API response")
+    raw_headers = await fetch_raw_headers(body)
+    if raw_headers is not None:
+        body[RAW_HEADERS_KEY] = raw_headers
     return body
+
+
+async def fetch_raw_headers(body: dict) -> dict[str, str] | None:
+    """The threading headers out of the raw MIME at ``raw.download_url``, or None.
+
+    The link is signed, so the GET carries no auth header. Any failure (no link, a
+    non-2xx, a timeout, unparsable bytes) is logged and answered with None: the caller
+    falls back to the receiving API's headers and the webhook's message id.
+    """
+    raw = body.get("raw") if isinstance(body, dict) else None
+    url = raw.get("download_url") if isinstance(raw, dict) else None
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=RESEND_RAW_TIMEOUT_SECONDS) as client:
+            response = await client.get(url.strip())
+        response.raise_for_status()
+        message = message_from_bytes(response.content, policy=email_policy.default)
+        return parse_raw_headers(message)
+    except Exception as exc:  # noqa: BLE001, the raw copy is a bonus, never a blocker.
+        logger.warning(json.dumps({"event": "email_assistant_raw_unavailable", "error": f"{type(exc).__name__}: {exc}"}))
+        return None
 
 
 async def answer_with_model(system: str, user: str, model: str) -> str:
@@ -776,9 +893,11 @@ class EmailAssistant:
         if is_auto_submitted(received):
             self._log("loop_guard", event, account_id, VERDICT_IGNORED, reason="auto_submitted_header")
             raise _Stop(VERDICT_IGNORED)
-        # The mail's References chain rides on the event from here: every reply below
-        # (the answer, the fixed line, the limit line) threads with the whole chain.
-        event = replace(event, references=parse_references(received))
+        # The threading ids (raw MIME first, then the receiving API's headers, then the
+        # webhook) ride on the event from here: every reply below (the answer, the fixed
+        # line, the limit line) threads with the whole chain.
+        ids = thread_ids(received, event)
+        event = replace(event, message_id=ids.message_id or event.message_id, references=ids.references)
         question = new_text(received)
         if not question:
             self._log("fetch", event, account_id, VERDICT_IGNORED, reason="empty_body")
@@ -802,10 +921,14 @@ class EmailAssistant:
         # thread is looked up under any id the mail carries (alias, then direct), else
         # the root key logic. No Redis, or Redis down, means none. The count and how the
         # key was found are logged, never the text or the ids.
-        candidates = thread_candidates(received, event)
-        key, via = await resolve_thread(self.redis, account_id, candidates, thread_key(received, event))
+        candidates = candidate_ids(ids)
+        root = candidates[0] if candidates else None
+        key, via = await resolve_thread(self.redis, account_id, candidates, root)
         turns = await load_thread(self.redis, account_id, key)
-        self._log("thread_load", event, account_id, None, turns=len(turns), keyed=key is not None, via=via)
+        self._log(
+            "thread_load", event, account_id, None,
+            turns=len(turns), keyed=key is not None, via=via, ids=len(candidates), source=ids.source,
+        )
 
         # i. Input rail (the topic rail), now a three-way sort, with the earlier turns so
         # a follow-up is read in context. No engine, an error, a block, or an answer that

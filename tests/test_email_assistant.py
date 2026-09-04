@@ -41,15 +41,17 @@ from app.email_assistant.service import (
     InboundEvent,
     count_reply,
     daily_key,
+    bracketed_id,
     load_thread,
     new_text,
-    parse_references,
+    normalise_id,
     remember_turn,
     reply_subject,
     resolve_thread,
     strip_quoted,
     thread_alias_key,
     thread_candidates,
+    thread_ids,
     thread_key,
     thread_redis_key,
     tidy_answer,
@@ -863,25 +865,77 @@ def test_thread_key_prefers_references_then_in_reply_to_then_message_id():
     event = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="<inbound@mail>")
     # References: the first id wins, whatever the header shape and case.
     received = {"headers": {"References": "<root@slice> <second@mail>", "In-Reply-To": "<second@mail>"}}
-    assert thread_key(received, event) == "<root@slice>"
-    # Every id the mail carries, lookup order, no repeats.
-    assert thread_candidates(received, event) == ["<root@slice>", "<second@mail>", "<inbound@mail>"]
-    assert parse_references(received) == ("<root@slice>", "<second@mail>")
-    assert parse_references({"headers": {}}) == () and parse_references({}) == ()
+    assert thread_key(received, event) == "root@slice"
+    # Every id the mail carries, lookup order, no repeats, normalised.
+    assert thread_candidates(received, event) == ["root@slice", "second@mail", "inbound@mail"]
+    assert thread_ids(received, event).references == ("<root@slice>", "<second@mail>")
+    assert thread_ids({"headers": {}}, event).references == () and thread_ids({}, event).references == ()
     received = {"headers": [{"name": "references", "value": "  <root@slice>\n <second@mail>"}]}
-    assert thread_key(received, event) == "<root@slice>"
+    assert thread_key(received, event) == "root@slice"
     # No References: In-Reply-To.
     received = {"headers": [{"name": "In-Reply-To", "value": " <second@mail> "}, {"name": "References", "value": "  "}]}
-    assert thread_key(received, event) == "<second@mail>"
+    assert thread_key(received, event) == "second@mail"
     # Neither: the inbound message id, from the event, else the Message-Id header.
-    assert thread_key({"headers": {}}, event) == "<inbound@mail>"
+    assert thread_key({"headers": {}}, event) == "inbound@mail"
     bare = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id=None)
-    assert thread_key({"headers": {"Message-Id": "<hdr@mail>"}}, bare) == "<hdr@mail>"
+    assert thread_key({"headers": {"Message-Id": "<hdr@mail>"}}, bare) == "hdr@mail"
     assert thread_key({"headers": {}}, bare) is None
     assert thread_key({}, bare) is None
     assert thread_candidates({}, bare) == []
-    assert thread_redis_key(7, "<root@slice>") == "slice:email_thread:7:<root@slice>"
-    assert thread_alias_key(7, "<m1@mail>") == "slice:email_thread_alias:7:<m1@mail>"
+    # The Redis keys normalise too, so a bracketed id and a bare one are the same key.
+    assert thread_redis_key(7, "<root@slice>") == "slice:email_thread:7:root@slice" == thread_redis_key(7, " Root@Slice ")
+    assert thread_alias_key(7, "<m1@mail>") == "slice:email_thread_alias:7:m1@mail"
+
+
+def test_ids_match_with_or_without_brackets():
+    assert normalise_id(" <CAF+Abc@Mail.Gmail.com> ") == "caf+abc@mail.gmail.com"
+    assert normalise_id("caf+abc@mail.gmail.com") == "caf+abc@mail.gmail.com"
+    assert normalise_id("<>") == "" and normalise_id(None) == "" and normalise_id("  ") == ""
+    assert bracketed_id("caf@mail") == "<caf@mail>" == bracketed_id(" <caf@mail> ") and bracketed_id("") == ""
+    event = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="M1@Mail")
+    received = {"headers": {"References": "<a@slice> A@SLICE a@slice", "In-Reply-To": "<m1@mail>"}}
+    assert thread_candidates(received, event) == ["a@slice", "m1@mail"]
+    # Outgoing headers always carry brackets, whatever shape the ids came in.
+    event = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="M1@Mail", references=("a@slice", "<A@slice>"))
+    assert event.reply_headers() == {"In-Reply-To": "<M1@Mail>", "References": "<a@slice> <M1@Mail>"}
+
+
+async def test_memory_saved_under_one_id_shape_is_found_under_the_other():
+    redis = fakeredis.aioredis.FakeRedis()
+    assert await remember_turn(redis, 7, "<Root@Slice>", "q", "a", aliases=["<M1@Gmail>"]) == 1
+    assert await load_thread(redis, 7, "root@slice") == [{"q": "q", "a": "a"}]
+    assert await load_thread(redis, 7, " <ROOT@slice> ") == [{"q": "q", "a": "a"}]
+    assert (await redis.get("slice:email_thread_alias:7:m1@gmail")).decode() == "root@slice"
+    assert await resolve_thread(redis, 7, ["m1@gmail"], "m1@gmail") == ("root@slice", "alias")
+    assert await resolve_thread(redis, 7, ["<ROOT@slice>"], "<ROOT@slice>") == ("root@slice", "direct")
+    assert await resolve_thread(redis, 7, ["<new@x>"], "<new@x>") == ("new@x", "none")
+
+
+def test_thread_ids_prefer_raw_then_headers_then_webhook():
+    event = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="<hook@gmail>")
+    received = {
+        "headers": {"References": "<stale@slice>", "In-Reply-To": "<stale@slice>", "Message-Id": "<hdr@gmail>"},
+        "raw_headers": {"References": "<alert@slice> <m1@gmail>", "In-Reply-To": "<m1@gmail>"},
+    }
+    ids = thread_ids(received, event)
+    # The raw parse wins where it gave a value; the headers dict fills the one it did not.
+    assert ids.references == ("<alert@slice>", "<m1@gmail>") and ids.in_reply_to == "<m1@gmail>"
+    assert ids.message_id == "<hdr@gmail>" and ids.source == "raw"
+    # No raw copy: the headers dict, then the webhook for the message id.
+    del received["raw_headers"]
+    ids = thread_ids(received, event)
+    assert ids.references == ("<stale@slice>",) and ids.message_id == "<hdr@gmail>" and ids.source == "headers"
+    del received["headers"]["Message-Id"]
+    ids = thread_ids(received, event)
+    assert ids.message_id == "<hook@gmail>" and ids.source == "headers"
+    ids = thread_ids({"headers": {}}, event)
+    assert ids == thread_ids({}, event)
+    assert ids.references == () and ids.in_reply_to is None and ids.message_id == "<hook@gmail>" and ids.source == "webhook"
+    bare = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id=None)
+    assert thread_ids({}, bare).source == "none" and thread_candidates({}, bare) == []
+    # An empty raw value does not shadow the headers dict.
+    ids = thread_ids({"headers": {"References": "<a@x>"}, "raw_headers": {"References": "  "}}, bare)
+    assert ids.references == ("<a@x>",) and ids.source == "headers"
 
 
 def test_reply_headers_carry_the_whole_chain():
@@ -1149,7 +1203,7 @@ async def test_gmail_chain_finds_the_thread_through_the_aliases(client, env, cap
     assert env.db.replies["em_1"]["verdict"] == "answered_own"
     assert env.fakes.sent[0]["headers"] == {"In-Reply-To": "<m1@gmail>", "References": "<alert@slice> <m1@gmail>"}
     assert len(json.loads(await redis.get(root_key))) == 1
-    assert (await redis.get(thread_alias_key(7, "<m1@gmail>"))).decode() == "<alert@slice>"
+    assert (await redis.get(thread_alias_key(7, "<m1@gmail>"))).decode() == "alert@slice"
     assert await redis.get(thread_alias_key(7, "<alert@slice>")) is None
     root_ttl, alias_ttl = await redis.ttl(root_key), await redis.ttl(thread_alias_key(7, "<m1@gmail>"))
     assert 0 < alias_ttl <= THREAD_TTL_SECONDS and abs(root_ttl - alias_ttl) <= 1
@@ -1167,7 +1221,7 @@ async def test_gmail_chain_finds_the_thread_through_the_aliases(client, env, cap
     assert [turn["q"] for turn in json.loads(await redis.get(root_key))] == ["What is my cap?", "And how much is left?"]
     assert await redis.get(thread_redis_key(7, "<m1@gmail>")) is None
     for alias in ("<r1@slice>", "<m2@gmail>"):
-        assert (await redis.get(thread_alias_key(7, alias))).decode() == "<alert@slice>"
+        assert (await redis.get(thread_alias_key(7, alias))).decode() == "alert@slice"
         assert 0 < await redis.ttl(thread_alias_key(7, alias)) <= THREAD_TTL_SECONDS
     assert env.fakes.sent[1]["headers"] == {"In-Reply-To": "<m2@gmail>", "References": "<m1@gmail> <r1@slice> <m2@gmail>"}
 
@@ -1180,7 +1234,7 @@ async def test_gmail_chain_finds_the_thread_through_the_aliases(client, env, cap
     assert env.db.replies["em_3"]["verdict"] == "answered_own"
     assert [turn["q"] for turn in env.engine.input_turns[2]] == ["What is my cap?", "And how much is left?"]
     assert len(json.loads(await redis.get(root_key))) == 3
-    assert (await redis.get(thread_alias_key(7, "<r2@slice>"))).decode() == "<alert@slice>"
+    assert (await redis.get(thread_alias_key(7, "<r2@slice>"))).decode() == "alert@slice"
 
     # Mail 4 starts a fresh thread from a different alert: the root logic, no turns.
     env.fakes.received["headers"] = {"References": "<alert2@slice>", "In-Reply-To": "<alert2@slice>"}
@@ -1213,7 +1267,7 @@ async def test_thread_without_references_is_found_directly(client, env, caplog):
     await post(client, received_event(email_id="em_2", message_id="<m2@mail>"))
     assert len(env.engine.input_turns[1]) == 1
     assert len(json.loads(await redis.get(thread_redis_key(7, "<m1@mail>")))) == 2
-    assert (await redis.get(thread_alias_key(7, "<r1@slice>"))).decode() == "<m1@mail>"
+    assert (await redis.get(thread_alias_key(7, "<r1@slice>"))).decode() == "m1@mail"
     loads = [line for line in _pipeline_steps(caplog) if line["step"] == "thread_load"]
     assert [line["via"] for line in loads] == ["none", "direct"]
 
@@ -1231,11 +1285,142 @@ async def test_resolve_thread_order_alias_then_direct():
     await redis.set(thread_redis_key(7, "<b>"), json.dumps([{"q": "q", "a": "a"}]))
     await redis.set(thread_alias_key(7, "<c>"), "<root>")
     # First candidate with anything wins; an alias on a later id beats nothing on earlier ones.
-    assert await resolve_thread(redis, 7, ["<a>", "<b>", "<c>"], "<a>") == ("<b>", "direct")
-    assert await resolve_thread(redis, 7, ["<a>", "<c>", "<b>"], "<a>") == ("<root>", "alias")
-    assert await resolve_thread(redis, 7, ["<a>", "<z>"], "<a>") == ("<a>", "none")
+    assert await resolve_thread(redis, 7, ["a", "b", "c"], "a") == ("b", "direct")
+    assert await resolve_thread(redis, 7, ["a", "c", "b"], "a") == ("root", "alias")
+    assert await resolve_thread(redis, 7, ["a", "z"], "a") == ("a", "none")
     assert await resolve_thread(redis, 7, [], None) == (None, "none")
-    assert await resolve_thread(None, 7, ["<b>"], "<b>") == ("<b>", "none")
+    assert await resolve_thread(None, 7, ["b"], "b") == ("b", "none")
+
+
+RAW_MIME = (
+    b"From: Ada Lovelace <ada@example.com>\r\n"
+    b"To: alerts@slice.test\r\n"
+    b"Subject: Re: slice found 2 things\r\n"
+    b"Message-ID: <CAF+m2@mail.gmail.com>\r\n"
+    b"In-Reply-To: <r1@resend.slice>\r\n"
+    b"References: <alert@slice.test>\r\n"
+    b"\t<CAF+m1@mail.gmail.com>\r\n"
+    b"\t<r1@resend.slice>\r\n"
+    b"Content-Type: text/plain; charset=utf-8\r\n"
+    b"\r\n"
+    b"And how much is left?\r\n"
+)
+
+
+async def test_fetch_received_email_reads_threading_from_the_raw_download(monkeypatch):
+    """Resend's receiving API leaves the threading headers out, so the raw MIME behind
+    raw.download_url is fetched (no auth, it is a signed link) and parsed for them."""
+    import respx
+
+    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
+    body = {
+        "id": "em_1", "text": "And how much is left?", "html": None,
+        "headers": {"content-type": "text/plain", "subject": "Re: slice found 2 things"},
+        "raw": {"download_url": "https://files.resend.test/raw/em_1?sig=abc"},
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        api = mock.get("https://api.resend.com/emails/receiving/em_1").mock(return_value=httpx.Response(200, json=body))
+        raw = mock.get("https://files.resend.test/raw/em_1?sig=abc").mock(return_value=httpx.Response(200, content=RAW_MIME))
+        received = await service.fetch_received_email("em_1")
+
+    assert api.calls.last.request.headers["authorization"] == "Bearer re_test"
+    assert "authorization" not in raw.calls.last.request.headers
+    assert received["text"] == "And how much is left?"
+    assert received["raw_headers"] == {
+        "Message-ID": "<CAF+m2@mail.gmail.com>",
+        "In-Reply-To": "<r1@resend.slice>",
+        "References": "<alert@slice.test> <CAF+m1@mail.gmail.com> <r1@resend.slice>",
+    }
+    # And the pipeline's view: raw beats the headers dict, and the chain is complete.
+    event = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="<CAF+m2@mail.gmail.com>")
+    ids = thread_ids(received, event)
+    assert ids.source == "raw"
+    assert thread_candidates(received, event) == ["alert@slice.test", "caf+m1@mail.gmail.com", "r1@resend.slice", "caf+m2@mail.gmail.com"]
+
+
+async def test_fetch_received_email_falls_back_when_the_raw_download_fails(monkeypatch):
+    import respx
+
+    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
+    body = {"id": "em_1", "text": "hi", "headers": {"In-Reply-To": "<hdr@slice>"}, "raw": {"download_url": "https://files.resend.test/raw/em_1"}}
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get("https://api.resend.com/emails/receiving/em_1").mock(return_value=httpx.Response(200, json=body))
+        mock.get("https://files.resend.test/raw/em_1").mock(return_value=httpx.Response(403, text="expired"))
+        received = await service.fetch_received_email("em_1")
+    assert "raw_headers" not in received and received["text"] == "hi"
+    event = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="<hook@gmail>")
+    ids = thread_ids(received, event)
+    assert ids.in_reply_to == "<hdr@slice>" and ids.message_id == "<hook@gmail>" and ids.source == "headers"
+
+    # Unparsable bytes and a transport error fall back the same way; no link means no request.
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get("https://api.resend.com/emails/receiving/em_2").mock(return_value=httpx.Response(200, json={**body, "id": "em_2"}))
+        mock.get("https://files.resend.test/raw/em_1").mock(side_effect=httpx.ConnectError("boom"))
+        assert "raw_headers" not in await service.fetch_received_email("em_2")
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get("https://api.resend.com/emails/receiving/em_3").mock(return_value=httpx.Response(200, json={"id": "em_3", "text": "hi", "headers": {}}))
+        received = await service.fetch_received_email("em_3")
+    assert "raw_headers" not in received
+    assert thread_ids(received, event).source == "webhook"
+    assert thread_ids(received, InboundEvent(email_id="em_3", from_raw=USER_ADDRESS, subject=SUBJECT, message_id=None)).source == "none"
+
+
+async def test_gmail_reply_to_our_reply_resolves_via_alias_from_raw_headers(client, env, caplog):
+    """Seen live: the first mail came with no threading headers at all (the raw copy was
+    not read), so its thread was rooted on the webhook's message id. Once the raw headers
+    are read, a Gmail reply to our reply carries the original ids and ours; the thread is
+    found under the id we did save, and the next hop lands on the alias."""
+    caplog.set_level(logging.INFO, logger="slice.gateway")
+    redis = fakeredis.aioredis.FakeRedis()
+    env.install(redis=redis)
+
+    # Mail 1: the receiving API's small headers set, no raw copy: only the webhook id.
+    env.fakes.received["headers"] = {"content-type": "text/plain"}
+    env.fakes.received["text"] = "What is my cap?"
+    env.fakes.canned_answer = "Your cap is $25."
+    await post(client, received_event(email_id="em_1", message_id="<CAF+m1@mail.gmail.com>"))
+    assert env.fakes.sent[0]["headers"] == {"In-Reply-To": "<CAF+m1@mail.gmail.com>", "References": "<CAF+m1@mail.gmail.com>"}
+    root_key = thread_redis_key(7, "caf+m1@mail.gmail.com")
+    assert len(json.loads(await redis.get(root_key))) == 1
+
+    # Mail 2: Gmail's reply to our reply r1, with the raw headers read this time. The
+    # chain holds the alert, m1 and r1; the webhook id differs in case and brackets.
+    env.fakes.received["headers"] = {"content-type": "text/plain"}
+    env.fakes.received["raw_headers"] = {
+        "Message-ID": "<CAF+m2@mail.gmail.com>", "In-Reply-To": "<r1@resend.slice>",
+        "References": "<alert@slice.test> <CAF+m1@mail.gmail.com> <r1@resend.slice>",
+    }
+    env.fakes.received["text"] = "And how much is left?"
+    env.fakes.canned_answer = "About $24.50 is left."
+    await post(client, received_event(email_id="em_2", message_id="caf+m2@MAIL.gmail.com"))
+    assert env.db.replies["em_2"]["verdict"] == "answered_own"
+    assert [turn["q"] for turn in env.engine.input_turns[1]] == ["What is my cap?"]
+    assert env.fakes.sent[1]["headers"] == {
+        "In-Reply-To": "<CAF+m2@mail.gmail.com>",
+        "References": "<alert@slice.test> <CAF+m1@mail.gmail.com> <r1@resend.slice> <CAF+m2@mail.gmail.com>",
+    }
+    assert len(json.loads(await redis.get(root_key))) == 2
+    for alias in ("<alert@slice.test>", "<r1@resend.slice>", "<CAF+m2@mail.gmail.com>"):
+        assert (await redis.get(thread_alias_key(7, alias))).decode() == "caf+m1@mail.gmail.com"
+
+    # Mail 3: the next Gmail hop. Its first References id is the alert, which is now an
+    # alias for the root.
+    env.fakes.received["raw_headers"] = {
+        "Message-ID": "<CAF+m3@mail.gmail.com>", "In-Reply-To": "<r2@resend.slice>",
+        "References": "<alert@slice.test> <CAF+m1@mail.gmail.com> <r1@resend.slice> <CAF+m2@mail.gmail.com> <r2@resend.slice>",
+    }
+    env.fakes.received["text"] = "And the warning line?"
+    await post(client, received_event(email_id="em_3", message_id="<CAF+m3@mail.gmail.com>"))
+    assert [turn["q"] for turn in env.engine.input_turns[2]] == ["What is my cap?", "And how much is left?"]
+    assert len(json.loads(await redis.get(root_key))) == 3
+
+    loads = [line for line in _pipeline_steps(caplog) if line["step"] == "thread_load"]
+    assert [(line["turns"], line["via"], line["ids"], line["source"]) for line in loads] == [
+        (0, "none", 1, "webhook"), (1, "direct", 4, "raw"), (2, "alias", 6, "raw"),
+    ]
+    for line in _pipeline_steps(caplog):
+        text = json.dumps(line)
+        assert "gmail" not in text and "resend.slice" not in text and "alert@" not in text
 
 
 # --- The real model call ------------------------------------------------------
