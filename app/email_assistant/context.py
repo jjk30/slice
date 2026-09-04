@@ -165,6 +165,38 @@ async def _cost_lines(db, account_id: int, storage_scope, now: datetime) -> list
     ]
 
 
+async def aws_connected(db, account_id: int) -> bool:
+    """True when the account's ``aws_connections`` row is ``connected`` with a role ARN.
+
+    The same read the scanner makes (``db.get_connection``); a failed read counts as
+    not connected, never as an error.
+    """
+    try:
+        conn = await db.get_connection(account_id)
+    except Exception as exc:  # noqa: BLE001
+        _warn("connection", exc)
+        return False
+    return bool(conn) and conn.get("status") == "connected" and bool(conn.get("role_arn"))
+
+
+async def build_general_context(db, account: dict, *, now: datetime | None = None) -> str | None:
+    """The small read-only context a general-advice reply may lean on (phase 27).
+
+    Only what the scanner already knows about a connected AWS account: the findings
+    lines and the cost lines, nothing about AI spend or recent requests. None when no
+    AWS account is connected, so the caller can tell "nothing to say" from "connected
+    but empty". Never raises.
+    """
+    account_id = int(account["id"])
+    if not await aws_connected(db, account_id):
+        return None
+    now = now or datetime.now(timezone.utc)
+    storage_scope = _storage_scope(account_id)
+    lines = await _findings_lines(db, storage_scope)
+    lines += await _cost_lines(db, account_id, storage_scope, now)
+    return "\n".join(lines)
+
+
 async def build_context(db, redis, account: dict, *, now: datetime | None = None) -> str:
     """The whole plain-text context for one account. Never raises."""
     now = now or datetime.now(timezone.utc)

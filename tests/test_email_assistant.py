@@ -24,17 +24,29 @@ from app.email_assistant import service
 from app.email_assistant.context import _usd
 from app.email_assistant.service import (
     FIXED_LINE,
+    GENERAL_CONNECT_LINE,
+    GENERAL_CONTEXT_HEADING,
     GENERAL_DISCLAIMER,
     GENERAL_SYSTEM_PROMPT,
+    GENERAL_TAILORED_FALLBACK,
+    GENERAL_TAILORED_OPENER,
     LIMIT_LINE,
     SYSTEM_PROMPT,
+    THREAD_HEADING,
+    THREAD_MAX_TURNS,
+    THREAD_TTL_SECONDS,
+    THREAD_TURN_CHARS,
     EmailAssistant,
     InboundEvent,
     count_reply,
     daily_key,
+    load_thread,
     new_text,
+    remember_turn,
     reply_subject,
     strip_quoted,
+    thread_key,
+    thread_redis_key,
     tidy_answer,
     tidy_general,
 )
@@ -311,10 +323,19 @@ def test_reply_subject_and_tidy_answer():
     # A general reply starts with the disclaimer and ends with the general line, once each.
     general = tidy_general("Sonnet is fine for most work.")
     assert general.startswith(GENERAL_DISCLAIMER + "\n\n")
-    assert general.endswith("\n\n" + FOOTER_GENERAL)
-    already = tidy_general(GENERAL_DISCLAIMER + "\nSonnet is fine.\n\n" + FOOTER_GENERAL)
+    assert general.endswith("\n\n" + GENERAL_CONNECT_LINE + "\n\n" + FOOTER_GENERAL)
+    already = tidy_general(GENERAL_DISCLAIMER + "\nSonnet is fine.\n\n" + GENERAL_CONNECT_LINE + "\n\n" + FOOTER_GENERAL)
     assert already.count(GENERAL_DISCLAIMER) == 1 and already.count(FOOTER_GENERAL) == 1
+    assert already.count(GENERAL_CONNECT_LINE) == 1
     assert already.startswith(GENERAL_DISCLAIMER)
+    # Phase 27, the connected shape: the tailored opener first, no disclaimer, no connect
+    # line, the general footer last. The model forgetting the opener gets the stand-in.
+    tailored = tidy_general(GENERAL_TAILORED_OPENER + " your bucket-x finding is the one to look at.", tailored=True)
+    assert tailored.startswith(GENERAL_TAILORED_OPENER + " your bucket-x")
+    assert tailored.endswith("\n\n" + FOOTER_GENERAL)
+    assert GENERAL_DISCLAIMER not in tailored and GENERAL_CONNECT_LINE not in tailored
+    forgot = tidy_general(GENERAL_DISCLAIMER + "\n\nSonnet is fine.\n" + GENERAL_CONNECT_LINE, tailored=True)
+    assert forgot == GENERAL_TAILORED_FALLBACK + "\n\nSonnet is fine.\n\n" + FOOTER_GENERAL
 
 
 def test_context_money_under_a_cent():
@@ -524,18 +545,23 @@ async def test_general_question_goes_to_the_general_model_with_the_disclaimer(cl
     # rules, the general footer last.
     assert "Start the reply with exactly this line" in system and GENERAL_DISCLAIMER in system
     assert "must not claim to" in system
-    assert "under 150 words" in system and "No em dashes" in system
+    assert "under 120 words" in system and "No em dashes" in system
     assert "Never give AWS commands, CLI commands, scripts, code, or policy text" in system
     assert system.endswith(FOOTER_GENERAL)
-    # No account data at all in the user turn: only the question.
+    # No account data at all in the user turn: only the question (no AWS account is
+    # connected in this test, and there are no earlier turns).
     assert "Is Opus worth it over Sonnet for coding?" in user
     assert "Account:" not in user and "$0.50" not in user and "Context" not in user
+    assert GENERAL_CONTEXT_HEADING not in user and THREAD_HEADING not in user
 
     # The output rail still runs, on the tidied general reply.
     assert env.engine.output_calls == [env.fakes.sent[0]["text"]]
     text = env.fakes.sent[0]["text"]
     assert text.startswith(GENERAL_DISCLAIMER + "\n")
-    assert text.endswith(FOOTER_GENERAL)
+    # Phase 27: not connected, so the reply points at Settings on the line before the footer.
+    assert text.endswith("\n\n" + GENERAL_CONNECT_LINE + "\n\n" + FOOTER_GENERAL)
+    assert text.count(GENERAL_CONNECT_LINE) == 1
+    assert GENERAL_TAILORED_OPENER not in text
     assert FOOTER_AI_SETUP not in text
 
 
@@ -715,6 +741,265 @@ async def test_no_database_answers_nothing(client, env):
     assert response.status_code == 202
     assert env.fakes.fetch_calls == [] and env.fakes.sent == []
     env.db.enabled = True
+
+
+# --- Phase 27: longer replies, tailored general answers, thread memory -----------
+
+
+def test_answer_cap_and_prompt_rules():
+    """450 tokens, under 120 words, finish the sentence, and the thread rule, in both prompts."""
+    assert service.MAX_ANSWER_TOKENS == 450
+    for system in (SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT):
+        assert "under 120 words" in system
+        assert "150 words" not in system
+        assert "Finish your last sentence. Never stop mid-sentence." in system
+        assert (
+            "If the earlier turns answer the question, use them. If you need one fact from "
+            "the user to answer well, ask one short question and stop. When the user answers "
+            "a question you asked, use their answer." in system
+        )
+        assert "\u2014" not in system
+    assert GENERAL_CONTEXT_HEADING in GENERAL_SYSTEM_PROMPT
+    assert GENERAL_TAILORED_OPENER in GENERAL_SYSTEM_PROMPT
+    assert GENERAL_CONNECT_LINE in GENERAL_SYSTEM_PROMPT
+    assert GENERAL_DISCLAIMER in GENERAL_SYSTEM_PROMPT
+
+
+def _connect(env):
+    env.db.connection = {"status": "connected", "role_arn": "arn:aws:iam::123456789012:role/slice", "external_id": "ext"}
+    env.db.run_id = "run1"
+    env.db.findings = [
+        {"run_id": "run1", "check": "s3_public", "resource_id": "bucket-x", "severity": "high",
+         "summary": "S3 bucket bucket-x is public.", "detail": {}, "created_at": None},
+    ]
+    env.db.costs = [{"date": "2026-09-01", "amount_usd": Decimal("12.34"), "fetched_at": "2026-09-02T01:00:00+00:00"}]
+    env.db.rows = [{"team": "core", "model": "m", "status": 200, "cached": False, "routed_from": None,
+                    "n": 1, "input_tokens": 10, "output_tokens": 1, "cost_usd": Decimal("0.5")}]
+    env.db.recent = [{"id": 9, "created_at": "2026-09-02T09:58:00+00:00", "team": "core", "model": "m",
+                      "routed_from": None, "status": 200, "cost_usd": Decimal("0.5"), "cached": False}]
+
+
+async def test_general_question_with_a_connected_aws_account_is_tailored(client, env):
+    """A connected account: the user turn carries the findings and cost lines under the
+    heading (no spend, no recent calls), and the reply opens with the tailored words."""
+    _connect(env)
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.fakes.received["text"] = "How does S3 Block Public Access work?"
+    env.fakes.canned_answer = (
+        GENERAL_TAILORED_OPENER + " the bucket-x finding is what this is about. Block Public "
+        "Access is an account or bucket level switch that overrides public ACLs and policies.\n\n" + FOOTER_GENERAL
+    )
+
+    await post(client, received_event())
+    assert env.db.replies["em_1"]["verdict"] == "answered_general"
+    system, user, model = env.fakes.answer_calls[0]
+    assert system == GENERAL_SYSTEM_PROMPT
+    assert model == config.EMAIL_ASSISTANT_GENERAL_MODEL
+    # The heading, then only the findings and cost lines.
+    assert user.startswith(GENERAL_CONTEXT_HEADING + "\n")
+    assert "Latest AWS scan: 1 findings (1 high)" in user
+    assert "[high] s3_public on bucket-x" in user
+    assert "month to date $12.34" in user
+    assert "AI spend this month" not in user and "Most recent" not in user and "Account:" not in user
+    assert "$0.50" not in user
+    assert user.index(GENERAL_CONTEXT_HEADING) < user.index("How does S3 Block Public Access work?")
+
+    text = env.fakes.sent[0]["text"]
+    assert text.startswith(GENERAL_TAILORED_OPENER + " the bucket-x finding")
+    assert text.endswith("\n\n" + FOOTER_GENERAL)
+    assert GENERAL_DISCLAIMER not in text and GENERAL_CONNECT_LINE not in text
+    assert env.engine.output_calls == [text] and env.engine.output_buckets == [LABEL_GENERAL]
+
+
+async def test_general_question_tailored_reply_gets_the_opener_even_when_the_model_forgets(client, env):
+    _connect(env)
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.fakes.canned_answer = GENERAL_DISCLAIMER + "\n\nBlock Public Access is a switch.\n\n" + GENERAL_CONNECT_LINE
+    await post(client, received_event())
+    text = env.fakes.sent[0]["text"]
+    assert text == GENERAL_TAILORED_FALLBACK + "\n\nBlock Public Access is a switch.\n\n" + FOOTER_GENERAL
+
+
+async def test_general_question_without_aws_points_at_settings(client, env):
+    """No connected AWS account (a pending row, or none): no AWS context in the prompt, the
+    disclaimer first, and the connect line on the line before the footer."""
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.fakes.canned_answer = GENERAL_DISCLAIMER + "\n\nBlock Public Access is a switch."
+    for email_id, connection in (("em_none", None), ("em_pending", {"status": "pending", "role_arn": None, "external_id": "ext"})):
+        env.db.connection = connection
+        await post(client, received_event(email_id=email_id))
+        assert env.db.replies[email_id]["verdict"] == "answered_general"
+        _, user, _ = env.fakes.answer_calls[-1]
+        assert GENERAL_CONTEXT_HEADING not in user and "Latest AWS scan" not in user
+        text = env.fakes.sent[-1]["text"]
+        assert text.startswith(GENERAL_DISCLAIMER + "\n\nBlock Public Access is a switch.")
+        assert text.endswith("\n\n" + GENERAL_CONNECT_LINE + "\n\n" + FOOTER_GENERAL)
+        assert text.count(GENERAL_CONNECT_LINE) == 1
+        assert GENERAL_TAILORED_OPENER not in text
+    # A connection read that fails counts as not connected, not as an error.
+
+    class _BrokenConnection(FakeEmailDB):
+        async def get_connection(self, account_id):
+            raise RuntimeError("db hiccup")
+
+    from app.email_assistant.context import build_general_context
+
+    assert await build_general_context(_BrokenConnection(), {"id": 7}) is None
+
+
+def test_thread_key_prefers_references_then_in_reply_to_then_message_id():
+    event = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id="<inbound@mail>")
+    # References: the first id wins, whatever the header shape and case.
+    received = {"headers": {"References": "<root@slice> <second@mail>", "In-Reply-To": "<second@mail>"}}
+    assert thread_key(received, event) == "<root@slice>"
+    received = {"headers": [{"name": "references", "value": "  <root@slice>\n <second@mail>"}]}
+    assert thread_key(received, event) == "<root@slice>"
+    # No References: In-Reply-To.
+    received = {"headers": [{"name": "In-Reply-To", "value": " <second@mail> "}, {"name": "References", "value": "  "}]}
+    assert thread_key(received, event) == "<second@mail>"
+    # Neither: the inbound message id, from the event, else the Message-Id header.
+    assert thread_key({"headers": {}}, event) == "<inbound@mail>"
+    bare = InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id=None)
+    assert thread_key({"headers": {"Message-Id": "<hdr@mail>"}}, bare) == "<hdr@mail>"
+    assert thread_key({"headers": {}}, bare) is None
+    assert thread_key({}, bare) is None
+    assert thread_redis_key(7, "<root@slice>") == "slice:email_thread:7:<root@slice>"
+
+
+async def test_thread_memory_keeps_three_trimmed_turns_for_seven_days():
+    redis = fakeredis.aioredis.FakeRedis()
+    assert await load_thread(redis, 7, "<root@slice>") == []
+    long_q, long_a = "q" * 1000, "a" * 1000
+    for index in range(5):
+        stored = await remember_turn(redis, 7, "<root@slice>", f"question {index} " + long_q, f"answer {index} " + long_a)
+        assert stored == min(index + 1, THREAD_MAX_TURNS)
+    turns = await load_thread(redis, 7, "<root@slice>")
+    assert [turn["q"][:10] for turn in turns] == ["question 2", "question 3", "question 4"]
+    assert all(len(turn["q"]) == THREAD_TURN_CHARS and len(turn["a"]) == THREAD_TURN_CHARS for turn in turns)
+    assert turns[-1]["a"].startswith("answer 4 ")
+    raw = json.loads(await redis.get(thread_redis_key(7, "<root@slice>")))
+    assert len(raw) == 3 and set(raw[0]) == {"q", "a"}
+    ttl = await redis.ttl(thread_redis_key(7, "<root@slice>"))
+    assert 0 < ttl <= THREAD_TTL_SECONDS == 7 * 24 * 60 * 60
+    # Other accounts and other threads are separate; junk in the key is ignored.
+    assert await load_thread(redis, 8, "<root@slice>") == []
+    assert await load_thread(redis, 7, "<other@slice>") == []
+    await redis.set(thread_redis_key(7, "<junk>"), "not json")
+    assert await load_thread(redis, 7, "<junk>") == []
+    await redis.set(thread_redis_key(7, "<odd>"), json.dumps([{"q": 1}, "x", {"q": "ok", "a": "fine"}]))
+    assert await load_thread(redis, 7, "<odd>") == [{"q": "ok", "a": "fine"}]
+    # No Redis or no key: nothing stored, nothing read, no error.
+    assert await remember_turn(None, 7, "<root@slice>", "q", "a") is None
+    assert await remember_turn(redis, 7, None, "q", "a") is None
+    assert await load_thread(None, 7, "<root@slice>") == []
+
+
+class _DownRedis:
+    """Every call fails, the way a dead Redis does."""
+
+    async def get(self, key):
+        raise ConnectionError("redis down")
+
+    async def set(self, key, value, **kwargs):
+        raise ConnectionError("redis down")
+
+    async def incr(self, key):
+        raise ConnectionError("redis down")
+
+
+async def test_thread_memory_fails_open_when_redis_is_down(client, env):
+    env.install(redis=_DownRedis())
+    env.fakes.received["headers"] = {"References": "<root@slice>"}
+    await post(client, received_event())
+    assert env.db.replies["em_1"]["verdict"] == "answered_own"
+    assert len(env.fakes.sent) == 1 and env.fakes.sent[0]["text"].endswith(FOOTER_AI_SETUP)
+    _, user, _ = env.fakes.answer_calls[0]
+    assert THREAD_HEADING not in user
+    assert await remember_turn(_DownRedis(), 7, "<root@slice>", "q", "a") is None
+    assert await load_thread(_DownRedis(), 7, "<root@slice>") == []
+
+
+async def test_blocked_limit_and_error_turns_are_not_remembered(client, env, monkeypatch):
+    redis = fakeredis.aioredis.FakeRedis()
+    env.install(redis=redis)
+    env.fakes.received["headers"] = {"References": "<root@slice>"}
+    key = thread_redis_key(7, "<root@slice>")
+
+    env.engine.input_outcome = RailOutcome(blocked=True, reason="topic rail", label=LABEL_BLOCKED)
+    await post(client, received_event(email_id="em_in"))
+    assert env.db.replies["em_in"]["verdict"] == "blocked_input"
+    env.engine.input_outcome = RailOutcome(label=LABEL_OWN_DATA)
+    env.engine.output_outcome = RailOutcome(blocked=True, reason="self check output")
+    await post(client, received_event(email_id="em_out"))
+    assert env.db.replies["em_out"]["verdict"] == "blocked_output"
+    env.engine.output_outcome = RailOutcome()
+    env.fakes.answer_error = RuntimeError("provider down")
+    await post(client, received_event(email_id="em_err"))
+    assert env.db.replies["em_err"]["verdict"] == "error"
+    env.fakes.answer_error = None
+    assert await redis.get(key) is None
+
+    # The daily limit line is not a turn either.
+    monkeypatch.setattr(config, "EMAIL_ASSISTANT_DAILY_LIMIT", 3)
+    await post(client, received_event(email_id="em_limit"))
+    assert env.db.replies["em_limit"]["verdict"] == "limit_reached"
+    assert await redis.get(key) is None
+
+    # An answered reply is.
+    monkeypatch.setattr(config, "EMAIL_ASSISTANT_DAILY_LIMIT", 100)
+    await post(client, received_event(email_id="em_ok"))
+    assert env.db.replies["em_ok"]["verdict"] == "answered_own"
+    assert len(json.loads(await redis.get(key))) == 1
+
+
+async def test_earlier_turns_go_into_the_prompt_oldest_first(client, env):
+    """Three mails in one thread: each prompt carries the answered turns so far, oldest
+    first, for the own-data and the general bucket alike, and the key follows References."""
+    redis = fakeredis.aioredis.FakeRedis()
+    env.install(redis=redis)
+    env.fakes.received["headers"] = {"References": "<root@slice> <older@mail>", "In-Reply-To": "<older@mail>"}
+
+    env.fakes.received["text"] = "What is my cap?"
+    env.fakes.canned_answer = "Your cap is $25."
+    await post(client, received_event(email_id="em_1"))
+    _, user, _ = env.fakes.answer_calls[0]
+    assert THREAD_HEADING not in user
+
+    env.fakes.received["text"] = "And how much is left?"
+    env.fakes.canned_answer = "About $24.50 is left."
+    await post(client, received_event(email_id="em_2"))
+    _, user, _ = env.fakes.answer_calls[1]
+    assert THREAD_HEADING in user
+    first_turn = user.index("What is my cap?")
+    assert user.index(THREAD_HEADING) < first_turn < user.index("Your cap is $25.") < user.index("<<<\nAnd how much is left?")
+    assert "About $24.50" not in user
+
+    # A general follow-up in the same thread sees both turns, oldest first, then its question.
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.fakes.received["text"] = "Is that a lot compared to a typical team?"
+    env.fakes.canned_answer = GENERAL_DISCLAIMER + "\n\nIt depends on the team."
+    await post(client, received_event(email_id="em_3"))
+    system, user, _ = env.fakes.answer_calls[2]
+    assert system == GENERAL_SYSTEM_PROMPT
+    assert user.index(THREAD_HEADING) < user.index("What is my cap?") < user.index("Your cap is $25.")
+    assert user.index("Your cap is $25.") < user.index("And how much is left?") < user.index("About $24.50 is left.")
+    assert user.index("About $24.50 is left.") < user.index("<<<\nIs that a lot")
+    assert "Turn 1." in user and "Turn 2." in user and "Turn 3." not in user
+    assert env.db.replies["em_3"]["verdict"] == "answered_general"
+
+    # Stored as {"q", "a"} under the References root, three turns now, answers as sent.
+    stored = json.loads(await redis.get(thread_redis_key(7, "<root@slice>")))
+    assert [turn["q"] for turn in stored] == ["What is my cap?", "And how much is left?", "Is that a lot compared to a typical team?"]
+    assert stored[0]["a"].startswith("Your cap is $25.") and stored[0]["a"].endswith(FOOTER_AI_SETUP)
+    assert stored[2]["a"].endswith(FOOTER_GENERAL)
+    assert await redis.get(thread_redis_key(7, "<older@mail>")) is None
+
+    # A mail with no thread id at all: answered, nothing remembered.
+    env.fakes.received["headers"] = {}
+    env.install(redis=redis)
+    await post(client, received_event(email_id="em_4", message_id=None))
+    assert env.db.replies["em_4"]["verdict"] == "answered_general"
+    assert [k async for k in redis.scan_iter("slice:email_thread:*")] == [thread_redis_key(7, "<root@slice>").encode()]
 
 
 # --- The real model call ------------------------------------------------------
