@@ -63,6 +63,11 @@ LABEL_GENERAL = "general"
 LABEL_BLOCKED = "blocked"
 LABELS = (LABEL_OWN_DATA, LABEL_GENERAL, LABEL_BLOCKED)
 
+# The NeMo prompting modes the email engine is built from: the topic rail and the
+# own-data output rail live in "email"; the general-advice output rail in "email_general".
+EMAIL_MODE = "email"
+EMAIL_GENERAL_MODE = "email_general"
+
 _LABEL_RE = re.compile(r"\b(OWN_DATA|GENERAL|BLOCKED)\b", re.IGNORECASE)
 
 
@@ -114,8 +119,10 @@ class GuardrailEngine:
         options_output,
         timeout: float,
         classify: "Callable[[str], Awaitable[str]] | None" = None,
+        general_rails=None,
     ):
         self._rails = rails
+        self._general_rails = general_rails
         self._options_input = options_input
         self._options_output = options_output
         self._timeout = timeout
@@ -129,12 +136,26 @@ class GuardrailEngine:
             options=self._options_input,
         )
 
-    async def check_output(self, answer: str) -> RailOutcome:
+    async def check_output(self, answer: str, bucket: str | None = None) -> RailOutcome:
         """Run only the output rail on the assembled ``answer``. Never raises; fails open.
 
         The answer is handed to NeMo as the assistant turn to check; a placeholder user
         turn precedes it because the output self-check reads the bot message.
+
+        ``bucket`` (phase 26 follow-up) picks the rail: None or ``own_data`` is the
+        engine's own rails (the agent loop, or the email own-data output prompt);
+        ``general`` is the second rails object built in the "email_general" mode, whose
+        prompt allows general advice. A general check on an engine with no general rails,
+        or any other bucket, is an error outcome, so a caller that fails closed blocks.
         """
+        if bucket is None or bucket == LABEL_OWN_DATA:
+            rails = self._rails
+        elif bucket == LABEL_GENERAL:
+            rails = self._general_rails
+            if rails is None:
+                return RailOutcome(errored=True, reason="no general output rail")
+        else:
+            return RailOutcome(errored=True, reason=f"unknown bucket: {bucket}")
         return await self._run(
             RAIL_OUTPUT,
             messages=[
@@ -142,6 +163,7 @@ class GuardrailEngine:
                 {"role": "assistant", "content": answer},
             ],
             options=self._options_output,
+            rails=rails,
         )
 
     async def classify_input(self, prompt: str) -> RailOutcome:
@@ -177,10 +199,11 @@ class GuardrailEngine:
             return RailOutcome(blocked=True, reason="topic rail", label=label)
         return RailOutcome(label=label)
 
-    async def _run(self, rail: str, *, messages, options) -> RailOutcome:
+    async def _run(self, rail: str, *, messages, options, rails=None) -> RailOutcome:
+        rails = self._rails if rails is None else rails
         try:
             response = await asyncio.wait_for(
-                self._rails.generate_async(messages=messages, options=options),
+                rails.generate_async(messages=messages, options=options),
                 timeout=self._timeout,
             )
         except Exception as exc:  # noqa: BLE001 — timeout, transport, LLM, anything.
@@ -227,7 +250,7 @@ def _no_sampling_adapter_class():
     return NoSamplingAdapter
 
 
-def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
+def build_engine(mode: str | None = None, general_mode: str | None = None) -> "GuardrailEngine | None":
     """Construct the engine, or return None when guardrails are off or unbuildable.
 
     Returns None (fail open, no rails) when the kill switch is off, or when anything in
@@ -241,6 +264,11 @@ def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
     with ``mode="email"`` to get its topic rail; ``None`` is the agent-loop engine, exactly
     as before. Whether a *caller* fails open or closed on an errored outcome is the
     caller's decision — the agent loop fails open, the email assistant fails closed.
+
+    ``general_mode`` (phase 26 follow-up) builds a second rails object in that prompting
+    mode, on the same LLM, for ``check_output(..., bucket="general")``. The email
+    assistant passes "email_general" so a general-advice reply is checked by the prompt
+    written for it rather than the own-data one.
     """
     if not config.GUARDRAILS_ENABLED:
         return None
@@ -259,6 +287,10 @@ def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
             rails_config = rails_config.model_copy(update={"prompting_mode": mode})
         llm = NoSamplingAdapter(ChatAnthropic(model=config.GUARDRAILS_MODEL))
         rails = LLMRails(config=rails_config, llm=llm)
+        general_rails = None
+        if general_mode:
+            general_config = rails_config.model_copy(update={"prompting_mode": general_mode})
+            general_rails = LLMRails(config=general_config, llm=llm)
 
         # Each check runs exactly one rail type; everything else (dialog, generation,
         # retrieval) is off, so no bot answer is generated and no embeddings are touched.
@@ -293,9 +325,19 @@ def build_engine(mode: str | None = None) -> "GuardrailEngine | None":
 
     logger.info(
         json.dumps(
-            {"event": "guardrail_engine_ready", "model": config.GUARDRAILS_MODEL, "mode": mode or "standard"}
+            {
+                "event": "guardrail_engine_ready",
+                "model": config.GUARDRAILS_MODEL,
+                "mode": mode or "standard",
+                "general_mode": general_mode,
+            }
         )
     )
     return GuardrailEngine(
-        rails, options_input, options_output, config.GUARDRAILS_TIMEOUT_SECONDS, classify=classify
+        rails,
+        options_input,
+        options_output,
+        config.GUARDRAILS_TIMEOUT_SECONDS,
+        classify=classify,
+        general_rails=general_rails,
     )

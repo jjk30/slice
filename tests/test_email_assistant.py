@@ -144,8 +144,11 @@ class FakeEngine:
     def __init__(self, input_outcome=None, output_outcome=None):
         self.input_outcome = input_outcome or RailOutcome(label=LABEL_OWN_DATA)
         self.output_outcome = output_outcome or RailOutcome()
+        # Phase 26 follow-up: a per-bucket output outcome wins over ``output_outcome``.
+        self.output_outcomes: dict[str | None, RailOutcome] = {}
         self.input_calls: list[str] = []
         self.output_calls: list[str] = []
+        self.output_buckets: list[str | None] = []
 
     async def classify_input(self, prompt):
         self.input_calls.append(prompt)
@@ -154,9 +157,10 @@ class FakeEngine:
     async def check_input(self, prompt):  # the Yes/No form; the assistant no longer calls it
         raise AssertionError("the email assistant must use classify_input")
 
-    async def check_output(self, answer):
+    async def check_output(self, answer, bucket=None):
         self.output_calls.append(answer)
-        return self.output_outcome
+        self.output_buckets.append(bucket)
+        return self.output_outcomes.get(bucket, self.output_outcome)
 
 
 class Fakes:
@@ -464,9 +468,10 @@ async def test_answered_path_sends_a_threaded_reply(client, env):
     assert env.db.replies["em_1"]["verdict"] == "answered_own"
     assert env.db.replies["em_1"]["account_id"] == 7
 
-    # The rails saw the new text only, then the tidied answer.
+    # The rails saw the new text only, then the tidied answer, checked as own data.
     assert env.engine.input_calls == ["What did I spend this month?"]
     assert env.engine.output_calls[0].endswith(FOOTER_AI_SETUP)
+    assert env.engine.output_buckets == [LABEL_OWN_DATA]
 
     # One model call on the context model: the fixed system prompt, and a user turn built
     # from the read-only context.
@@ -546,12 +551,69 @@ async def test_general_reply_gets_the_disclaimer_even_when_the_model_forgets(cli
 
 
 async def test_blocked_output_on_a_general_reply_sends_the_fixed_line(client, env):
+    """A general reply with a shell command in it: the general output rail blocks it."""
     env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
-    env.engine.output_outcome = RailOutcome(blocked=True, reason="self check output")
+    env.fakes.canned_answer = GENERAL_DISCLAIMER + "\n\nRun aws s3api put-public-access-block --bucket x and you are done."
+    env.engine.output_outcomes[LABEL_GENERAL] = RailOutcome(blocked=True, reason="self check output")
     await post(client, received_event())
     assert env.db.replies["em_1"]["verdict"] == "blocked_output"
     assert env.fakes.sent[0]["text"] == FIXED_LINE
     assert env.fakes.answer_calls[0][2] == config.EMAIL_ASSISTANT_GENERAL_MODEL
+    assert env.engine.output_buckets == [LABEL_GENERAL]
+
+
+async def test_general_reply_is_checked_by_the_general_output_rail(client, env):
+    """Phase 26 follow-up: a general reply about databases passes the general output rail
+    even though the own-data rail would block it as off topic. The bucket travels with
+    the check, so the right prompt runs."""
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.fakes.canned_answer = GENERAL_DISCLAIMER + "\n\nPick Postgres on RDS unless you need a document store."
+    env.engine.output_outcomes[LABEL_OWN_DATA] = RailOutcome(blocked=True, reason="self check output")
+    env.engine.output_outcomes[LABEL_GENERAL] = RailOutcome()
+    await post(client, received_event())
+    assert env.db.replies["em_1"]["verdict"] == "answered_general"
+    assert env.engine.output_buckets == [LABEL_GENERAL]
+    assert env.fakes.sent[0]["text"].startswith(GENERAL_DISCLAIMER)
+
+    # The same reply through the own-data path would be blocked.
+    env.engine.input_outcome = RailOutcome(label=LABEL_OWN_DATA)
+    await post(client, received_event(email_id="em_2"))
+    assert env.db.replies["em_2"]["verdict"] == "blocked_output"
+    assert env.engine.output_buckets == [LABEL_GENERAL, LABEL_OWN_DATA]
+    assert env.fakes.sent[1]["text"] == FIXED_LINE
+
+
+async def test_general_output_rail_error_or_missing_fails_closed(client, env):
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.engine.output_outcomes[LABEL_GENERAL] = RailOutcome(errored=True, reason="TimeoutError")
+    await post(client, received_event(email_id="em_err"))
+    assert env.db.replies["em_err"]["verdict"] == "blocked_output"
+    assert env.fakes.sent[-1]["text"] == FIXED_LINE
+
+    # A real engine built with no general rails answers every general check with an
+    # error outcome, which the assistant treats as a block.
+    from app.guardrails.engine import GuardrailEngine
+
+    class _Rails:
+        async def generate_async(self, *, messages, options):
+            raise AssertionError("the own-data rails must not see a general check")
+
+    class _Hybrid(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self._engine = GuardrailEngine(_Rails(), object(), object(), 1.0)
+
+        async def check_output(self, answer, bucket=None):
+            self.output_buckets.append(bucket)
+            return await self._engine.check_output(answer, bucket=bucket)
+
+    hybrid = _Hybrid()
+    hybrid.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.install(engine=hybrid)
+    await post(client, received_event(email_id="em_none"))
+    assert env.db.replies["em_none"]["verdict"] == "blocked_output"
+    assert hybrid.output_buckets == [LABEL_GENERAL]
+    assert env.fakes.sent[-1]["text"] == FIXED_LINE
 
 
 async def test_daily_limit_replies_once_then_stays_silent(client, env, monkeypatch):

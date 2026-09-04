@@ -28,7 +28,12 @@ nothing, or sends the fixed line where the spec says so):
    ``EMAIL_ASSISTANT_MODEL`` from the context for ``own_data``,
    ``EMAIL_ASSISTANT_GENERAL_MODEL`` from its own knowledge for ``general`` (the reply
    starts with the line "General advice, not from your account.").
-9. **Output rail**: same fail-closed rule for both buckets; a block sends the fixed line.
+9. **Output rail**: the one for the bucket. An own-data reply is checked by the "email"
+   output prompt, a general reply by the "email_general" one (which allows general advice
+   on AWS setup, cloud cost, AI models and AI cost, requires the disclaimer line first, and
+   still blocks commands, code, policy text, claims about the sender's account, other
+   accounts' data, slice internals, harm, and anything off those subjects). Same
+   fail-closed rule for both; a block sends the fixed line.
 10. **Reply**: through the existing Resend channel, threaded under the original.
 11. **Record**: the verdict (the bucket: ``answered_own``, ``answered_general``,
     ``blocked_input``, ...) lands on the claimed row. One JSON log line per step, with
@@ -55,7 +60,7 @@ import httpx
 from app import config
 from app.alerts.channels import FOOTER_AI_SETUP, FOOTER_GENERAL, DeliveryResult, ResendEmailChannel
 from app.email_assistant.context import build_context
-from app.guardrails import LABEL_GENERAL, LABEL_OWN_DATA, build_engine
+from app.guardrails import EMAIL_GENERAL_MODE, EMAIL_MODE, LABEL_GENERAL, LABEL_OWN_DATA, build_engine
 
 logger = logging.getLogger("slice.gateway")
 
@@ -584,8 +589,9 @@ class EmailAssistant:
         answer = tidy_answer(raw) if bucket == LABEL_OWN_DATA else tidy_general(raw)
         self._log("answer", event, account_id, None, chars=len(answer), model=model, bucket=bucket)
 
-        # k. Output rail. Same fail-closed rule for both buckets.
-        if not await self._rail_passes("output", answer, event, account_id):
+        # k. Output rail, the one for this bucket (the general-advice reply has its own
+        # prompt; the own-data prompt would block it as off topic). Same fail-closed rule.
+        if not await self._rail_passes("output", answer, event, account_id, bucket=bucket):
             await self._send(event, account_id, FIXED_LINE, VERDICT_BLOCKED_OUTPUT)
             raise _Stop(VERDICT_BLOCKED_OUTPUT)
 
@@ -609,20 +615,22 @@ class EmailAssistant:
         self._log(step, event, account_id, "passed", label=outcome.label)
         return outcome.label
 
-    async def _rail_passes(self, rail: str, text: str, event: InboundEvent, account_id: int) -> bool:
+    async def _rail_passes(self, rail: str, text: str, event: InboundEvent, account_id: int, *, bucket: str | None = None) -> bool:
         step = f"guardrail_{rail}"
         if self.guardrails is None:
-            self._log(step, event, account_id, "blocked", reason="no_engine")
+            self._log(step, event, account_id, "blocked", reason="no_engine", bucket=bucket)
             return False
-        check = self.guardrails.check_input if rail == "input" else self.guardrails.check_output
-        outcome = await check(text)
+        if rail == "input":
+            outcome = await self.guardrails.check_input(text)
+        else:
+            outcome = await self.guardrails.check_output(text, bucket=bucket)
         if outcome.blocked:
-            self._log(step, event, account_id, "blocked", reason=outcome.reason)
+            self._log(step, event, account_id, "blocked", reason=outcome.reason, bucket=bucket)
             return False
         if outcome.errored:
-            self._log(step, event, account_id, "blocked", reason=f"rail_error: {outcome.reason}")
+            self._log(step, event, account_id, "blocked", reason=f"rail_error: {outcome.reason}", bucket=bucket)
             return False
-        self._log(step, event, account_id, "passed")
+        self._log(step, event, account_id, "passed", bucket=bucket)
         return True
 
     async def _send(self, event: InboundEvent, account_id: int, text: str, verdict: str) -> None:
@@ -642,7 +650,9 @@ class EmailAssistant:
 def build_assistant(db, redis) -> EmailAssistant | None:
     """The production assistant from config, or None when the switch is off.
 
-    Builds its own guardrails engine in NeMo's "email" prompting mode (the topic rail).
+    Builds its own guardrails engine in NeMo's "email" prompting mode (the topic rail and
+    the own-data output rail) with a second rails object in "email_general" (the output
+    rail for general-advice replies).
     With no engine the assistant still exists but answers every question with the fixed
     line (fail closed); a warning says so, as it does for a missing webhook secret.
     """
@@ -652,7 +662,7 @@ def build_assistant(db, redis) -> EmailAssistant | None:
         logger.warning(json.dumps({"event": "email_assistant_misconfigured", "reason": "RESEND_WEBHOOK_SECRET is not set; every inbound post is rejected"}))
     if not config.RESEND_API_KEY:
         logger.warning(json.dumps({"event": "email_assistant_misconfigured", "reason": "RESEND_API_KEY is not set; bodies cannot be fetched and no reply can be sent"}))
-    engine = build_engine(mode="email")
+    engine = build_engine(mode=EMAIL_MODE, general_mode=EMAIL_GENERAL_MODE)
     if engine is None:
         logger.warning(json.dumps({"event": "email_assistant_no_guardrails", "reason": "the email rails engine is off or unbuildable; every question gets the fixed line"}))
     channel = ResendEmailChannel(api_key=config.RESEND_API_KEY or "", sender=config.ALERT_FROM, to=None)

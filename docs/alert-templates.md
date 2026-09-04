@@ -245,9 +245,14 @@ the bucket is recorded in `email_replies.verdict`:
 | blocked | everything else, any error, or any answer from the rail that is not a known label | nobody; the fixed line `Sorry, I can't help with that here.` | `blocked_input` |
 
 A general reply always starts with the line `General advice, not from your account.` and
-ends with the general footer. An own-data reply ends with the AI setup footer. Both go
-through the output rail; a block there sends the fixed line (`blocked_output`). Dollar
-amounts under one cent in the context read `less than a cent`, never `$0.00`.
+ends with the general footer. An own-data reply ends with the AI setup footer. Each goes
+through the output rail written for its bucket: the `email` output prompt for own data,
+the `email_general` one for general advice (it allows general advice on AWS setup, cloud
+cost, AI models and AI cost, requires the disclaimer line first, and still blocks
+commands, scripts, code, IAM policy text, claims about the sender's own account or
+numbers, other accounts' data, slice internals, harmful content, and anything off those
+subjects). A block either way sends the fixed line (`blocked_output`). Dollar amounts
+under one cent in the context read `less than a cent`, never `$0.00`.
 
 Each account gets at most `EMAIL_ASSISTANT_DAILY_LIMIT` replies per UTC day (default 20).
 The first mail over the line gets exactly `You have reached today's reply limit. Try again

@@ -18,6 +18,8 @@ when nemoguardrails is broken or absent and the kill switch is off.
 from __future__ import annotations
 
 from app.guardrails.engine import (
+    EMAIL_GENERAL_MODE,
+    EMAIL_MODE,
     GUARDRAIL_HEADER,
     LABEL_BLOCKED,
     LABEL_GENERAL,
@@ -33,6 +35,8 @@ from app.guardrails.engine import (
 from app.guardrails.events import record_event
 
 __all__ = [
+    "EMAIL_GENERAL_MODE",
+    "EMAIL_MODE",
     "GUARDRAIL_HEADER",
     "LABEL_BLOCKED",
     "LABEL_GENERAL",

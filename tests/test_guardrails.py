@@ -425,6 +425,76 @@ async def test_real_engine_rail_calls_carry_no_temperature(monkeypatch):
     assert "OWN_DATA, GENERAL, or BLOCKED" in json.dumps(first["messages"])
 
 
+# --- Phase 26 follow-up: the output rail takes the bucket ---------------------------
+
+
+def _two_rail_engine(own_behavior, general_behavior):
+    own, general = FakeRails(own_behavior), FakeRails(general_behavior)
+    return GuardrailEngine(own, object(), object(), 5.0, general_rails=general), own, general
+
+
+async def test_check_output_picks_the_rails_by_bucket():
+    engine, own, general = _two_rail_engine(
+        [_FakeActivatedRail("output", True, "self check output")],  # own-data prompt blocks
+        [_FakeActivatedRail("output", False, "self check output")],  # general prompt allows
+    )
+    reply = "General advice, not from your account.\n\nPick Postgres unless you need a document store."
+    passed = await engine.check_output(reply, bucket="general")
+    assert passed.passed
+    blocked = await engine.check_output(reply, bucket="own_data")
+    assert blocked.blocked and blocked.reason == "self check output"
+    # No bucket at all (the agent loop) is the engine's own rails, as before.
+    assert (await engine.check_output(reply)).blocked
+    assert len(general.calls) == 1 and len(own.calls) == 2
+    assert general.calls[0][-1] == {"role": "assistant", "content": reply}
+
+
+async def test_check_output_general_without_general_rails_is_an_error():
+    engine = _engine([_FakeActivatedRail("output", False, "self check output")])
+    outcome = await engine.check_output("fine", bucket="general")
+    assert outcome.errored and not outcome.blocked
+    assert outcome.reason == "no general output rail"
+    # And an own-data check on the same engine still works.
+    assert (await engine.check_output("fine", bucket="own_data")).passed
+
+
+async def test_check_output_unknown_bucket_is_an_error():
+    engine, own, general = _two_rail_engine([], [])
+    outcome = await engine.check_output("fine", bucket="blocked")
+    assert outcome.errored and outcome.reason == "unknown bucket: blocked"
+    assert own.calls == [] and general.calls == []
+
+
+async def test_real_engine_uses_the_general_output_prompt_for_the_general_bucket(monkeypatch):
+    """The real NeMo engine in the email modes: an own-data check renders the "email"
+    output prompt, a general check renders the "email_general" one, on the same model."""
+    monkeypatch.setattr(config, "GUARDRAILS_ENABLED", True)
+    monkeypatch.setattr(config, "GUARDRAILS_MODEL", "claude-sonnet-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post(url__regex=r".*/v1/messages$").mock(return_value=httpx.Response(200, json=_anthropic_reply("No")))
+        engine = build_engine(mode="email", general_mode="email_general")
+        assert engine is not None and engine._general_rails is not None
+        reply = "General advice, not from your account.\n\nPick Postgres unless you need a document store."
+        assert (await engine.check_output(reply, bucket="general")).passed
+        assert (await engine.check_output("You spent $1.", bucket="own_data")).passed
+        assert (await engine.check_output("You spent $1.")).passed
+
+    assert route.call_count == 3
+    general, own, bare = (json.dumps(json.loads(c.request.content)["messages"]) for c in route.calls)
+    assert "The reply must start with exactly this line" in general
+    assert "General advice, not from your" in general
+    assert "claims to know, states, or guesses the user's own account" in general
+    assert "Pick Postgres" in general
+    for own_prompt in (own, bare):
+        assert "drifts off topic into general knowledge, coding help, or advice unrelated to" in own_prompt
+        assert "The reply must start with exactly this line" not in own_prompt
+        assert "You spent $1." in own_prompt
+    for call in route.calls:
+        assert "temperature" not in json.loads(call.request.content)
+
+
 async def test_build_engine_kill_switch_returns_none(monkeypatch):
     # Switch off: build returns None WITHOUT constructing an engine or importing nemo.
     monkeypatch.setattr(config, "GUARDRAILS_ENABLED", False)
