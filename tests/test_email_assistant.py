@@ -31,7 +31,7 @@ from app.email_assistant.service import (
     GENERAL_SYSTEM_PROMPT,
     GENERAL_TAILORED_FALLBACK,
     GENERAL_TAILORED_OPENER,
-    LIMIT_LINE,
+    LIMIT_LINE_TEMPLATE,
     SYSTEM_PROMPT,
     THREAD_HEADING,
     THREAD_MAX_TURNS,
@@ -42,7 +42,9 @@ from app.email_assistant.service import (
     count_reply,
     daily_key,
     bracketed_id,
+    limit_line,
     load_thread,
+    memory_answer,
     new_text,
     normalise_id,
     remember_turn,
@@ -674,7 +676,9 @@ async def test_daily_limit_replies_once_then_stays_silent(client, env, monkeypat
     # The third gets exactly the limit line, threaded like any reply, and no model call.
     await post(client, received_event(email_id="em_3"))
     assert env.db.replies["em_3"]["verdict"] == "limit_reached"
-    assert env.fakes.sent[-1]["text"] == LIMIT_LINE
+    assert env.fakes.sent[-1]["text"] == limit_line(2)
+    assert env.fakes.sent[-1]["text"].startswith("You have reached today's reply limit of 2. You can ask again after ")
+    assert env.fakes.sent[-1]["text"].endswith(" slice will keep sending you alerts as normal.")
     assert env.fakes.sent[-1]["headers"] == {"In-Reply-To": MESSAGE_ID, "References": MESSAGE_ID}
     assert len(env.fakes.answer_calls) == 1
     assert len(env.engine.input_calls) == 2
@@ -702,6 +706,27 @@ async def test_daily_limit_replies_once_then_stays_silent(client, env, monkeypat
     # Strangers never touch the counter: the limit sits after identity.
     await post(client, received_event(email_id="em_s", sender="nobody@example.org"))
     assert int(await redis.get(daily_key(7))) == 5
+
+
+def test_limit_line_names_the_limit_and_the_reset_time(monkeypatch):
+    """The counter is per UTC day, so it resets at the next midnight UTC, shown as a time
+    of day in ALERT_TIMEZONE the way the alert emails show times."""
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(config, "ALERT_TIMEZONE", "America/New_York")
+    now = datetime(2026, 9, 4, 15, 0, tzinfo=timezone.utc)
+    assert limit_line(20, now) == (
+        "You have reached today's reply limit of 20. You can ask again after 8:00 PM EDT. "
+        "slice will keep sending you alerts as normal."
+    )
+    assert limit_line(20, now) == LIMIT_LINE_TEMPLATE.format(limit=20, time="8:00 PM EDT")
+    # Winter: the same midnight UTC is 7:00 PM EST. A naive now is taken as UTC.
+    assert "after 7:00 PM EST." in limit_line(5, datetime(2026, 1, 10, 23, 59))
+    # Just before midnight UTC the reset is still the coming midnight, minutes away.
+    assert "after 8:00 PM EDT." in limit_line(5, datetime(2026, 9, 4, 23, 59, tzinfo=timezone.utc))
+    # Another zone by name, and an unknown zone falls back to UTC.
+    assert "after 1:00 AM BST." in limit_line(5, now, "Europe/London")
+    assert "after 12:00 AM UTC." in limit_line(5, now, "Not/AZone")
 
 
 async def test_daily_limit_fails_open_without_redis(client, env, monkeypatch):
@@ -951,6 +976,21 @@ def test_reply_headers_carry_the_whole_chain():
     assert InboundEvent(email_id="em_1", from_raw=USER_ADDRESS, subject=SUBJECT, message_id=None, references=("<a@slice>",)).reply_headers() == {}
 
 
+def test_memory_answer_keeps_the_real_content_only():
+    own = tidy_answer("Your cap is $25.\nThe warning line is 80%.")
+    assert memory_answer(own) == "Your cap is $25.\nThe warning line is 80%."
+    general = tidy_general("Sonnet is enough for most coding.")
+    assert memory_answer(general) == "Sonnet is enough for most coding."
+    tailored = tidy_general("Block Public Access is a switch.", tailored=True)
+    assert memory_answer(tailored) == "Block Public Access is a switch."
+    # A real tailored opener sentence carries content and stays; only the stand-in goes.
+    real = tidy_general(GENERAL_TAILORED_OPENER + " the bucket-x finding is the one to fix.", tailored=True)
+    assert memory_answer(real) == GENERAL_TAILORED_OPENER + " the bucket-x finding is the one to fix."
+    assert memory_answer("") == "" and memory_answer(FOOTER_GENERAL) == ""
+    # The trim to 600 still happens on save, on the stripped text.
+    assert len(memory_answer(tidy_general("x" * 1000))) == 1000
+
+
 async def test_thread_memory_keeps_three_trimmed_turns_for_seven_days():
     redis = fakeredis.aioredis.FakeRedis()
     assert await load_thread(redis, 7, "<root@slice>") == []
@@ -1080,11 +1120,12 @@ async def test_earlier_turns_go_into_the_prompt_oldest_first(client, env):
     assert "Turn 1." in user and "Turn 2." in user and "Turn 3." not in user
     assert env.db.replies["em_3"]["verdict"] == "answered_general"
 
-    # Stored as {"q", "a"} under the References root, three turns now, answers as sent.
+    # Stored as {"q", "a"} under the References root, three turns now, answers without
+    # their footer, disclaimer or connect lines.
     stored = json.loads(await redis.get(thread_redis_key(7, "<root@slice>")))
     assert [turn["q"] for turn in stored] == ["What is my cap?", "And how much is left?", "Is that a lot compared to a typical team?"]
-    assert stored[0]["a"].startswith("Your cap is $25.") and stored[0]["a"].endswith(FOOTER_AI_SETUP)
-    assert stored[2]["a"].endswith(FOOTER_GENERAL)
+    assert [turn["a"] for turn in stored] == ["Your cap is $25.", "About $24.50 is left.", "It depends on the team."]
+    assert FOOTER_AI_SETUP not in user and FOOTER_GENERAL not in user and GENERAL_CONNECT_LINE not in user
     assert await redis.get(thread_redis_key(7, "<older@mail>")) is None
 
     # A mail with no thread id at all: answered, nothing remembered.
@@ -1133,7 +1174,7 @@ async def test_follow_up_is_judged_with_the_earlier_turns(client, env):
     assert env.db.replies["em_2"]["verdict"] == "answered_general"
     assert env.engine.input_calls[1] == follow_up
     assert [turn["q"] for turn in env.engine.input_turns[1]] == ["Is Opus worth it over Sonnet for coding?"]
-    assert env.engine.input_turns[1][0]["a"].startswith(GENERAL_DISCLAIMER)
+    assert env.engine.input_turns[1][0]["a"] == "Sonnet is the cheaper option and is enough for most coding."
 
     # The same follow-up in a thread slice has no memory of: nothing to fill in, blocked.
     env.fakes.received["headers"] = {"References": "<other@slice>"}

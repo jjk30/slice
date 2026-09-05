@@ -103,6 +103,31 @@ def _money(value) -> str:
     return f"${whole}.{frac.ljust(2, '0')}"
 
 
+def _local(ts: datetime, tz_name: str | None) -> datetime:
+    """``ts`` in ``ALERT_TIMEZONE`` (or ``tz_name``). A naive ``ts`` is taken as UTC; an
+    unknown zone name or missing tzdata falls back to UTC, never fails an alert."""
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    name = tz_name if tz_name is not None else config.ALERT_TIMEZONE
+    try:
+        zone = ZoneInfo(name)
+    except Exception:  # noqa: BLE001
+        zone = timezone.utc
+    return ts.astimezone(zone)
+
+
+def _clock(local: datetime) -> str:
+    hour = local.hour % 12 or 12
+    ampm = "AM" if local.hour < 12 else "PM"
+    return f"{hour}:{local:%M} {ampm} {local.tzname()}"
+
+
+def format_clock(ts: datetime, tz_name: str | None = None) -> str:
+    """``8:00 PM EDT``: the time of day alone, 12-hour clock and the zone's own short
+    name, in ``ALERT_TIMEZONE`` (or ``tz_name``). Same zone rules as ``format_time``."""
+    return _clock(_local(ts, tz_name))
+
+
 def format_time(ts: datetime, tz_name: str | None = None) -> str:
     """``Aug 18, 2026, 3:20 AM EST`` in ``ALERT_TIMEZONE`` (or ``tz_name``).
 
@@ -110,17 +135,8 @@ def format_time(ts: datetime, tz_name: str | None = None) -> str:
     zoneinfo, so EST/EDT (or whatever the zone uses) comes out right for the date. A
     naive ``ts`` is taken as UTC; an unknown zone name falls back to UTC.
     """
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    name = tz_name if tz_name is not None else config.ALERT_TIMEZONE
-    try:
-        zone = ZoneInfo(name)
-    except Exception:  # noqa: BLE001 — bad zone name or missing tzdata: never fail an alert.
-        zone = timezone.utc
-    local = ts.astimezone(zone)
-    hour = local.hour % 12 or 12
-    ampm = "AM" if local.hour < 12 else "PM"
-    return f"{local:%b} {local.day}, {local.year}, {hour}:{local:%M} {ampm} {local.tzname()}"
+    local = _local(ts, tz_name)
+    return f"{local:%b} {local.day}, {local.year}, {_clock(local)}"
 
 
 def _percent(alert: Alert) -> int | None:

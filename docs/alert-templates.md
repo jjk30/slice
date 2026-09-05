@@ -241,19 +241,36 @@ the bucket is recorded in `email_replies.verdict`:
 | Bucket | What it is | Who answers | Verdict |
 | --- | --- | --- | --- |
 | own_data | the sender's own spend, budget, routing, cache, alerts, findings, AWS cost | `EMAIL_ASSISTANT_MODEL`, from the account's own read-only data | `answered_own` |
-| general | a general question about AWS setup, cloud cost, AI models or AI cost | `EMAIL_ASSISTANT_GENERAL_MODEL`, from its own knowledge, no account data | `answered_general` |
+| general | a general question about AWS setup, cloud cost, AI models or AI cost | `EMAIL_ASSISTANT_GENERAL_MODEL`, from its own knowledge, plus the latest findings and AWS cost lines when an AWS account is connected | `answered_general` |
 | blocked | everything else, any error, or any answer from the rail that is not a known label | nobody; the fixed line `Sorry, I can't help with that here.` | `blocked_input` |
 
-A general reply always starts with the line `General advice, not from your account.` and
-ends with the general footer. An own-data reply ends with the AI setup footer. Each goes
-through the output rail written for its bucket: the `email` output prompt for own data,
-the `email_general` one for general advice (it allows general advice on AWS setup, cloud
-cost, AI models and AI cost, requires the disclaimer line first, and still blocks
-commands, scripts, code, IAM policy text, claims about the sender's own account or
-numbers, other accounts' data, slice internals, harmful content, and anything off those
-subjects). A block either way sends the fixed line (`blocked_output`). Dollar amounts
-under one cent in the context read `less than a cent`, never `$0.00`.
+A general reply comes in two shapes. When the account has a connected AWS account, the
+prompt carries what the scanner already knows (the latest findings and the AWS cost
+lines, nothing about AI spend) and the reply starts with `Based on what slice sees in
+your AWS account, ...`. When no AWS account is connected, the reply starts with the line
+`General advice, not from your account.` and puts `Connect AWS in Settings and slice can
+tailor this to your account.` on the line before the footer. Either way it ends with the
+general footer. An own-data reply ends with the AI setup footer. Each goes through the
+output rail written for its bucket: the `email` output prompt for own data, the
+`email_general` one for general advice (it allows general advice on AWS setup, cloud
+cost, AI models and AI cost, requires one of the two openers first, lets a tailored reply
+repeat the findings and cost figures slice read, and still blocks commands, scripts, code,
+IAM policy text, guesses about the sender's own account or numbers, other accounts' data,
+slice internals, harmful content, and anything off those subjects). A block either way
+sends the fixed line (`blocked_output`). Dollar amounts under one cent in the context read
+`less than a cent`, never `$0.00`.
 
 Each account gets at most `EMAIL_ASSISTANT_DAILY_LIMIT` replies per UTC day (default 20).
-The first mail over the line gets exactly `You have reached today's reply limit. Try again
-tomorrow.` (`limit_reached`); every later one that day gets nothing (`limit_silenced`).
+The first mail over the line gets one notice naming the limit and when it resets, which
+is the next midnight UTC shown as a time of day in `ALERT_TIMEZONE`, for example `You
+have reached today's reply limit of 20. You can ask again after 8:00 PM EDT. slice will
+keep sending you alerts as normal.` (`limit_reached`); every later one that day gets
+nothing (`limit_silenced`).
+
+slice remembers the last three answered turns of each email thread in Redis for seven
+days, keyed by the thread's first message id, with every other id in the mail's chain as
+an alias so the thread is found however the client rewrites its headers. The earlier
+turns go to both the topic rail (so a follow-up like "the cheaper option you mentioned"
+is judged as the question it really is) and the answer prompt. Only the real content of
+an answer is kept, without the footer, disclaimer or connect lines; blocked, limited and
+failed mails are never stored, and if Redis is down there is simply no memory.

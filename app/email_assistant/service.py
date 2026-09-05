@@ -19,8 +19,9 @@ nothing, or sends the fixed line where the spec says so):
    a fallback, never an error. Every id is normalised (no angle brackets, lower case)
    before it is used as a key, alias or candidate; outgoing headers keep the brackets.
 5. **Daily limit** (phase 26): at most ``EMAIL_ASSISTANT_DAILY_LIMIT`` replies per
-   account per UTC day, counted in Redis. The first mail over the line gets one fixed
-   sentence; every later one that day gets nothing at all.
+   account per UTC day, counted in Redis. The first mail over the line gets one notice
+   naming the limit and when it resets (the next midnight UTC, shown in
+   ``ALERT_TIMEZONE``); every later one that day gets nothing at all.
 6. **Input rail**: the email-channel topic rail, which (phase 26) sorts the question
    into one of three buckets instead of answering Yes/No:
    ``own_data`` (about the sender's own spend, budget, routing, cache, alerts, findings,
@@ -72,7 +73,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from email import message_from_bytes
 from email import policy as email_policy
 from email.utils import parseaddr
@@ -81,7 +82,7 @@ from typing import Awaitable, Callable
 import httpx
 
 from app import config
-from app.alerts.channels import FOOTER_AI_SETUP, FOOTER_GENERAL, DeliveryResult, ResendEmailChannel
+from app.alerts.channels import FOOTER_AI_SETUP, FOOTER_GENERAL, DeliveryResult, ResendEmailChannel, format_clock
 from app.email_assistant.context import build_context, build_general_context
 from app.guardrails import (
     EMAIL_GENERAL_MODE,
@@ -101,7 +102,11 @@ EVENT_RECEIVED = "email.received"
 FIXED_LINE = "Sorry, I can't help with that here."
 
 # Phase 26: the one reply the first mail over the daily limit gets. Later ones get nothing.
-LIMIT_LINE = "You have reached today's reply limit. Try again tomorrow."
+# Built at send time by ``limit_line`` with the limit and the reset time filled in.
+LIMIT_LINE_TEMPLATE = (
+    "You have reached today's reply limit of {limit}. You can ask again after {time}. "
+    "slice will keep sending you alerts as normal."
+)
 
 # Phase 26: the first line of a general-advice reply when no AWS account is connected.
 GENERAL_DISCLAIMER = "General advice, not from your account."
@@ -476,10 +481,26 @@ def tidy_answer(answer: str, footer: str = FOOTER_AI_SETUP) -> str:
     return text
 
 
-def _drop_line(text: str, line: str) -> str:
-    """``text`` without any line that is exactly ``line``, blank runs collapsed."""
-    kept = [item for item in text.splitlines() if item.strip() != line]
+def _drop_lines(text: str, *lines: str) -> str:
+    """``text`` without any line that is exactly one of ``lines``, blank runs collapsed."""
+    kept = [item for item in text.splitlines() if item.strip() not in lines]
     return _BLANKS.sub("\n\n", "\n".join(kept)).strip()
+
+
+def _drop_line(text: str, line: str) -> str:
+    return _drop_lines(text, line)
+
+
+# The lines every reply may carry that say nothing about the question: the two footers,
+# the disclaimer, the tailored opener's stand-in, and the connect line.
+_BOILERPLATE_LINES = (FOOTER_AI_SETUP, FOOTER_GENERAL, GENERAL_DISCLAIMER, GENERAL_TAILORED_FALLBACK, GENERAL_CONNECT_LINE)
+
+
+def memory_answer(answer: str) -> str:
+    """The answer as thread memory keeps it (phase 27): the real content only, with the
+    footer, disclaimer, opener stand-in and connect lines dropped. The 600 character trim
+    happens on save, so the trim spends its budget on words the model can use."""
+    return _drop_lines(answer or "", *_BOILERPLATE_LINES)
 
 
 def tidy_general(answer: str, *, tailored: bool = False) -> str:
@@ -510,6 +531,20 @@ def tidy_general(answer: str, *, tailored: bool = False) -> str:
 def daily_key(account_id: int, now: datetime | None = None) -> str:
     now = now or datetime.now(timezone.utc)
     return f"{_DAILY_PREFIX}:acct:{account_id}:{now:%Y-%m-%d}"
+
+
+def limit_line(limit: int, now: datetime | None = None, tz_name: str | None = None) -> str:
+    """The daily-limit notice with the reset time filled in.
+
+    The counter key is per UTC day (see ``daily_key``), so it resets at the next midnight
+    UTC. That moment is shown as a time of day in ``ALERT_TIMEZONE`` (or ``tz_name``),
+    the way the alert emails show times, for example ``8:00 PM EDT``.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    reset = datetime.combine(now.astimezone(timezone.utc).date() + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    return LIMIT_LINE_TEMPLATE.format(limit=limit, time=format_clock(reset, tz_name))
 
 
 async def count_reply(redis, account_id: int, now: datetime | None = None) -> int | None:
@@ -911,7 +946,7 @@ class EmailAssistant:
         if count is not None and count > limit:
             if count == limit + 1:
                 self._log("daily_limit", event, account_id, VERDICT_LIMIT_REACHED, count=count, limit=limit)
-                await self._send(event, account_id, LIMIT_LINE, VERDICT_LIMIT_REACHED)
+                await self._send(event, account_id, limit_line(limit), VERDICT_LIMIT_REACHED)
                 raise _Stop(VERDICT_LIMIT_REACHED)
             self._log("daily_limit", event, account_id, VERDICT_LIMIT_SILENCED, count=count, limit=limit)
             raise _Stop(VERDICT_LIMIT_SILENCED)
@@ -977,8 +1012,9 @@ class EmailAssistant:
         await self._send(event, account_id, answer, verdict)
 
         # n. Remember the turn (phase 27). Only an answered reply lands here, so blocked,
-        # limit and error turns are never stored. Redis down: logged, nothing else.
-        stored = await remember_turn(self.redis, account_id, key, question, answer, aliases=candidates)
+        # limit and error turns are never stored. The answer is kept without its
+        # boilerplate lines. Redis down: logged, nothing else.
+        stored = await remember_turn(self.redis, account_id, key, question, memory_answer(answer), aliases=candidates)
         self._log("thread_save", event, account_id, None, turns=stored, saved=stored is not None)
         return verdict
 
