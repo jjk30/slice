@@ -1,4 +1,4 @@
-"""Phase 8 evaluation tests. Fakes only — no real RAGAS, no real LLM, no real DB.
+"""Phase 8 evaluation tests. Fakes only: no real RAGAS, no real LLM, no real DB.
 
 The point of the whole design is that scoring never touches the request path, so most
 of these prove exactly that: sampled or not, scoring succeeding or exploding, a served
@@ -285,7 +285,7 @@ async def test_empty_inputs_are_skipped(caplog, prompt, answer, reason):
 
 
 async def test_metric_failure_logs_type_name_when_message_is_empty(caplog):
-    # Some exceptions stringify to "" — the log must still name the type, not blank.
+    # Some exceptions stringify to "": the log must still name the type, not blank.
     class _SilentBoom(Exception):
         pass
 
@@ -348,7 +348,7 @@ async def test_sampled_request_scores_and_writes(client, monkeypatch, routed_dow
 
 @respx.mock
 async def test_unsampled_request_never_touches_the_evaluator(client, monkeypatch, routed_down):
-    # Rate 0: routed down, evaluator present, but the sampler declines — zero cost.
+    # Rate 0: routed down, evaluator present, but the sampler declines, zero cost.
     monkeypatch.setattr(config, "EVAL_SAMPLE_RATE", 0.0)
     respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=RESPONSE))
 

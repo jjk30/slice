@@ -1,12 +1,12 @@
 """RAGAS scoring of a single routed-down answer (phase 8, part 1).
 
 This is the only place slice talks to RAGAS, and it is only ever reached from a
-detached background task — never on the request path. Two metrics:
+detached background task, never on the request path. Two metrics:
 
-- **answer_relevancy** — how well the final answer addresses the user's prompt.
+- **answer_relevancy**: how well the final answer addresses the user's prompt.
   Needs an LLM *and* embeddings; it reuses the phase-6 sentence-transformers model
   (see ``app.rag.embeddings``) so no second embedding stack is loaded.
-- **context_relevance** — only when the request carried RAG neighbors: how relevant
+- **context_relevance**: only when the request carried RAG neighbors: how relevant
   those retrieved past prompts were to this one. LLM-only.
 
 Everything is lazy and defensive. ragas (and its heavy dependency tree) is imported
@@ -63,7 +63,7 @@ class MetricScore:
 def _install_compat_shim() -> None:
     """Register the langchain_community module ragas 0.4.3 hard-imports but no longer ships.
 
-    Idempotent and loud in intent (see the module docstring). Only a stub — the
+    Idempotent and loud in intent (see the module docstring). Only a stub: the
     symbols exist to be importable, never to be called; slice routes nothing to Vertex.
     """
     name = "langchain_community.chat_models.vertexai"
@@ -76,7 +76,7 @@ def _install_compat_shim() -> None:
 
         if not hasattr(community_llms, "VertexAI"):
             community_llms.VertexAI = type("VertexAI", (), {})
-    except Exception:  # noqa: BLE001 — if this import fails, ragas will surface it below.
+    except Exception:  # noqa: BLE001  # if this import fails, ragas will surface it below.
         pass
 
 
@@ -95,7 +95,7 @@ def _load_ragas():
         from ragas.embeddings import LangchainEmbeddingsWrapper
         from ragas.llms import LangchainLLMWrapper
         from ragas.metrics import ContextRelevance, ResponseRelevancy
-    except Exception as exc:  # noqa: BLE001 — a broken/absent ragas just disables scoring.
+    except Exception as exc:  # noqa: BLE001  # a broken/absent ragas just disables scoring.
         logger.warning(json.dumps({"event": "eval_ragas_unavailable", "error": format_error(exc)}))
         return None
 
@@ -165,7 +165,7 @@ class RagasEvaluator:
             score = await asyncio.wait_for(
                 metric.single_turn_ascore(sample), timeout=self.timeout
             )
-        except Exception as exc:  # noqa: BLE001 — timeout, provider, or metric error.
+        except Exception as exc:  # noqa: BLE001  # timeout, provider, or metric error.
             logger.warning(
                 json.dumps(
                     {"event": "eval_metric_failed", "metric": metric.name, "error": format_error(exc)}

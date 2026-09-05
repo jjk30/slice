@@ -2,7 +2,7 @@
 
 Every adapter speaks Anthropic on both ends: it takes an Anthropic-format
 request and produces an Anthropic-format response, streaming or not. The types
-and helpers here are the common vocabulary — the result envelope the gateway
+and helpers here are the common vocabulary, the result envelope the gateway
 relays, the error that short-circuits to an Anthropic-shaped body, and the
 Anthropic SSE event writers every streaming translator shares.
 """
@@ -21,7 +21,7 @@ STREAM_DOWNGRADED_HEADER = "x-slice-stream-downgraded"
 class AdapterError(Exception):
     """A failure the gateway turns into an Anthropic-shaped error response.
 
-    Raised before or instead of touching the network — an unknown model, a
+    Raised before or instead of touching the network, an unknown model, a
     missing server key. The gateway catches it, logs, and renders the body; the
     request never leaves the machine.
     """

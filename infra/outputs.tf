@@ -49,7 +49,7 @@ output "db_secret_arn" {
 }
 
 output "alb_dns_name" {
-  description = "Public DNS name of the ALB — use this to reach slice."
+  description = "Public DNS name of the ALB: use this to reach slice."
   value       = aws_lb.main.dns_name
 }
 
@@ -64,7 +64,7 @@ output "ecs_service_name" {
 }
 
 output "route53_nameservers" {
-  description = "Route 53 nameservers for the hosted zone — paste these into Namecheap."
+  description = "Route 53 nameservers for the hosted zone: paste these into Namecheap."
   value       = aws_route53_zone.main.name_servers
 }
 

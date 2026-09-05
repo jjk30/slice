@@ -9,7 +9,7 @@ ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"
 PORT = int(os.getenv("PORT", "8080"))
 
 # --- Redis layer (phase 4): cache, budget caps, rate limits. ---
-# Unset or unreachable Redis makes every check fail open — the proxy still
+# Unset or unreachable Redis makes every check fail open: the proxy still
 # serves traffic, it just stops caching and enforcing caps until Redis returns.
 REDIS_URL = os.getenv("REDIS_URL") or "redis://localhost:6379"
 
@@ -57,7 +57,7 @@ AUTO_ROUTE_ENABLED = _bool("AUTO_ROUTE_ENABLED", True)
 ROUTE_EASY_MODEL = os.getenv("ROUTE_EASY_MODEL", "claude-haiku-4-5-20251001")
 
 # The classifier model, and the ceiling on how long slice waits for its verdict.
-# Any failure, timeout, or unexpected output counts as "hard" — never an error to
+# Any failure, timeout, or unexpected output counts as "hard", never an error to
 # the client. The judge only ever sees the last user message, truncated.
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "claude-haiku-4-5-20251001")
 JUDGE_TIMEOUT_SECONDS = float(os.getenv("JUDGE_TIMEOUT_SECONDS", "3"))
@@ -69,7 +69,7 @@ RULES_REFRESH_SECONDS = float(os.getenv("RULES_REFRESH_SECONDS", "30"))
 
 # --- RAG retrieval (phase 6): semantic hint for the judge. ---
 # Retrieval runs only on the auto path (no pin, no rule) and only feeds the judge a
-# soft hint — never a hard rule. Off, or a missing index, leaves phase-5 behavior
+# soft hint, never a hard rule. Off, or a missing index, leaves phase-5 behavior
 # untouched. The index is per-team: RAG_INDEX_DIR holds one subdirectory per team
 # (rag_store/<team>/), each with its own FAISS index and sidecar, so one team's
 # history never feeds another team's hint. Built offline by build_rag_index.py.
@@ -77,7 +77,7 @@ RAG_ENABLED = _bool("RAG_ENABLED", True)
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
 RAG_INDEX_DIR = os.getenv("RAG_INDEX_DIR", "rag_store")
 
-# Prompt text is only logged when this is on — prompts can be sensitive, so storing
+# Prompt text is only logged when this is on: prompts can be sensitive, so storing
 # them for the offline index build is opt-in. Off means prompt_text is never stored
 # and (until it is turned on and an index is built) retrieval simply finds nothing.
 RAG_STORE_PROMPTS = _bool("RAG_STORE_PROMPTS", False)
@@ -103,7 +103,7 @@ AGENT_ENABLED = _bool("AGENT_ENABLED", True)
 # The escalation ladder, cheap to strong, spanning providers. The loop's first try
 # is always the routed cheap model; escalation walks up this ladder from the rung
 # above it (or straight to the final rung if the cheap model isn't listed). The
-# client's originally requested model is always the final rung, appended if absent —
+# client's originally requested model is always the final rung, appended if absent,
 # the last resort is giving them exactly what they asked for. No model names are
 # hardcoded outside this default; every rung must be priceable for its cost estimate
 # to be finite (an unknown price makes the estimate infinite and blocks the rung).
@@ -131,7 +131,7 @@ AGENT_DEFAULT_MAX_TOKENS = int(os.getenv("AGENT_DEFAULT_MAX_TOKENS", "1024"))
 # --- Evaluation (phase 8): score a sample of routed-down answers, fire-and-forget. ---
 # When a request was routed down to a cheaper model (or the agent loop passed on a
 # cheap rung), a fraction of those responses are scored with RAGAS in a detached
-# background task — never on the request path, never awaited, every failure swallowed.
+# background task, never on the request path, never awaited, every failure swallowed.
 # The score is written to the eval_scores table and surfaced at /admin/eval/summary.
 #
 # EVAL_SAMPLE_RATE is the whole on/off switch: 0 disables evaluation entirely (no
@@ -145,7 +145,7 @@ EVAL_PASS_THRESHOLD = float(os.getenv("EVAL_PASS_THRESHOLD", "0.7"))
 
 # The model RAGAS uses as its judge, wired through langchain-anthropic. Defaults to the
 # same small model the router judge uses. Its cost is external (billed by the provider
-# on the judge call), not counted against the team budget — evaluation is out-of-band.
+# on the judge call), not counted against the team budget: evaluation is out-of-band.
 EVAL_JUDGE_MODEL = os.getenv("EVAL_JUDGE_MODEL", JUDGE_MODEL)
 
 # Ceiling on how long a single RAGAS metric call may run before it is abandoned. A
@@ -155,7 +155,7 @@ EVAL_TIMEOUT_SECONDS = float(os.getenv("EVAL_TIMEOUT_SECONDS", "30"))
 # --- LangSmith tracing (phase 8): observability for the LangGraph router and loop. ---
 # Tracing is entirely env-var driven by LangChain itself. With LANGCHAIN_TRACING_V2
 # false (the default) or no LANGCHAIN_API_KEY, LangChain no-ops and slice runs exactly
-# as before — no code path here requires LangSmith. When tracing is on, runs are
+# as before: no code path here requires LangSmith. When tracing is on, runs are
 # grouped under LANGCHAIN_PROJECT (default "slice"); configure_tracing() sets that
 # default at startup without ever touching the key.
 LANGCHAIN_TRACING_V2 = _bool("LANGCHAIN_TRACING_V2", False)
@@ -163,15 +163,15 @@ LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY") or None
 LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "slice")
 
 # --- Guardrails (phase 9): NeMo self-check rails around the agent loop only. ---
-# Two rails — a self-check on the incoming prompt and a self-check on the assembled
-# final answer — wrap the phase-7 agent loop and ONLY the agent loop. Plain proxy
+# Two rails, a self-check on the incoming prompt and a self-check on the assembled
+# final answer, wrap the phase-7 agent loop and ONLY the agent loop. Plain proxy
 # traffic and the router path never touch them; they run exactly where the loop runs
 # (the non-streaming auto-routed-down path). Everything fails open: any error or
 # timeout inside the rails engine is logged and the loop proceeds as if the rail
 # passed, so a broken rail can never block or crash a request.
 #
 # GUARDRAILS_ENABLED is the whole kill switch. False means zero rails code runs and
-# the loop behaves exactly as phase 7 — and because nemoguardrails is imported lazily
+# the loop behaves exactly as phase 7, and because nemoguardrails is imported lazily
 # (only when the engine is built, which only happens when this is on), the server
 # starts fine even if nemoguardrails is broken or absent while the switch is off.
 GUARDRAILS_ENABLED = _bool("GUARDRAILS_ENABLED", True)
@@ -203,7 +203,7 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY") or None
 # WhatsApp via Twilio (phase 13, part 1): a second outbound channel next to email,
 # firing off the same cooldown decision. All four are optional; the channel is built
 # only when all four are present, otherwise it is silently disabled (a debug line at
-# build time) — the same "configured means every secret and address is set" rule the
+# build time), the same "configured means every secret and address is set" rule the
 # email channel uses. No twilio SDK: app.alerts.whatsapp posts to the REST endpoint
 # over httpx directly.
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID") or None
@@ -215,7 +215,7 @@ _WHATSAPP_CONFIGURED = all(
     (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, TWILIO_WHATSAPP_TO)
 )
 
-# The whole switch. Defaults on only when a channel is present — a Resend key or a
+# The whole switch. Defaults on only when a channel is present: a Resend key or a
 # fully-configured Twilio WhatsApp channel. A deployment with neither has no channel
 # and stays exactly as phase 10, zero alert code on any path. Set explicitly to
 # override either way.
@@ -236,16 +236,16 @@ ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO") or None
 ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "3600"))
 
 # The IANA zone the alert's timestamp is rendered in (e.g. "Aug 18, 2026, 3:20 AM EDT"),
-# via the standard-library zoneinfo — no new dependency. An unknown name falls back to
+# via the standard-library zoneinfo, no new dependency. An unknown name falls back to
 # UTC at format time rather than failing the alert.
 ALERT_TIMEZONE = os.getenv("ALERT_TIMEZONE", "America/New_York")
 
 # --- Auth (phase 12): GitHub device-flow login, slice keys, JWT dashboard sessions. ---
 # The lock. On (the default), the proxy paths and every /admin and /dashboard path
-# require a valid slice key and resolve it to an account — the tenant every counter,
+# require a valid slice key and resolve it to an account, the tenant every counter,
 # cache key, log row and read is scoped by. Off is single-tenant LOCAL mode: no key is
 # required and everything runs under one local account (the pre-phase-12 behavior, keyed
-# by the team header). Off is for local development only — never expose an unlocked
+# by the team header). Off is for local development only, never expose an unlocked
 # gateway. Secure by default: unset means on.
 AUTH_ENABLED = _bool("AUTH_ENABLED", True)
 
@@ -276,7 +276,7 @@ COOKIE_SECURE = not PUBLIC_BASE_URL.startswith("http://localhost")
 
 # The HMAC secret the dashboard-session JWTs are signed with. Env only, never in code.
 # Unset means no JWT is ever minted (login still hands out a slice key; the JWT comes back
-# null) and every presented JWT is rejected — closed, not open.
+# null) and every presented JWT is rejected, closed, not open.
 JWT_SECRET = os.getenv("JWT_SECRET") or None
 
 # How long a minted JWT lives. Short-ish on purpose: it is a browser session, not a key.
@@ -308,8 +308,8 @@ def _csv(name: str, default: str) -> list[str]:
 CORS_ORIGINS = _csv("CORS_ORIGINS", "http://localhost:5173")
 
 # --- AWS security scanner (phase 18a): scan the account slice itself runs in. ---
-# All scanner work is fire-and-forget — a detached background task, never on the request
-# path — and every boto3 call fails open: a missing credential, a denied permission, or a
+# All scanner work is fire-and-forget, a detached background task, never on the request
+# path, and every boto3 call fails open: a missing credential, a denied permission, or a
 # raised check contributes nothing (no finding) rather than crashing the run. boto3 is
 # imported lazily (only when a scan actually runs), so the scanner never slows startup.
 #
@@ -343,9 +343,9 @@ SCANNER_ALERT_TOP_N = int(os.getenv("SCANNER_ALERT_TOP_N", "5"))
 # carries a per-account External ID (confused-deputy protection). The scanner then assumes
 # that role to scan THEIR account. Everything stays strictly per-account: every read and
 # write is scoped to the authenticated account, and an assumed-role scan that fails is
-# marked as an error for that account — it never silently falls back to slice's own data.
+# marked as an error for that account: it never silently falls back to slice's own data.
 
-# slice's own AWS account id — the Principal a user's trust policy allows to assume their
+# slice's own AWS account id, the Principal a user's trust policy allows to assume their
 # role. Baked into the committed CloudFormation template too (users audit that file); this
 # is the value the /scanner/connect response echoes for display.
 SLICE_AWS_ACCOUNT_ID = os.getenv("SLICE_AWS_ACCOUNT_ID", "194133064379")
@@ -358,7 +358,7 @@ SLICE_OPERATOR_ACCOUNT_ID = int(os.getenv("SLICE_OPERATOR_ACCOUNT_ID", "1"))
 
 # The public HTTPS URL of the committed onboarding template
 # (infra/user-onboarding/slice-readonly-role.yaml). The CloudFormation "quick-create"
-# console link needs a publicly reachable templateURL — a GitHub raw URL or an S3 object.
+# console link needs a publicly reachable templateURL, a GitHub raw URL or an S3 object.
 # Unset means the quick-create link omits templateURL (the user pastes the template
 # manually); set it once the file is hosted. See the phase-18b deploy notes.
 SCANNER_TEMPLATE_URL = os.getenv("SCANNER_TEMPLATE_URL") or None

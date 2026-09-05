@@ -26,7 +26,7 @@ CHECK_EBS_WASTE = "ebs_waste"
 CHECK_EIP_WASTE = "eip_waste"
 CHECK_SNAPSHOT_WASTE = "snapshot_waste"
 CHECK_IDLE_INSTANCES = "idle_instances"
-# Phase 18b: not a check but a finding kind — recorded when slice cannot assume a user's
+# Phase 18b: not a check but a finding kind: recorded when slice cannot assume a user's
 # role, so the failure is visible in their findings rather than silently swallowed.
 CHECK_CONNECTION = "connection"
 

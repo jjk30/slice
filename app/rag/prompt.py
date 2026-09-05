@@ -3,7 +3,7 @@
 The request log stores this so the RAG index can be built offline from real past
 prompts. Extraction is best-effort and never raises: anything malformed yields
 None, which the writer logs as a NULL ``prompt_text``. It is deliberately distinct
-from the router's ``_last_user_text`` — that one takes only the last user turn and
+from the router's ``_last_user_text``: that one takes only the last user turn and
 truncates to the judge's tiny input cap; this one joins every user turn and keeps
 up to ``MAX_PROMPT_CHARS`` so the stored text represents the whole request.
 """
@@ -21,7 +21,7 @@ def extract_prompt_text(payload: object) -> str | None:
     """User-role text from an Anthropic request body: joined turns, capped.
 
     Multiple user turns are joined with newlines in order. Returns None when the
-    body isn't a dict, has no user text, or extraction hits anything unexpected —
+    body isn't a dict, has no user text, or extraction hits anything unexpected,
     never raises, so a logging path can call it without a guard.
     """
     try:
@@ -39,5 +39,5 @@ def extract_prompt_text(payload: object) -> str | None:
         if not parts:
             return None
         return "\n".join(parts)[:MAX_PROMPT_CHARS]
-    except Exception:  # noqa: BLE001 — extraction must never break logging.
+    except Exception:  # noqa: BLE001  # extraction must never break logging.
         return None

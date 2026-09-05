@@ -1,19 +1,19 @@
 """Auth endpoints (phase 12): GitHub device-flow login and ``/auth/me``.
 
-- ``POST /auth/device/start`` — the backend asks GitHub for a device code and stores
+- ``POST /auth/device/start``: the backend asks GitHub for a device code and stores
   the raw ``device_code`` in Redis under an opaque ``session_id`` (TTL = GitHub's
   expiry). The caller gets the session id, the user code to type, the URL to type it
   at, and the polling interval. The device code itself never leaves the server.
-- ``POST /auth/device/poll`` ``{session_id}`` — the backend polls GitHub once and
+- ``POST /auth/device/poll`` ``{session_id}``: the backend polls GitHub once and
   reports ``pending`` / ``slow_down`` / ``expired`` / ``denied``, or on ``authorized``
   fetches the GitHub identity, upserts the account, mints a slice key (returned exactly
   once) and a JWT, and deletes the session so it can't be replayed.
-- ``GET /auth/me`` — accepts either a slice key or a JWT as the bearer and returns the
+- ``GET /auth/me``: accepts either a slice key or a JWT as the bearer and returns the
   account it belongs to. This is the one place a JWT is accepted in Path B.
 
 This is login, not the request path: Redis or Postgres being down just blocks logging
 in (a clean 503), which is acceptable. GitHub errors are a clean 502. Nothing here is
-fail-open — a caller either proves who they are or gets nothing.
+fail-open: a caller either proves who they are or gets nothing.
 """
 
 from __future__ import annotations
@@ -53,10 +53,10 @@ SESSION_KEY = "slice:auth:device:{session_id}"
 WEB_STATE_KEY = "slice:auth:web:{state}"
 WEB_STATE_TTL = 600
 
-# The name a key gets so it is recognisable in a key list — and, since login revokes live
+# The name a key gets so it is recognisable in a key list and, since login revokes live
 # keys of the same name before minting, so one machine keeps exactly one live key. A device
 # flow key is ``cli`` (or ``cli:<device>`` when the CLI sent its machine name); the dashboard
-# "Create new key" path uses ``dashboard`` (and revokes every live key — it is the kill switch).
+# "Create new key" path uses ``dashboard`` (and revokes every live key: it is the kill switch).
 CLI_KEY_NAME = "cli"
 DASHBOARD_KEY_NAME = "dashboard"
 
@@ -148,7 +148,7 @@ async def device_start(request: Request):
     except gh.GitHubError as exc:
         logger.warning(json.dumps({"event": "github_device_start_failed", "error": str(exc)}))
         return _error(502, GITHUB_FAILED)
-    except Exception as exc:  # noqa: BLE001 — network trouble is a 502, never a 500.
+    except Exception as exc:  # noqa: BLE001  # network trouble is a 502, never a 500.
         logger.warning(json.dumps({"event": "github_device_start_failed", "error": str(exc)}))
         return _error(502, GITHUB_FAILED)
 
@@ -161,7 +161,7 @@ async def device_start(request: Request):
     }
     try:
         await redis.set(session_key(session_id), json.dumps(session), ex=ttl)
-    except Exception as exc:  # noqa: BLE001 — no session store, no login.
+    except Exception as exc:  # noqa: BLE001  # no session store, no login.
         logger.warning(json.dumps({"event": "auth_session_store_failed", "error": str(exc)}))
         return _error(503, LOGIN_NO_REDIS)
 
@@ -229,7 +229,7 @@ async def device_poll(request: Request):
         if remaining > 0:
             try:
                 await redis.set(key, json.dumps(session), ex=remaining)
-            except Exception:  # noqa: BLE001 — the old interval is still stored; not fatal.
+            except Exception:  # noqa: BLE001  # the old interval is still stored; not fatal.
                 pass
         return {"status": gh.STATUS_SLOW_DOWN, "interval": interval}
 
@@ -258,7 +258,7 @@ async def device_poll(request: Request):
             int(account_row["id"]), hash_key(slice_key), key_prefix(slice_key), key_name,
             key_last4(slice_key),
         )
-    except Exception as exc:  # noqa: BLE001 — a write failure means no key was minted; say so.
+    except Exception as exc:  # noqa: BLE001  # a write failure means no key was minted; say so.
         logger.warning(json.dumps({"event": "auth_account_write_failed", "error": str(exc)}))
         return _error(503, LOGIN_NO_DB)
 
@@ -279,7 +279,7 @@ async def device_poll(request: Request):
 async def _forget_session(redis, key: str) -> None:
     try:
         await redis.delete(key)
-    except Exception:  # noqa: BLE001 — it expires on its own anyway.
+    except Exception:  # noqa: BLE001  # it expires on its own anyway.
         pass
 
 

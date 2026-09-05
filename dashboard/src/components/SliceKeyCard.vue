@@ -5,7 +5,7 @@ import { getJson, postJson, AuthError } from '../api.js'
 // Phase 22a: the "Your slice key" card. It reads GET /dashboard/key for the masked
 // display of the account's live key (`slk_live_••••••••a1b2` plus the date it was
 // minted), and "Create new key" POSTs /dashboard/key/rotate, which mints a fresh key
-// and revokes the old one. The rotate reply carries the full plain key exactly once —
+// and revokes the old one. The rotate reply carries the full plain key exactly once,
 // we show it with a copy button until the user dismisses it, then only the masked row
 // remains. The plain key is never stored and never re-fetched.
 const emit = defineEmits(['auth-error'])
@@ -110,7 +110,7 @@ onMounted(load)
     <!-- Otherwise the masked row (or empty / loading / failed states). -->
     <template v-else>
       <p v-if="!loaded" class="loading">Loading…</p>
-      <p v-else-if="loadFailed" class="empty">—</p>
+      <p v-else-if="loadFailed" class="empty">&mdash;</p>
       <template v-else-if="card">
         <div class="key-row">
           <code class="mono key-masked">{{ masked }}</code>

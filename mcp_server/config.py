@@ -3,11 +3,11 @@
 Two knobs, both read from the environment at construction time so a test can set them
 with ``monkeypatch.setenv`` and build a fresh ``Settings``:
 
-- ``SLICE_BASE_URL`` — where the gateway is (default ``http://localhost:8080``, the
+- ``SLICE_BASE_URL``: where the gateway is (default ``http://localhost:8080``, the
   gateway's own default ``PORT``). A trailing slash is trimmed so paths join cleanly.
-- ``SLICE_API_KEY`` — the slice key. Optional: unset means "no key", which is exactly
+- ``SLICE_API_KEY``: the slice key. Optional: unset means "no key", which is exactly
   what a gateway in local/unlocked mode (``AUTH_ENABLED`` off) wants. When set it rides
-  on every gateway call as ``Authorization: Bearer <key>`` — the header the phase-12 auth
+  on every gateway call as ``Authorization: Bearer <key>``, the header the phase-12 auth
   middleware reads (see ``app.auth.keys.bearer_token``).
 """
 

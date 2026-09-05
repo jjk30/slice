@@ -4,7 +4,7 @@ HS256 over ``JWT_SECRET`` from the environment. The subject is the account id; t
 token carries an issuer tag and an expiry (``JWT_TTL_SECONDS``). Verification is
 closed by construction: no secret configured, a bad signature, a tampered payload, the
 wrong issuer, or an expired token all come back as None. Nothing here touches the
-database — the caller turns the account id into an account.
+database: the caller turns the account id into an account.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def verify_jwt(token: str | None, *, secret: str | None = None) -> int | None:
         )
     except jwt.PyJWTError:
         return None
-    except Exception:  # noqa: BLE001 — a malformed token is a rejected token, never a 500.
+    except Exception:  # noqa: BLE001  # a malformed token is a rejected token, never a 500.
         return None
     try:
         return int(claims.get("sub"))

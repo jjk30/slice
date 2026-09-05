@@ -64,7 +64,7 @@ services:
 
   # Grafana behind Caddy at the grafana host. Datasource + dashboard are
   # provisioned from files (no UI clicking); admin password + signup policy come
-  # from grafana.env. No published port — Caddy reverse-proxies grafana:3000.
+  # from grafana.env. No published port: Caddy reverse-proxies grafana:3000.
   grafana:
     image: grafana/grafana
     restart: unless-stopped

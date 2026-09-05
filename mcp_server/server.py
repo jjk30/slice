@@ -2,7 +2,7 @@
 
 Thin on purpose: this module only maps the pure tool coroutines in ``mcp_server.tools``
 onto the official SDK's ``@mcp.tool()`` decorators, giving each the user-facing signature
-Claude Code sees (no ``SliceClient`` argument — that is supplied internally from one
+Claude Code sees (no ``SliceClient`` argument, that is supplied internally from one
 shared, long-lived client). All behavior, formatting, and error handling live in
 ``tools``; nothing gateway-specific lives here.
 
@@ -21,7 +21,7 @@ from mcp_server.client import SliceClient
 from mcp_server.config import Settings
 
 INSTRUCTIONS = (
-    "slice — the AI cost gateway. You're connected to a running slice gateway, so when "
+    "slice, the AI cost gateway. You're connected to a running slice gateway, so when "
     "the user first engages, greet them warmly, mention they're connected to slice, and "
     "offer to show how much of their monthly API budget is left (call get_spend).\n\n"
     "What you can do here: check spend vs budget (get_spend), list/add/delete model-"

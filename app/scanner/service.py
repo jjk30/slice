@@ -1,19 +1,19 @@
 """Scanner orchestration (phase 18a/b): run a scan, persist, alert on new highs, the daily
-task, and — phase 18b — per-account cross-account scanning via assume-role.
+task, and per-account cross-account scanning via assume-role (phase 18b).
 
 Nothing here ever touches a request. A scan runs either against slice's *own* account (the
 operator, part A) or against a *user's* account by assuming the read-only role they created,
 always with their External ID. Which one is decided by ``resolve_target``:
 
-- **own** — the operator account (``SLICE_OPERATOR_ACCOUNT_ID``, or the lone tenant in local
+- **own**: the operator account (``SLICE_OPERATOR_ACCOUNT_ID``, or the lone tenant in local
   mode). Scans slice's own infrastructure; findings/costs stored under the NULL/own scope.
-- **connected** — any other account with a verified connection. Scans *their* account via
+- **connected**: any other account with a verified connection. Scans *their* account via
   assume-role; findings/costs stored under their account id.
-- **not_connected** — any other account without a live connection. Nothing is scanned; the
-  caller gets a clear "not connected" — never a scan of slice's own infra.
+- **not_connected**: any other account without a live connection. Nothing is scanned; the
+  caller gets a clear "not connected", never a scan of slice's own infra.
 
 Security invariants: an assume-role failure marks the connection errored and records a
-visible error finding for *that* account — it never falls back to the own account. Every
+visible error finding for *that* account: it never falls back to the own account. Every
 persist and read is scoped by account id, and the alert cooldown key is per account, so one
 account never sees, or suppresses, another's results.
 
@@ -104,7 +104,7 @@ async def resolve_target(db, account_id) -> Target:
     if _db_ready(db):
         try:
             conn = await db.get_connection(account_id)
-        except Exception as exc:  # noqa: BLE001 — a read failure means "treat as not connected".
+        except Exception as exc:  # noqa: BLE001  # a read failure means "treat as not connected".
             logger.warning(json.dumps({"event": "scanner_conn_read_error", "error": str(exc)}))
             conn = None
 
@@ -159,7 +159,7 @@ async def verify_connection(db, account_id: int, role_arn: str) -> tuple[bool, s
         await db.set_connection_status(
             account_id, status, role_arn=role_arn, last_error=None if ok else info
         )
-    except Exception as exc:  # noqa: BLE001 — persist failure is reported, never raised.
+    except Exception as exc:  # noqa: BLE001  # persist failure is reported, never raised.
         logger.warning(json.dumps({"event": "scanner_conn_write_error", "error": str(exc)}))
         return False, "Could not store the connection."
     return ok, info
@@ -179,7 +179,7 @@ async def run_scan(
     run_id = run_id or uuid.uuid4().hex
     try:
         findings = await run_scan_graph(session)
-    except Exception as exc:  # noqa: BLE001 — run_scan_graph already fails open, belt and braces.
+    except Exception as exc:  # noqa: BLE001  # run_scan_graph already fails open, belt and braces.
         logger.warning(json.dumps({"event": "scanner_run_error", "error": str(exc)}))
         findings = []
 
@@ -210,7 +210,7 @@ async def run_scan_for_account(
 
     Not connected → a ScanResult with status 'not_connected' (nothing scanned). Assume
     failure → the connection is marked errored, a visible error finding is stored for THIS
-    account, and status 'error' is returned — never a fallback to the own account.
+    account, and status 'error' is returned, never a fallback to the own account.
     """
     run_id = run_id or uuid.uuid4().hex
     target = await resolve_target(db, account_id)
@@ -219,7 +219,7 @@ async def run_scan_for_account(
 
     try:
         session = await asyncio.to_thread(_make_session_for, target)
-    except Exception as exc:  # noqa: BLE001 — assume-role failure: mark error, never fall back.
+    except Exception as exc:  # noqa: BLE001  # assume-role failure: mark error, never fall back.
         message = _clean_error(exc)
         await _record_connection_failure(
             db, account_id, target.storage_account_id, run_id, target.role_arn, message
@@ -260,12 +260,12 @@ async def _persist_and_diff(
                 previous_high_ids = await db.high_resource_ids(account_id, previous_run)
                 rearmed = await db.rearmed_expectations_since(account_id, previous_run)
                 previous_high_ids -= {resource for _check, resource in rearmed}
-        except Exception as exc:  # noqa: BLE001 — no history read: treat nothing as new.
+        except Exception as exc:  # noqa: BLE001  # no history read: treat nothing as new.
             logger.warning(json.dumps({"event": "scanner_diff_error", "error": str(exc)}))
             previous_high_ids = set()
         try:
             expected = {(e["check"], e["resource_id"]) for e in await db.list_expectations(account_id)}
-        except Exception as exc:  # noqa: BLE001 — no expectations read: skip nothing.
+        except Exception as exc:  # noqa: BLE001  # no expectations read: skip nothing.
             logger.warning(json.dumps({"event": "scanner_expectations_error", "error": str(exc)}))
             expected = set()
         await db.record_findings(account_id, run_id, findings)
@@ -371,7 +371,7 @@ async def fetch_and_store_cost(
 
     try:
         report = await asyncio.to_thread(fetch_costs, session, now=now)
-    except Exception as exc:  # noqa: BLE001 — fetch_costs already fails open; belt and braces.
+    except Exception as exc:  # noqa: BLE001  # fetch_costs already fails open; belt and braces.
         logger.warning(json.dumps({"event": "scanner_cost_error", "error": str(exc)}))
         return None
 
@@ -392,7 +392,7 @@ async def fetch_and_store_cost(
 
 
 async def _claim_latch(redis, key: str) -> bool:
-    """SET key 1 NX EX — True when we claimed it. Fail closed (skip) when Redis is down."""
+    """SET key 1 NX EX: True when we claimed it. Fail closed (skip) when Redis is down."""
     if redis is None:
         return False
     try:
@@ -423,7 +423,7 @@ async def run_account_daily(db, redis, account_id, *, now: datetime | None = Non
     run_id = uuid.uuid4().hex
     try:
         session = await asyncio.to_thread(_make_session_for, target)
-    except Exception as exc:  # noqa: BLE001 — assume failed: mark error, never scan own instead.
+    except Exception as exc:  # noqa: BLE001  # assume failed: mark error, never scan own instead.
         await _record_connection_failure(
             db, account_id, target.storage_account_id, run_id, target.role_arn, _clean_error(exc)
         )
@@ -432,7 +432,7 @@ async def run_account_daily(db, redis, account_id, *, now: datetime | None = Non
     try:
         await run_scan(session, db, redis, run_id=run_id, account_id=target.storage_account_id)
         await fetch_and_store_cost(session, db, redis, target.storage_account_id, now=now)
-    except Exception as exc:  # noqa: BLE001 — one account's daily run never crashes the loop.
+    except Exception as exc:  # noqa: BLE001  # one account's daily run never crashes the loop.
         logger.warning(
             json.dumps({"event": "scanner_daily_error", "account_id": account_id, "error": str(exc)})
         )
@@ -446,7 +446,7 @@ async def run_daily_once(db, redis, *, now: datetime | None = None) -> None:
         return
     try:
         connections = await db.connected_accounts()
-    except Exception as exc:  # noqa: BLE001 — can't list connections: just do the own account.
+    except Exception as exc:  # noqa: BLE001  # can't list connections: just do the own account.
         logger.warning(json.dumps({"event": "scanner_conn_list_error", "error": str(exc)}))
         return
     for conn in connections:
@@ -463,7 +463,7 @@ async def daily_loop(app) -> None:
             await run_daily_once(db, redis)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 — never let a tick kill the loop.
+        except Exception as exc:  # noqa: BLE001  # never let a tick kill the loop.
             logger.warning(json.dumps({"event": "scanner_loop_error", "error": str(exc)}))
         await asyncio.sleep(interval)
 

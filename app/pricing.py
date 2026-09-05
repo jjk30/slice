@@ -77,7 +77,7 @@ def price_for(model: str | None) -> Price | None:
 
     Public wrapper over the family-resolving lookup. The agent loop (phase 7) uses
     it to build an upper-bound cost estimate: a None here means the model has no
-    known price, which makes the estimate infinite and blocks the attempt — never a
+    known price, which makes the estimate infinite and blocks the attempt, never a
     silent zero that could let the spend ceiling be crossed.
     """
     return _lookup(model)

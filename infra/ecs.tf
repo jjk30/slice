@@ -28,7 +28,7 @@ resource "aws_ecs_task_definition" "gateway" {
   task_role_arn            = aws_iam_role.ecs_task.arn
 
   # Image is built on Apple Silicon (arm64). Run the task on Fargate ARM64 to
-  # match — natively supported and cheaper than amd64.
+  # match, natively supported and cheaper than amd64.
   runtime_platform {
     cpu_architecture        = "ARM64"
     operating_system_family = "LINUX"
@@ -48,7 +48,7 @@ resource "aws_ecs_task_definition" "gateway" {
       ]
 
       # Only what's needed to boot. Optional feature flags are omitted on
-      # purpose — the app fails open to its own defaults when they're unset.
+      # purpose: the app fails open to its own defaults when they're unset.
       environment = [
         {
           name  = "REDIS_URL"
@@ -106,7 +106,7 @@ resource "aws_ecs_service" "gateway" {
     container_port   = var.app_port
   }
 
-  # Heavy libs (torch, ragas) make first boot slow — give it room before the
+  # Heavy libs (torch, ragas) make first boot slow: give it room before the
   # ALB health check can kill the task.
   health_check_grace_period_seconds = 120
 

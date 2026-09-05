@@ -28,7 +28,7 @@ langsmith==0.11.0
 # langchain-community 0.4.2, langgraph 1.2.11, langchain-anthropic 1.5.6, langsmith
 # 0.11.0, and ragas 0.4.3 all stay exactly as they were (verified with a resolver
 # dry-run). The one pre-existing package it moves is pandas (3.0.5 -> 2.3.3, its
-# `pandas<3` cap) — pandas is transitive, not a named pin, and ragas 0.4.3 requires it
+# `pandas<3` cap), pandas is transitive, not a named pin, and ragas 0.4.3 requires it
 # only under `extra == "all"`, so ragas is unaffected. The rails LLM is wired through the
 # already-pinned langchain-anthropic. See the phase-9 notes in the README.
 nemoguardrails==0.23.0
@@ -45,7 +45,7 @@ python-dotenv
 
 # --- Auth (phase 12): GitHub device-flow login, slice keys, JWT sessions, the CLI. ---
 # PyJWT signs and verifies the dashboard-session JWTs (HS256). typer (over click) is the
-# `slice` CLI — login, init, use — installed as a console entry point via pyproject.toml
+# `slice` CLI, with login, init and use, installed as a console entry point via pyproject.toml
 # (`pip install -e .`). Both are small and pure-Python; neither touches the pinned
 # langchain/ragas tree, so they force nothing up or down.
 PyJWT
@@ -55,5 +55,5 @@ mcp==1.29.0
 # --- Monitoring (phase 17): Prometheus metrics. ---
 # prometheus-client exposes the gateway's /metrics endpoint (Prometheus text format)
 # and holds the slice_* counters/histogram. Pure-Python, no native deps, and it pulls
-# in nothing else — so it forces none of the pinned langchain/ragas tree up or down.
+# in nothing else, so it forces none of the pinned langchain/ragas tree up or down.
 prometheus-client

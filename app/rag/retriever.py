@@ -7,7 +7,7 @@ another team's routing hint.
 
 ``Retriever`` fronts the whole store: it loads each team's index lazily on first
 use and caches it in memory. A team with no directory, an empty index, a corrupt
-file, or a failed search all yield an empty list — nothing here ever raises into
+file, or a failed search all yield an empty list: nothing here ever raises into
 the caller, and a brand-new team with no history is just an ordinary empty result.
 
 Similarity is cosine, implemented as an inner-product index (IndexFlatIP) over
@@ -51,7 +51,7 @@ def _import_faiss():
     before faiss, whichever call site touches faiss first. Both imports are cached,
     so the model is loaded at most once.
     """
-    import app.rag.embeddings  # noqa: F401 — force torch-before-faiss ordering.
+    import app.rag.embeddings  # noqa: F401  # force torch-before-faiss ordering.
     import faiss
 
     return faiss
@@ -62,7 +62,7 @@ class Neighbor:
     """One retrieved past request: its metadata plus the similarity score.
 
     ``score`` is cosine similarity in [-1, 1] (higher is closer). The rest is
-    whatever the index build stored for the row — any field may be None if it
+    whatever the index build stored for the row, any field may be None if it
     wasn't present on the original request.
     """
 
@@ -104,7 +104,7 @@ class _TeamIndex:
             meta = json.loads(meta_path.read_text())
             if not isinstance(meta, list):
                 raise ValueError("rag meta is not a list")
-        except Exception as exc:  # noqa: BLE001 — a broken index is just "no hint".
+        except Exception as exc:  # noqa: BLE001  # a broken index is just "no hint".
             logger.warning(
                 json.dumps({"event": "rag_index_load_failed", "error": str(exc)})
             )
@@ -114,7 +114,7 @@ class _TeamIndex:
 
     @property
     def empty(self) -> bool:
-        """True when there is nothing to search — no index, or a zero-vector one."""
+        """True when there is nothing to search, no index, or a zero-vector one."""
         return self._index is None or self._index.ntotal == 0
 
     def search(self, prompt: str, k: int) -> list[Neighbor]:
@@ -136,7 +136,7 @@ class _TeamIndex:
                     continue
                 neighbors.append(self._neighbor(float(score), self._meta[position]))
             return neighbors
-        except Exception as exc:  # noqa: BLE001 — search must never break routing.
+        except Exception as exc:  # noqa: BLE001  # search must never break routing.
             logger.warning(
                 json.dumps({"event": "rag_retrieve_failed", "error": str(exc)})
             )
@@ -172,7 +172,7 @@ class Retriever:
         """Up to ``k`` nearest past prompts for ``team``, closest first. Never raises."""
         try:
             return self._team_index(team).search(prompt, k)
-        except Exception as exc:  # noqa: BLE001 — belt-and-suspenders; never raise.
+        except Exception as exc:  # noqa: BLE001  # belt-and-suspenders; never raise.
             logger.warning(
                 json.dumps({"event": "rag_retrieve_failed", "error": str(exc)})
             )
@@ -209,7 +209,7 @@ def warm() -> None:
 
     Blocking and potentially slow (or, with a broken/missing dependency, raising).
     ``load_default`` runs this once at startup inside a bounded daemon thread so a
-    crash or a hang here can never take down or wedge the server — it just disables RAG.
+    crash or a hang here can never take down or wedge the server: it just disables RAG.
     """
     _import_faiss()  # imports app.rag.embeddings (constructs the model), then faiss
 
@@ -217,9 +217,9 @@ def warm() -> None:
 def load_default() -> "Retriever | None":
     """Build the per-team retriever for the configured store dir, fail-open.
 
-    Returns a ready ``Retriever`` normally, or ``None`` when RAG cannot be made ready —
+    Returns a ready ``Retriever`` normally, or ``None`` when RAG cannot be made ready,
     a missing or broken embedding dependency, a model that will not load, or a load that
-    runs past ``RAG_WARM_TIMEOUT_SECONDS`` — logging exactly one structured line. ``None``
+    runs past ``RAG_WARM_TIMEOUT_SECONDS``, logging exactly one structured line. ``None``
     means the gateway starts and serves traffic with retrieval simply returning nothing.
 
     The expensive embedding model is loaded HERE, once, in a daemon thread bounded by the
@@ -232,7 +232,7 @@ def load_default() -> "Retriever | None":
 
     try:
         retriever = Retriever(config.RAG_INDEX_DIR)
-    except Exception as exc:  # noqa: BLE001 — construction is trivial, but never crash boot.
+    except Exception as exc:  # noqa: BLE001  # construction is trivial, but never crash boot.
         logger.warning(
             json.dumps({"event": "rag_load_failed", "stage": "construct", "error": str(exc)})
         )
@@ -251,7 +251,7 @@ def load_default() -> "Retriever | None":
         try:
             warm()
             outcome["ok"] = round(time.monotonic() - started, 3)
-        except Exception as exc:  # noqa: BLE001 — ImportError, model-load failure, anything.
+        except Exception as exc:  # noqa: BLE001  # ImportError, model-load failure, anything.
             outcome["error"] = str(exc)
 
     thread = threading.Thread(target=_run, name="rag-warm", daemon=True)

@@ -39,7 +39,7 @@ LOCKED_PREFIXES = ("/admin/", "/dashboard/", "/scanner/", "/account/")
 # The single tenant everything runs under when AUTH_ENABLED is off (local dev mode).
 # Its id is None on purpose: the proxy writes every local row with a NULL account_id
 # (it keeps its pre-phase-12 team-header scoping and never sees an account), so the
-# admin/dashboard reads must filter on the very same NULL — which the account-scoped
+# admin/dashboard reads must filter on the very same NULL, which the account-scoped
 # queries treat as "no tenant filter, show every row" (see app.db). Net effect: local
 # mode is single-tenant and sees all of its own (account-less) rows, exactly as before
 # phase 12, while an authenticated account only ever sees rows carrying its own id.
@@ -91,7 +91,7 @@ def read_account(request) -> Account | None:
 
     The middleware-resolved account when auth is on; the fixed ``LOCAL_ACCOUNT`` when it
     is off (single-tenant local mode). None only if the middleware was somehow bypassed
-    with auth on — the handlers turn that into a 401.
+    with auth on: the handlers turn that into a 401.
     """
     account = current_account(request)
     if account is not None:

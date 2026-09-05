@@ -2,16 +2,16 @@
 
 Endpoints under /dashboard, all read-only:
 
-- ``GET /dashboard/summary`` — this month's spend, requests, cache hits, routed count,
+- ``GET /dashboard/summary``: this month's spend, requests, cache hits, routed count,
   honest savings, the phase-8 eval pass rate, and the phase-9 guardrail block count.
-- ``GET /dashboard/models``  — per-model request count and spend, this month.
-- ``GET /dashboard/teams``   — the account's budget (spend vs cap, dollars remaining,
+- ``GET /dashboard/models``: per-model request count and spend, this month.
+- ``GET /dashboard/teams``: the account's budget (spend vs cap, dollars remaining,
   and an estimate of tokens remaining at its blended rate; null when not estimable)
   plus this month's spend split by team label.
-- ``GET /dashboard/recent``  — the latest N requests.
-- ``GET /dashboard/aws_cost`` — the caller's AWS bill: yesterday and month-to-date, the
+- ``GET /dashboard/recent``: the latest N requests.
+- ``GET /dashboard/aws_cost``: the caller's AWS bill: yesterday and month-to-date, the
   same shape as ``/scanner/cost``; the empty shape (not an error) when nothing is recorded.
-- ``GET /dashboard/events``  — Server-Sent Events, one ``request`` event per completed
+- ``GET /dashboard/events``: Server-Sent Events, one ``request`` event per completed
   gateway request, fanned out by the in-process ``Broadcaster``.
 
 Phase 12: every path here needs a slice key (``app.auth.middleware``), and **every
@@ -58,8 +58,8 @@ RECENT_DEFAULT_LIMIT = 20
 RECENT_MAX_LIMIT = 200
 
 # How often an idle SSE stream sends a comment line. Two jobs: keeps proxies and
-# browsers from timing the connection out, and — because Starlette only notices a
-# vanished client when it tries to send — bounds how long a dead client's queue
+# browsers from timing the connection out and, because Starlette only notices a
+# vanished client when it tries to send, bounds how long a dead client's queue
 # lingers before the write fails and the stream is torn down.
 SSE_KEEPALIVE_SECONDS = 15.0
 
@@ -120,7 +120,7 @@ async def summary(request: Request):
         rows = await db.dashboard_rows(since, account.id)
         eval_rows = await db.eval_rows_since(since, account.id)
         guardrail_rows = await db.guardrail_rows_since(since, account.id)
-    except Exception as exc:  # noqa: BLE001 — a read failure is a clean 503, never a 500.
+    except Exception as exc:  # noqa: BLE001  # a read failure is a clean 503, never a 500.
         logger.warning(json.dumps({"event": "dashboard_read_failed", "error": str(exc)}))
         return _error(503, DB_READ_FAILED)
 
@@ -164,13 +164,13 @@ async def models(request: Request):
 
 @router.get("/teams")
 async def teams(request: Request):
-    """The account's budget — spend vs cap, dollars remaining, tokens-remaining estimate —
+    """The account's budget, spend vs cap, dollars remaining, tokens-remaining estimate,
     plus this month's spend split by team label.
 
     Phase 12: the budget cap and its gate counter are per *account* (the tenant), so
     the meter is one meter, under ``budget``. Spend is Postgres; the cap and warn ratio
     are config; "budget used" (what the meter and dollars-remaining are built on) is
-    the live Redis gate counter for the account — the number the gate blocks on — and
+    the live Redis gate counter for the account, the number the gate blocks on, and
     falls back to the Postgres spend when Redis is unavailable (fail open, exactly like
     the gate; ``budget_source`` says which). ``teams`` is the per-label breakdown of
     the same rows: requests, spend, unpriced count, and each label's share of the
@@ -256,7 +256,7 @@ async def aws_cost(request: Request):
     Same data and shape as ``/scanner/cost`` (the rows the scanner's cost fetch records,
     under the caller's storage scope), but with the dashboard's failure posture: no rows,
     no database, or a read failure all answer the empty shape with ``month_to_date`` null,
-    never a 503. The tile shows "not connected" for that, which is the honest reading —
+    never a 503. The tile shows "not connected" for that, which is the honest reading,
     the account has not connected AWS, or the first fetch has not happened yet.
     """
     account = read_account(request)
@@ -269,7 +269,7 @@ async def aws_cost(request: Request):
     since = datetime.now(timezone.utc).date().replace(day=1)
     try:
         rows = await db.aws_cost_rows_since(scope, since)
-    except Exception as exc:  # noqa: BLE001 — degrade to "not connected", never a 500.
+    except Exception as exc:  # noqa: BLE001  # degrade to "not connected", never a 500.
         logger.warning(json.dumps({"event": "dashboard_read_failed", "error": str(exc)}))
         return dict(AWS_COST_EMPTY)
     if not rows:
@@ -299,7 +299,7 @@ def _key_view(row: dict | None) -> dict | None:
 
 @router.get("/key")
 async def key(request: Request):
-    """The account's live slice key, masked — ``{prefix, last4, name, created_at}`` or null.
+    """The account's live slice key, masked, ``{prefix, last4, name, created_at}`` or null.
 
     Session-cookie auth like every other dashboard read. The plain key is never stored,
     so it can never be read back here: only its ``slk_live_`` prefix and last four
@@ -327,7 +327,7 @@ async def rotate_key(request: Request):
     key is revoked first so it stops working the instant the new one exists, and the
     resolver cache is cleared so the revocation bites in this process immediately (the
     cache is keyed by hash, which is not kept here). The full plain key is in this
-    response and nowhere else — the caller shows it once.
+    response and nowhere else: the caller shows it once.
     """
     account = read_account(request)
     if account is None:
@@ -342,7 +342,7 @@ async def rotate_key(request: Request):
             account.id, hash_key(new_key), key_prefix(new_key), DASHBOARD_KEY_NAME,
             key_last4(new_key),
         )
-    except Exception as exc:  # noqa: BLE001 — a write failure is a clean 503, never a 500.
+    except Exception as exc:  # noqa: BLE001  # a write failure is a clean 503, never a 500.
         logger.warning(json.dumps({"event": "dashboard_key_rotate_failed", "error": str(exc)}))
         return _error(503, "Could not rotate the key.")
     # The cache is keyed by hash, which we don't have for the old key; drop everything so
@@ -361,8 +361,8 @@ class _SSEResponse(StreamingResponse):
 
     The generator's own ``finally`` covers the common case (the client goes away while
     we are waiting on the queue, so the cancellation lands inside the generator). This
-    wrapper covers the rest — a disconnect noticed mid-send, an unexpected error, a
-    server shutdown — so a queue can never be left subscribed after its client is gone.
+    wrapper covers the rest, a disconnect noticed mid-send, an unexpected error, a
+    server shutdown, so a queue can never be left subscribed after its client is gone.
     ``unsubscribe`` is idempotent, so running the cleanup twice is harmless.
     """
 

@@ -33,7 +33,7 @@ function statusTone(s) {
       <h2 class="panel-title">Recent calls</h2>
       <span v-if="meta" class="meta">{{ meta }}</span>
     </div>
-    <p v-if="rows === null && failed" class="empty">—</p>
+    <p v-if="rows === null && failed" class="empty">&mdash;</p>
     <p v-else-if="rows === null" class="loading">Loading…</p>
     <p v-else-if="rows.length === 0" class="empty">No requests recorded yet.</p>
     <div v-else class="table-wrap">
@@ -51,7 +51,7 @@ function statusTone(s) {
         <tbody>
           <tr v-for="r in rows" :key="r.key">
             <td class="mono muted" :title="r.created_at ?? ''">{{ time(r.created_at) }}</td>
-            <td class="mono">{{ r.team ?? '—' }}</td>
+            <td class="mono">{{ r.team ?? '\u2014' }}</td>
             <td class="mono">
               <span
                 class="pdot"
@@ -64,10 +64,10 @@ function statusTone(s) {
                 <span class="arrow" aria-hidden="true">→</span>
                 <span class="sr-only"> routed to </span>
               </template>
-              {{ r.model ?? '—' }}
+              {{ r.model ?? '\u2014' }}
             </td>
             <td>
-              <span class="pill" :class="statusTone(r.status)">{{ r.status ?? '—' }}</span>
+              <span class="pill" :class="statusTone(r.status)">{{ r.status ?? '\u2014' }}</span>
             </td>
             <td class="num mono">{{ money(r.cost) }}</td>
             <td><span v-if="r.cached" class="badge-cached">cached</span></td>

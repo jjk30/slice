@@ -1,11 +1,11 @@
-"""Phase-9 guardrails tests. Fakes only — no real NeMo engine, no real LLM, no real DB.
+"""Phase-9 guardrails tests. Fakes only: no real NeMo engine, no real LLM, no real DB.
 
 Three layers:
 
 - **Engine unit tests** drive ``GuardrailEngine`` against a fake ``rails`` object (one
   whose ``generate_async`` returns a canned response, raises, or hangs), so the pure
-  logic — block detection off ``activated_rails[*].stop``, the fail-open on error, the
-  timeout — is exercised with no nemoguardrails and no network.
+  logic, block detection off ``activated_rails[*].stop``, the fail-open on error, the
+  timeout, is exercised with no nemoguardrails and no network.
 - **DB / summary unit tests** cover the fire-and-forget writer (a dead database never
   raises) and the pure ``summarize_guardrail_rows`` aggregation.
 - **Integration tests** drive the whole thing through ``/v1/messages`` with respx, a

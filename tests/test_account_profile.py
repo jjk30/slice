@@ -1,7 +1,7 @@
 """Phase 20 account-profile endpoint tests: auth-lock, per-account isolation,
 email/E.164 validation with Anthropic-shaped 400s, and save-and-read-back.
 
-Fakes only — an in-memory account/connection store, no real DB, Redis, or network.
+Fakes only: an in-memory account/connection store, no real DB, Redis, or network.
 The store mirrors the real ``update_account_profile`` COALESCE semantics (a None
 argument leaves that column unchanged) so partial-update behavior is tested honestly.
 """
@@ -217,7 +217,7 @@ async def test_cross_account_isolation(client, monkeypatch, set_db):
     monkeypatch.setattr(account_routes, "read_account", _as_account(Account(id=5, login="alice")))
     await client.put("/account/profile", json={"email": "alice@example.com"})
 
-    # Bob, on the same store, sees only his own (empty) profile — never Alice's.
+    # Bob, on the same store, sees only his own (empty) profile, never Alice's.
     monkeypatch.setattr(account_routes, "read_account", _as_account(Account(id=9, login="bob")))
     bob = await client.get("/account/profile")
     assert bob.json()["login"] == "bob"

@@ -1,7 +1,7 @@
 """The phase-4 Redis layer: cache, budget caps, and rate limits.
 
 Every function here is fail-open. Redis being down, unreachable, or throwing mid
-call must never crash the gateway or block a request — the affected check is
+call must never crash the gateway or block a request: the affected check is
 skipped and traffic forwards as if the layer were not there. Each skip drops a
 short debug line so an operator can see it happened, but nothing louder.
 
@@ -61,8 +61,8 @@ def make_redis(url: str | None = None) -> aioredis.Redis:
     """Build an async Redis client. Construction never touches the network.
 
     The client connects lazily on first use, so a bad URL or a down server
-    surfaces as an error inside an individual operation — exactly where the
-    fail-open handling lives — rather than at startup.
+    surfaces as an error inside an individual operation, exactly where the
+    fail-open handling lives, rather than at startup.
     """
     return aioredis.from_url(url or config.REDIS_URL)
 
@@ -94,10 +94,10 @@ def month_key(now: datetime | None = None) -> str:
 async def check_rate_limit(redis: aioredis.Redis | None, scope: str) -> bool:
     """True when the request is under the per-minute cap for ``scope``.
 
-    ``scope`` is the tenant the counter belongs to — the account (``Account.scope``)
+    ``scope`` is the tenant the counter belongs to, the account (``Account.scope``)
     since phase 12. A single counter per scope with a 60s expiry gives a rolling fixed
     window: the first request in a window sets the TTL, the window resets once it
-    lapses. Any Redis error fails open — the request is allowed.
+    lapses. Any Redis error fails open: the request is allowed.
     """
     if redis is None:
         return True
@@ -132,10 +132,10 @@ async def check_budget(
     """Decide whether this scope (the account, since phase 12) has already hit its monthly cap.
 
     Reads the accumulated spend counter (written after each prior response) and
-    blocks at or past the cap. Any Redis error fails open — not blocked.
+    blocks at or past the cap. Any Redis error fails open, not blocked.
 
     Phase 11: a blocked decision is the "cap hit" moment, so it fires the ``block``
-    alert here — fire-and-forget (a detached task, never awaited, off entirely when
+    alert here, fire-and-forget (a detached task, never awaited, off entirely when
     ``ALERTS_ENABLED`` is false); the engine's cooldown collapses the repeat blocks a
     capped scope keeps producing into one alert per window. The decision itself is
     exactly as before. ``label`` is the human name the alert copy uses (the account's
@@ -176,8 +176,8 @@ async def get_spend(
     A dashboard read (phase 10), not a gate: unlike ``check_budget``, which fails open
     to a spend of 0 because "unknown" and "nothing spent" call for the same decision,
     this tells the two apart. A missing key is a real 0 (nothing added this month);
-    None means Redis is off or unreachable — or the stored value is not a finite
-    number — and the caller should say so, not show 0. ``month`` lets the caller pin
+    None means Redis is off or unreachable, or the stored value is not a finite
+    number, and the caller should say so, not show 0. ``month`` lets the caller pin
     the same month it used for everything else in one response.
     """
     if redis is None:
@@ -205,7 +205,7 @@ async def add_cost(
     time the running total reaches the warn ratio. The once-only guard lives in
     Redis (a SETNX flag) so it holds across processes and restarts. Fails open.
 
-    Phase 11: that first crossing is also where the ``warn`` alert fires — the same
+    Phase 11: that first crossing is also where the ``warn`` alert fires, the same
     SETNX branch, right after the log line, fire-and-forget (a detached task, never
     awaited, off entirely when ``ALERTS_ENABLED`` is false). The counter, the latch,
     and the log line are exactly as before. ``label`` / ``account_id`` as in
@@ -264,7 +264,7 @@ def cache_key(team: str, payload: dict, *, account_id: int | None = None) -> str
     """Deterministic cache key for a request.
 
     Phase 12: the account id is folded into the hash, so one account's cache can never
-    serve another's — that is the tenant boundary. The team label is folded in too
+    serve another's: that is the tenant boundary. The team label is folded in too
     (a sub-partition inside the account, as before phase 12). Every field in the request
     body changes the answer and so goes into the hash, except ``stream`` (transport only)
     and ``metadata`` (caller bookkeeping the provider echoes back): change the system
@@ -325,7 +325,7 @@ async def cache_get(redis: aioredis.Redis | None, key: str) -> bytes | None:
 
 
 async def cache_set(redis: aioredis.Redis | None, key: str, body: bytes) -> None:
-    """Store a response body under the TTL. Fails open — a miss is harmless."""
+    """Store a response body under the TTL. Fails open: a miss is harmless."""
     if redis is None:
         return
     try:

@@ -2,7 +2,7 @@
 
 NIM's inference API is OpenAI-compatible, so this is the OpenAI adapter pointed
 at NIM's base URL with NIM's key. The request/response/stream mapping is shared
-verbatim — no NIM-specific translation code exists, which is the point of rule 6.
+verbatim: no NIM-specific translation code exists, which is the point of rule 6.
 """
 
 from __future__ import annotations

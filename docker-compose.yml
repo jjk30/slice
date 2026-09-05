@@ -3,7 +3,7 @@
 # Migrations: the gateway applies every file in migrations/ on startup (app/db.py
 # runs them when it connects to the db), and those files are baked into the image,
 # so a normal `docker compose up` self-migrates once db is healthy. To apply them
-# by hand instead — against a bare db, or without booting the app — run:
+# by hand instead, against a bare db, or without booting the app, run:
 #
 #   cat migrations/*.sql | docker compose exec -T db psql -U slice -d slice
 #

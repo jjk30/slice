@@ -2,12 +2,12 @@
 
 The gateway calls exactly two things from here on the served-answer path:
 
-- ``sampled(routed_from, agent_header)`` — the O(1) decision, made once per request.
-- ``spawn(...)`` — fire the scoring off into a detached ``asyncio.create_task`` and
+- ``sampled(routed_from, agent_header)``: the O(1) decision, made once per request.
+- ``spawn(...)``: fire the scoring off into a detached ``asyncio.create_task`` and
   return immediately. Nothing here is ever awaited by the request.
 
-The task itself (``_run``) is wrapped so any failure — empty inputs, a broken
-evaluator, a down database — is logged and swallowed. The response is already out
+The task itself (``_run``) is wrapped so any failure, empty inputs, a broken
+evaluator, a down database, is logged and swallowed. The response is already out
 the door before any of this runs; scoring must never be able to reach back and
 affect it.
 """
@@ -83,7 +83,7 @@ async def _run(
     neighbors: list[str],
     account_id: int | None = None,
 ) -> None:
-    """Score one answer and write its rows. Never raises — this is a detached task."""
+    """Score one answer and write its rows. Never raises: this is a detached task."""
     try:
         if not (prompt or "").strip() or not (answer or "").strip():
             logger.info(
@@ -130,7 +130,7 @@ async def _run(
                         account_id=account_id,
                     )
                 )
-    except Exception as exc:  # noqa: BLE001 — a detached task must never surface an error.
+    except Exception as exc:  # noqa: BLE001  # a detached task must never surface an error.
         logger.warning(json.dumps({"event": "eval_task_failed", "error": str(exc)}))
 
 

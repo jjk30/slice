@@ -1,4 +1,4 @@
-"""Phase-13 (part 1) WhatsApp-via-Twilio alert tests. Fakes only — no real network.
+"""Phase-13 (part 1) WhatsApp-via-Twilio alert tests. Fakes only: no real network.
 
 Four layers, mirroring the phase-11 email tests:
 
@@ -6,7 +6,7 @@ Four layers, mirroring the phase-11 email tests:
   (URL, basic auth, form body), 2xx → ok, non-2xx and transport/timeout errors → not ok,
   and that it never raises.
 - **Disabled tests** prove any missing Twilio setting is a no-op: no call attempted, a
-  debug line, no raise — at both the function and the channel.
+  debug line, no raise, at both the function and the channel.
 - **build_default_channels tests** prove the channel is registered only when all four
   settings are present, and left out (with a debug line) otherwise.
 - **Engine tests** prove both channels fire off the SAME cooldown decision (email and
@@ -120,7 +120,7 @@ async def test_send_builds_expected_url_auth_and_form_body():
     scheme, _, encoded = sent.headers["authorization"].partition(" ")
     assert scheme == "Basic"
     assert base64.b64decode(encoded).decode() == f"{SID}:{TOKEN}"
-    # Form-encoded From / To / Body — and exactly those three keys.
+    # Form-encoded From / To / Body, and exactly those three keys.
     assert sent.headers["content-type"].startswith("application/x-www-form-urlencoded")
     form = {k: v[0] for k, v in parse_qs(sent.content.decode()).items()}
     assert form["From"] == FROM
@@ -135,7 +135,7 @@ async def test_send_body_has_no_content_template_fields():
 
     A free-form sandbox message inside the 24-hour session window must carry ONLY
     From/To/Body. A ContentVariables field with no ContentSid is what triggers 21654,
-    so assert the template fields are absent entirely — exactly three keys go out.
+    so assert the template fields are absent entirely: exactly three keys go out.
     """
     route = respx.post(TWILIO_URL).mock(return_value=httpx.Response(201, json={"sid": "SM"}))
     await send_whatsapp_message(

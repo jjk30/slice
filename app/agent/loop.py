@@ -6,7 +6,7 @@
 
 - **try** calls the current rung's model with the original payload (model swapped),
   through the existing adapters. A provider error becomes an Anthropic-shaped error
-  result rather than an exception — a dead rung never kills the loop.
+  result rather than an exception: a dead rung never kills the loop.
 - **check** judges the answer (see ``app.agent.checker``). A pass ends the loop; a
   fail escalates. The check's own cost, if any, counts toward the ceiling.
 - **decide** is the stop rule. If the answer passed, serve it. Otherwise, before the
@@ -41,10 +41,10 @@ from app.usage import usage_from_body
 logger = logging.getLogger("slice.gateway")
 
 # Response header describing what the loop did:
-#   pass:1          — the first try (the routed cheap model) passed and was served.
-#   esc:N:<model>   — escalated; N attempts made, served from <model>.
-#   ceiling         — an escalation was wanted but the ceiling stopped it; best served.
-#   off:stream      — set by main.py when a qualifying request was streaming (no loop).
+#   pass:1, the first try (the routed cheap model) passed and was served.
+#   esc:N:<model>, escalated; N attempts made, served from <model>.
+#   ceiling, an escalation was wanted but the ceiling stopped it; best served.
+#   off:stream, set by main.py when a qualifying request was streaming (no loop).
 # Absent when the loop never applied (pin, rule, cache hit, hard verdict, disabled).
 AGENT_HEADER = "x-slice-agent"
 
@@ -57,7 +57,7 @@ class LoopResult:
     """What the loop hands back to the gateway to finalize and serve.
 
     ``spend`` is the total actually spent across every attempt and every checker
-    call — it becomes the served row's ``cost_usd`` and the team's budget delta.
+    call: it becomes the served row's ``cost_usd`` and the team's budget delta.
     ``attempts`` is logged in the new ``requests.attempts`` column.
     """
 
@@ -121,7 +121,7 @@ def estimate_cost(model: str | None, payload: dict) -> Decimal | None:
 
     Input tokens are overestimated from character count (chars // 3, rounded up);
     output tokens are the request's ``max_tokens`` or ``AGENT_DEFAULT_MAX_TOKENS``.
-    Both sides are priced from the table. An unknown model price returns None —
+    Both sides are priced from the table. An unknown model price returns None,
     an infinite estimate that blocks the attempt, never a silent zero.
     """
     price = pricing.price_for(model)
@@ -150,8 +150,8 @@ async def _attempt(
 ) -> tuple[AdapterResult, int | None, int | None, Decimal]:
     """Call one model. Returns the result plus its tokens and actual cost.
 
-    Every failure mode — an unknown model, a missing key, a timeout, an unreachable
-    provider — becomes an Anthropic-shaped error result instead of an exception, so
+    Every failure mode, an unknown model, a missing key, a timeout, an unreachable
+    provider, becomes an Anthropic-shaped error result instead of an exception, so
     the loop can treat a dead rung as a failed check and move on.
     """
     try:
@@ -346,7 +346,7 @@ async def run_agent_loop(
 
     try:
         final = await _GRAPH.ainvoke(initial, {"recursion_limit": _RECURSION_LIMIT})
-    except Exception as exc:  # noqa: BLE001 — any loop failure degrades to one attempt.
+    except Exception as exc:  # noqa: BLE001  # any loop failure degrades to one attempt.
         logger.warning(json.dumps({"event": "agent_loop_error", "error": str(exc)}))
         return await _single_attempt(base_payload, headers, client, served_model)
 

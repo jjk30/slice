@@ -27,7 +27,7 @@ import numpy as np
 # Import order matters: the embedding model (torch) MUST load before faiss, or the
 # process segfaults on an OpenMP double-load on macOS. embed_texts pulls torch in;
 # only then do we import faiss. See app.rag.retriever._import_faiss for the detail.
-from app.rag.embeddings import embed_texts  # noqa: E402 — must precede faiss.
+from app.rag.embeddings import embed_texts  # noqa: E402  # must precede faiss.
 import faiss  # noqa: E402
 
 from app import config

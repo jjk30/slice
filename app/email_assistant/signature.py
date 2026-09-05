@@ -6,7 +6,7 @@ is ``"{svix-id}.{svix-timestamp}.{raw body}"``; the signature is HMAC-SHA256 of 
 the base64-decoded secret (the endpoint secret is ``whsec_<base64>``), itself base64
 encoded. The signature header holds space-separated ``v1,<sig>`` entries (several during a
 secret rotation); the post is valid if ANY of them matches. Done by hand with the standard
-library — no svix dependency — and every failure path answers False, never raises.
+library, no svix dependency, and every failure path answers False, never raises.
 
 Two guards on top of the HMAC: a timestamp more than ``TOLERANCE_SECONDS`` away from now
 is rejected (replay), and the comparison is constant-time (``hmac.compare_digest``).

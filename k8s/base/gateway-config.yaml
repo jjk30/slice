@@ -1,7 +1,7 @@
 # Non-secret gateway configuration. Everything here is safe to read in `git` and
 # safe to print in `kubectl describe`. Secrets (API keys, JWT signing key, the
-# DATABASE_URL that carries the db password) live in the generated Secret instead
-# — see kustomization.yaml's secretGenerator and secrets.env.example.
+# DATABASE_URL that carries the db password) live in the generated Secret instead:
+# see kustomization.yaml's secretGenerator and secrets.env.example.
 apiVersion: v1
 kind: ConfigMap
 metadata:

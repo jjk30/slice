@@ -1,4 +1,4 @@
-"""Phase-10 dashboard tests. Fakes only — no real Postgres, no real Redis, no real provider.
+"""Phase-10 dashboard tests. Fakes only: no real Postgres, no real Redis, no real provider.
 
 Three layers, the same shape as the phase 8/9 suites:
 
@@ -10,7 +10,7 @@ Three layers, the same shape as the phase 8/9 suites:
 - **Endpoint tests** through the ASGI app with a fake database on ``app.state.db``: the
   JSON shapes, the recent limit clamp, the CORS header for the configured origin, the
   clean 503 when Postgres is missing or failing, the fail-open teams read when Redis is
-  down, and — driven with respx — that the request path publishes exactly one event per
+  down and, driven with respx, that the request path publishes exactly one event per
   completed request (served, cached, streamed, and error paths alike) without being
   affected by dashboard clients. The SSE stream is driven at the raw ASGI level (httpx's
   ASGI transport waits for a response to finish, and this one never does on its own) so
@@ -186,7 +186,7 @@ def test_summary_math_against_seeded_rows():
         _row(model=SONNET, cached=True),
         # A gate reject: no tokens, no cost, still a request.
         _row(model=SONNET, status=429, input_tokens=None, output_tokens=None, cost_usd=None),
-        # An unpriced model: tokens known, cost unknown — adds nothing to spend.
+        # An unpriced model: tokens known, cost unknown, adds nothing to spend.
         _row(model=UNPRICED, cost_usd=None),
     ]
     summary = stats.summarize_requests(rows)
@@ -297,7 +297,7 @@ def test_token_estimate_no_traffic_is_null():
 
 
 def test_token_estimate_zero_tokens_is_null():
-    # A priced 200 with no usage recorded: cost known, tokens zero — no rate, no guess.
+    # A priced 200 with no usage recorded: cost known, tokens zero, no rate, no guess.
     rows = [_row(team="t", model=SONNET, input_tokens=0, output_tokens=0, cost_usd=Decimal("0.001"))]
     teams, _ = stats.per_team(rows)
     view = stats.team_view(teams[0], Decimal("25"), None)
@@ -1185,7 +1185,7 @@ async def test_sse_cleanup_also_runs_when_disconnect_surfaces_as_a_failed_send(f
         harness.disconnect.set()
         try:
             await asyncio.wait_for(task, timeout=2)
-        except Exception:  # noqa: BLE001 — Starlette raises ClientDisconnect out of the app.
+        except Exception:  # noqa: BLE001  # Starlette raises ClientDisconnect out of the app.
             pass
     finally:
         if not task.done():

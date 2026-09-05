@@ -16,7 +16,7 @@ from app import config
 from app.adapters.base import AdapterResult
 
 # The client headers that are allowed upstream. The server adds no key of its
-# own — Anthropic authenticates with the caller's x-api-key (rule 3).
+# own: Anthropic authenticates with the caller's x-api-key (rule 3).
 FORWARD_REQUEST_HEADERS = {
     "x-api-key",
     "anthropic-version",

@@ -66,7 +66,7 @@ async function toggle(row) {
       <h2 class="panel-title">AWS findings</h2>
       <span v-if="meta" class="meta">{{ meta }}</span>
     </div>
-    <p v-if="rows === null && failed" class="empty">—</p>
+    <p v-if="rows === null && failed" class="empty">&mdash;</p>
     <p v-else-if="rows === null" class="loading">Loading…</p>
     <p v-else-if="rows.length === 0" class="empty">
       No findings yet. The first scan runs within an hour of connecting AWS.

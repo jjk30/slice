@@ -7,7 +7,7 @@
 # Only the two built-in self-check rails are enabled, and nothing else. Everything
 # here is deliberately minimal so that constructing the engine never needs
 # embeddings and never downloads a model at runtime:
-#   - no `models:` are declared here — the rails LLM is injected in code from
+#   - no `models:` are declared here: the rails LLM is injected in code from
 #     GUARDRAILS_MODEL (see engine.py), wired through langchain-anthropic.
 #   - no colang flows, no knowledge base, no user/bot message canonical forms, so
 #     no embedding index is ever built. If any feature here started reaching out to
@@ -28,7 +28,7 @@ rails:
 # rail with its own prompts. prompts.yml carries a second self_check_input /
 # self_check_output pair tagged ``mode: email``; NeMo selects prompts by task and by
 # ``prompting_mode``, so the agent-loop engine (this default, "standard") never sees
-# them, and the email engine — built in code as build_engine(mode="email"), which copies
-# this config with prompting_mode set to "email" — gets only them. One config directory,
+# them, and the email engine, built in code as build_engine(mode="email"), which copies
+# this config with prompting_mode set to "email", gets only them. One config directory,
 # one set of flows, two channels with different prompts and no embeddings either way.
 prompting_mode: standard

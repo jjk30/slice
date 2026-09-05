@@ -129,7 +129,7 @@ async def test_cache_hit_and_miss_each_increment_with_right_label(client, gate_r
     assert first.status_code == 200
     second = await client.post("/v1/messages", json=body)  # warm: served from cache
     assert second.status_code == 200
-    # The provider was hit exactly once — the second answer came from cache.
+    # The provider was hit exactly once: the second answer came from cache.
     assert route.call_count == 1
 
     assert _sample("slice_cache_events_total", {"result": "miss"}) == miss_before + 1

@@ -19,7 +19,7 @@ defineProps({
   <section class="card" :class="tint ? `tint-${tint}` : ''">
     <p class="kpi-label">{{ label }}</p>
     <p v-if="(value === null || value === undefined) && !failed" class="loading">Loading…</p>
-    <p v-else class="kpi-value" :class="tone ? `tone-${tone}` : ''">{{ value ?? '—' }}</p>
+    <p v-else class="kpi-value" :class="tone ? `tone-${tone}` : ''">{{ value ?? '\u2014' }}</p>
     <p v-if="sub" class="kpi-sub">{{ sub }}</p>
   </section>
 </template>

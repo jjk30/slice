@@ -1,7 +1,7 @@
 """Google Gemini adapter.
 
 Maps Anthropic requests to generateContent / streamGenerateContent and maps the
-response — including usageMetadata — back to Anthropic shape. The system prompt
+response, including usageMetadata, back to Anthropic shape. The system prompt
 and message-text extraction are reused from the OpenAI adapter, since Anthropic
 is the shared source format. The key travels in the x-goog-api-key header, never
 in the URL.

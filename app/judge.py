@@ -51,7 +51,7 @@ class JudgeResult:
 
     ``input_tokens``/``output_tokens`` are None when the call produced no usable
     body (timeout, transport error, provider error). They exist so the caller can
-    bill the judge call against the team budget — counting everything it can see.
+    bill the judge call against the team budget, counting everything it can see.
     """
 
     verdict: str
@@ -117,9 +117,9 @@ async def classify(
             adapter.send(payload, raw, headers, stream=False, client=client),
             timeout=config.JUDGE_TIMEOUT_SECONDS,
         )
-    except Exception as exc:  # noqa: BLE001 — timeout, transport, or anything else.
+    except Exception as exc:  # noqa: BLE001  # timeout, transport, or anything else.
         # A judge that fails must not change the answer the client gets: treat it
-        # as "hard" and move on. Nothing to bill — the call produced no usage.
+        # as "hard" and move on. Nothing to bill: the call produced no usage.
         logger.debug(json.dumps({"event": "judge_error", "error": str(exc)}))
         return JudgeResult(VERDICT_HARD)
 

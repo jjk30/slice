@@ -4,7 +4,7 @@ A standalone [MCP](https://modelcontextprotocol.io) stdio server that exposes a 
 slice gateway's data as tools inside Claude Code. It is a **thin adapter**: it only makes
 short async HTTP calls to slice's existing gateway API and shapes the JSON into compact,
 human-readable text. It contains no gateway logic, no database access, and no business
-rules — every number comes from an endpoint the gateway already serves.
+rules: every number comes from an endpoint the gateway already serves.
 
 ## Run
 
@@ -13,8 +13,8 @@ pip install -r mcp_server/requirements.txt
 SLICE_BASE_URL=http://localhost:8080 SLICE_API_KEY=slk_... python -m mcp_server
 ```
 
-- `SLICE_BASE_URL` — the gateway URL (default `http://localhost:8080`).
-- `SLICE_API_KEY` — your slice key, sent as `Authorization: Bearer <key>` (the same header
+- `SLICE_BASE_URL`: the gateway URL (default `http://localhost:8080`).
+- `SLICE_API_KEY`: your slice key, sent as `Authorization: Bearer <key>` (the same header
   the gateway's phase-12 auth reads). **Optional**: unset works against a gateway running
   in local/unlocked mode. If a call comes back `401`, the tool tells you to set the key.
 
@@ -37,7 +37,7 @@ Reads (free, no confirmation):
 | `get_recent_requests` | `GET /dashboard/recent?limit=N` | last N requests (N≤50) |
 | `get_eval_summary` | `GET /admin/eval/summary` | RAGAS pass rate |
 
-Writes (two-call confirm handshake — call once to preview, again with `confirm=true` to apply):
+Writes (two-call confirm handshake, call once to preview, again with `confirm=true` to apply):
 
 | tool | gateway endpoint |
 | --- | --- |
@@ -57,4 +57,4 @@ Every read returns clean text and fails gracefully: a gateway that is down yield
 python -m pytest tests/test_mcp_server.py
 ```
 
-The gateway is always faked with `respx` — no live network.
+The gateway is always faked with `respx`: no live network.

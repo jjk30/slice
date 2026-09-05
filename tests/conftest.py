@@ -12,7 +12,7 @@ def routing_off_by_default(monkeypatch):
     """Phase-5 auto-routing is opt-in per test.
 
     Production defaults ``AUTO_ROUTE_ENABLED`` to true, but with it on every
-    non-cached native request would fire a judge call — which would change the
+    non-cached native request would fire a judge call, which would change the
     upstream call counts the phases 1-4 suites assert. Default it off here so those
     suites see pre-router behavior; the router tests turn it back on explicitly.
     Pins and switch rules are unaffected (they don't depend on this flag).
@@ -39,7 +39,7 @@ def eval_off_by_default(monkeypatch):
     """Phase-8 evaluation is opt-in per test, same reasoning as auto-routing.
 
     Production defaults ``EVAL_SAMPLE_RATE`` to 0.05, so a routed-down request would
-    sometimes spawn a background RAGAS task — which would need a live judge and would
+    sometimes spawn a background RAGAS task, which would need a live judge and would
     add nondeterministic work the other suites don't expect. Force it to 0 here so no
     test samples by accident; the eval tests set a rate and inject a fake evaluator
     explicitly. Belt and suspenders: no test runs lifespan's evaluator build either,
@@ -88,7 +88,7 @@ def scanner_off_by_default(monkeypatch):
     """Phase-18a scanner is opt-in per test, same pattern as the flags above.
 
     Production defaults ``SCANNER_ENABLED`` to true, which starts the daily background task
-    in lifespan — a task that would import boto3 and try to reach AWS. Force the switch off
+    in lifespan, a task that would import boto3 and try to reach AWS. Force the switch off
     so a lifespan-running test never starts it, and clear any task a prior test left on
     ``app.state``. The scanner tests drive the checks and service directly with stubbed
     boto3 and fakes; they never need the daily loop.
@@ -107,7 +107,7 @@ def rag_off_by_default(monkeypatch):
     Production defaults ``RAG_ENABLED`` to true. That matters for one thing here: the
     lifespan-running test would otherwise call ``rag_retriever.load_default()``, which
     now warms the heavy embedding model at startup when a local ``rag_store`` index is
-    present — real, slow work (or a bounded hang) the unit suite must never do. Default
+    present: real, slow work (or a bounded hang) the unit suite must never do. Default
     it off so lifespan skips RAG entirely; the RAG tests set it true explicitly and drive
     the retriever with fakes. The request path already treats a None retriever as "no
     retrieval", so nothing else changes.
@@ -142,8 +142,8 @@ def isolate_redis(monkeypatch):
     The gateway holds one module-level ``app``, so a Redis client set by one
     test would otherwise leak into the next. Default each test to no Redis
     (every check fails open, exactly as in phases 1-3); ``make_redis`` is
-    stubbed to a fresh fake so even code paths that build their own client —
-    like ``lifespan`` — never reach localhost.
+    stubbed to a fresh fake so even code paths that build their own client,
+    like ``lifespan``, never reach localhost.
     """
     monkeypatch.setattr(redis_layer, "make_redis", lambda url=None: fakeredis.aioredis.FakeRedis())
     previous = getattr(app.state, "redis", None)

@@ -4,7 +4,7 @@ A channel is anything with a ``name`` and an ``async send(alert) -> DeliveryResu
 The engine (``app.alerts.engine``) knows nothing beyond that: it hands every channel
 the same ``Alert``, records one row per channel from the ``DeliveryResult``, and never
 expects ``send`` to raise. Adding Slack or WhatsApp later is a new class here plus one
-line in ``build_default_channels`` — the engine does not change.
+line in ``build_default_channels``: the engine does not change.
 
 One implementation for now: ``ResendEmailChannel``, a single POST to Resend's
 ``/emails`` endpoint over httpx. It never raises: a non-2xx or any exception (timeout,
@@ -81,7 +81,7 @@ class AlertChannel(Protocol):
 
 
 def _money(value) -> str:
-    """``$25.00``, ``$21.50``, ``$0.0105`` — at least two decimals, up to four, no noise.
+    """``$25.00``, ``$21.50``, ``$0.0105``: at least two decimals, up to four, no noise.
 
     A positive amount never renders as ``$0.00``: if four decimals would round it to
     zero, decimals extend until a nonzero digit shows, capped at eight (``$0.000001``).
@@ -219,7 +219,7 @@ Sent {time}"""
 
 
 def _left(spend, cap) -> str:
-    """Cap minus spend, money-formatted, floored at $0.00 — never negative, never unknown-minus."""
+    """Cap minus spend, money-formatted, floored at $0.00, never negative, never unknown-minus."""
     try:
         remaining = float(cap) - float(spend)
     except (TypeError, ValueError):
@@ -575,7 +575,7 @@ class ResendEmailChannel:
     """Email via Resend: one POST to /emails, Bearer-keyed, 10s timeout, never raises.
 
     ``client`` lets a caller share an ``httpx.AsyncClient``; by default each send opens
-    a short-lived one (alerts are rare — at most one per team per kind per cooldown).
+    a short-lived one (alerts are rare, at most one per team per kind per cooldown).
     """
 
     name = "email"
@@ -664,7 +664,7 @@ class ResendEmailChannel:
             else:
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
                     response = await client.post(self._url, json=payload, headers=headers)
-        except Exception as exc:  # noqa: BLE001 — a channel never raises into the engine.
+        except Exception as exc:  # noqa: BLE001  # a channel never raises into the engine.
             return DeliveryResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
         if 200 <= response.status_code < 300:

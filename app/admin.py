@@ -130,7 +130,7 @@ async def eval_summary(request: Request):
         return empty
     try:
         return await db.eval_summary(account.id)
-    except Exception:  # noqa: BLE001 — a read failure degrades to the empty summary.
+    except Exception:  # noqa: BLE001  # a read failure degrades to the empty summary.
         return empty
 
 
@@ -150,7 +150,7 @@ async def guardrails_summary(request: Request):
         return empty
     try:
         return await db.guardrail_summary(account.id)
-    except Exception:  # noqa: BLE001 — a read failure degrades to the empty summary.
+    except Exception:  # noqa: BLE001  # a read failure degrades to the empty summary.
         return empty
 
 
@@ -170,7 +170,7 @@ async def alerts_summary(request: Request):
         return empty
     try:
         return await db.alert_summary(account.id)
-    except Exception:  # noqa: BLE001 — a read failure degrades to the empty summary.
+    except Exception:  # noqa: BLE001  # a read failure degrades to the empty summary.
         return empty
 
 
@@ -227,7 +227,7 @@ def _key_json(row: dict) -> dict:
 
 @router.get("/keys")
 async def list_keys(request: Request):
-    """The caller's slice keys — prefixes and metadata, never the key or its hash."""
+    """The caller's slice keys, prefixes and metadata, never the key or its hash."""
     account = _account(request)
     if account is None:
         return _no_account()
@@ -250,7 +250,7 @@ async def create_key(request: Request):
     name = None
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — an empty body is fine; a name is optional.
+    except Exception:  # noqa: BLE001  # an empty body is fine; a name is optional.
         body = None
     if isinstance(body, dict) and isinstance(body.get("name"), str) and body["name"].strip():
         name = body["name"].strip()[:80]

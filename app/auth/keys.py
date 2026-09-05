@@ -1,6 +1,6 @@
 """Slice keys: mint, hash, recognise (phase 12).
 
-A slice key identifies the caller to the gateway — nothing more in Path B (the caller
+A slice key identifies the caller to the gateway: nothing more in Path B (the caller
 still sends their own provider key in ``x-api-key``). It looks like a GitHub token:
 ``slk_live_`` plus 32+ url-safe random characters, shown in full exactly once at mint
 time. Postgres stores only its SHA-256, so a leaked database never yields a usable key,
@@ -33,7 +33,7 @@ def mint_key() -> str:
 
 
 def hash_key(key: str) -> str:
-    """The hex SHA-256 of a key — the only form ever written to Postgres."""
+    """The hex SHA-256 of a key, the only form ever written to Postgres."""
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
@@ -44,7 +44,7 @@ def key_prefix(key: str) -> str:
 
 
 def key_last4(key: str) -> str:
-    """The key's last four characters — the only tail the masked display ever shows.
+    """The key's last four characters, the only tail the masked display ever shows.
 
     Four public characters is enough to tell two keys apart in a list, far too few to
     reconstruct the rest; stored next to the hash so the dashboard can render
@@ -56,7 +56,7 @@ def key_last4(key: str) -> str:
 def is_slice_key(value: str | None) -> bool:
     """True when ``value`` has the shape of a slice key (prefix plus enough random chars).
 
-    A shape check only — whether it is *valid* is a lookup. Used to tell a slice key
+    A shape check only: whether it is *valid* is a lookup. Used to tell a slice key
     apart from a JWT or a provider key in an ``Authorization: Bearer`` header.
     """
     if not isinstance(value, str) or not value.startswith(KEY_PREFIX):

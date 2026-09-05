@@ -1,21 +1,21 @@
 """Phase-17 Prometheus metrics for the slice gateway.
 
 Fire-and-forget by construction: every recording helper here swallows its own
-errors, so a metrics failure — a bad label, a broken collector, anything — can
+errors, so a metrics failure, a bad label, a broken collector, anything, can
 never block or fail a request. Callers on the hot path do not need their own
 try/except.
 
 Labels are kept strictly low-cardinality: ``provider`` (a fixed handful), a
 bounded served-model name, and small closed enums for ``status`` / ``direction``
 / ``result`` / ``decision`` / ``kind``. We NEVER use an account id, slice key,
-request id, team label, or prompt text as a label value — those would blow up
+request id, team label, or prompt text as a label value: those would blow up
 the series count and leak tenant data into the metrics.
 
-Single uvicorn worker (see the Dockerfile ``CMD`` — no ``--workers``), so the
+Single uvicorn worker (see the Dockerfile ``CMD``, no ``--workers``), so the
 default in-process global registry is exactly right and no cross-process
 aggregation is needed. If the gateway is ever run with multiple workers, each
 worker would expose only its own share of these counters and /metrics would have
-to move to prometheus_client multiprocess mode — that is out of scope for this
+to move to prometheus_client multiprocess mode: that is out of scope for this
 phase and is called out in the phase-17 notes.
 """
 
@@ -147,7 +147,7 @@ def record_request(
             cost = float(cost_usd)
             if cost > 0:
                 COST.labels(provider=provider, model=m).inc(cost)
-    except Exception:  # noqa: BLE001 — metrics must never break a request.
+    except Exception:  # noqa: BLE001  # metrics must never break a request.
         logger.debug("metrics.record_request failed", exc_info=True)
 
 

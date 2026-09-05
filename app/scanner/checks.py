@@ -8,15 +8,15 @@ carries an ``est_monthly_usd`` (float, nullable) in its ``detail`` and takes its
 from that estimate (see ``severity_for_waste``).
 
 Each check is a small, self-contained function taking a boto3 session (anything with a
-``.client(name)`` method — a real ``boto3.Session`` in production, a fake wrapping
+``.client(name)`` method, a real ``boto3.Session`` in production, a fake wrapping
 ``botocore.stub.Stubber`` clients in tests) and returning a list of ``Finding``. A check
 builds only the clients it needs and lists only the resources it inspects, so all eight
 are independent and run in parallel on the same supervisor graph.
 
-Scope: the scanner is **single-region** — every client is built in the session's region
+Scope: the scanner is **single-region**: every client is built in the session's region
 (``AWS_REGION``). Resources in other regions are not seen. Multi-region scanning (iterating
 ``ec2:DescribeRegions``) is future work; the cost estimates here are therefore per-region.
-All prices are us-east-1 on-demand list prices, coarse by design — the point is to rank
+All prices are us-east-1 on-demand list prices, coarse by design: the point is to rank
 waste, not to reconcile a bill.
 
 Fail-open, at two levels:
@@ -90,14 +90,14 @@ def check_s3_public(session) -> list[Finding]:
     Block Public Access setting is checked: if it is missing or not fully on, that is one
     HIGH finding for the account (a single toggle that would otherwise let a future bucket
     go public). The account-level probe needs the account id and s3control; if either is
-    denied it is skipped silently — the per-bucket findings still stand.
+    denied it is skipped silently: the per-bucket findings still stand.
     """
-    from botocore.exceptions import ClientError  # noqa: PLC0415 — lazy: no SDK at import.
+    from botocore.exceptions import ClientError  # noqa: PLC0415  # lazy: no SDK at import.
 
     findings: list[Finding] = []
     s3 = session.client("s3")
 
-    # Account-level Block Public Access (best effort — skipped on any denial).
+    # Account-level Block Public Access (best effort, skipped on any denial).
     findings.extend(_account_public_access_block(session, ClientError))
 
     try:
@@ -148,7 +148,7 @@ def check_s3_public(session) -> list[Finding]:
                     )
                 )
         except ClientError as exc:
-            # NoSuchBucketPolicy simply means there is no policy — not public.
+            # NoSuchBucketPolicy simply means there is no policy, not public.
             if _error_code(exc) != "NoSuchBucketPolicy":
                 _debug(CHECK_S3_PUBLIC, f"policy_status:{name}", exc)
 
@@ -159,7 +159,7 @@ def _account_public_access_block(session, ClientError) -> list[Finding]:
     """One HIGH finding when the account's S3 Block Public Access is missing or partial.
 
     Needs the account id (sts) and s3control. Any denial or unexpected error skips the
-    probe entirely (returns nothing) — the per-bucket findings are the real signal, and
+    probe entirely (returns nothing): the per-bucket findings are the real signal, and
     honesty over a false clean means we say nothing here rather than assert "fine".
     """
     try:
@@ -181,7 +181,7 @@ def _account_public_access_block(session, ClientError) -> list[Finding]:
             ]
         _debug(CHECK_S3_PUBLIC, "account_public_access_block", exc)
         return []
-    except Exception as exc:  # noqa: BLE001 — no credentials, s3control absent, etc.: skip.
+    except Exception as exc:  # noqa: BLE001  # no credentials, s3control absent, etc.: skip.
         _debug(CHECK_S3_PUBLIC, "account_public_access_block", exc)
         return []
 
@@ -211,7 +211,7 @@ def _account_public_access_block(session, ClientError) -> list[Finding]:
 def check_sg_open(session) -> list[Finding]:
     """Security groups allowing 0.0.0.0/0 (or ::/0) to a sensitive port.
 
-    Our own box's group is flagged like any other if it matches — honesty over vanity.
+    Our own box's group is flagged like any other if it matches: honesty over vanity.
     A rule with protocol ``-1`` (all traffic) opens every sensitive port at once.
     """
     from botocore.exceptions import ClientError  # noqa: PLC0415
@@ -445,7 +445,7 @@ IDLE_WINDOW_DAYS = 7
 _HOURS_PER_MONTH = 730
 
 # On-demand $/hour for common instance types. Unknown types get no estimate (None) but are
-# still flagged when idle — we just can't price the waste.
+# still flagged when idle: we just can't price the waste.
 INSTANCE_HOURLY = {
     "t2.micro": 0.0116, "t2.small": 0.023, "t2.medium": 0.0464, "t2.large": 0.0928,
     "t3.micro": 0.0104, "t3.small": 0.0208, "t3.medium": 0.0416, "t3.large": 0.0832,
@@ -542,7 +542,7 @@ def check_ebs_waste(session) -> list[Finding]:
 
 
 def check_eip_waste(session) -> list[Finding]:
-    """Elastic IPs with no AssociationId — billed hourly while doing nothing."""
+    """Elastic IPs with no AssociationId, billed hourly while doing nothing."""
     from botocore.exceptions import ClientError  # noqa: PLC0415
 
     findings: list[Finding] = []
@@ -580,7 +580,7 @@ def check_eip_waste(session) -> list[Finding]:
 def check_snapshot_waste(session) -> list[Finding]:
     """Self-owned EBS snapshots older than 90 days.
 
-    The estimate uses VolumeSize at $0.05/GB-mo, an *upper bound* — snapshots are
+    The estimate uses VolumeSize at $0.05/GB-mo, an *upper bound*, snapshots are
     incremental, so the real cost is usually far less; the summaries say so. Above
     SNAPSHOT_GROUP_THRESHOLD stale snapshots, one grouped finding stands in for the lot to
     avoid finding-spam.
@@ -657,7 +657,7 @@ def check_snapshot_waste(session) -> list[Finding]:
 def check_idle_instances(session) -> list[Finding]:
     """Running EC2 instances averaging under 5% CPU over the last 7 days.
 
-    The slice box's own instance is scanned like any other (honesty over vanity) — its
+    The slice box's own instance is scanned like any other (honesty over vanity), its
     CPU won't be idle anyway, so it is not special-cased. A type absent from the price map
     is still flagged idle; its waste estimate is just null.
     """
@@ -697,7 +697,7 @@ def check_idle_instances(session) -> list[Finding]:
 
             points = [p.get("Average") for p in stats.get("Datapoints", []) or [] if p.get("Average") is not None]
             if not points:
-                continue  # no data to judge on — say nothing rather than guess.
+                continue  # no data to judge on: say nothing rather than guess.
             avg = sum(points) / len(points)
             if avg >= IDLE_CPU_PERCENT:
                 continue

@@ -64,7 +64,7 @@ def test_request_mapping_moves_system_and_params():
 
 def test_openai_body_never_emits_max_tokens():
     # The gpt-5 family rejects max_tokens with a 400 ("use max_completion_tokens
-    # instead"), so the outbound OpenAI body must never carry a max_tokens key —
+    # instead"), so the outbound OpenAI body must never carry a max_tokens key,
     # whether the cap is present, or absent entirely. (NIM, a different provider,
     # keeps plain max_tokens; see test_nim_uses_openai_mapping_with_its_base_and_key.)
     token_param = OPENAI._token_param

@@ -1,6 +1,6 @@
 # ===========================================================================
 # Cheap always-on slice stack: a single t4g.small (arm64) EC2 instance running
-# the whole stack via docker compose — gateway (from ECR) + Postgres 16 +
+# the whole stack via docker compose, gateway (from ECR) + Postgres 16 +
 # Redis 7 + Caddy 2 (HTTPS via Let's Encrypt). This is deliberately separate
 # from the production Terraform in ../ (Fargate/RDS/ElastiCache/ALB) and keeps
 # its own local state.
@@ -53,7 +53,7 @@ data "aws_ami" "al2023_arm64" {
 # ---------------------------------------------------------------------------
 # Route 53 hosted zone for the apex domain, recreated in THIS stack (separate
 # from the production stack's zone). Creating it allocates a fresh set of
-# nameservers — see the route53_nameservers output.
+# nameservers: see the route53_nameservers output.
 # ---------------------------------------------------------------------------
 resource "aws_route53_zone" "main" {
   name = var.domain_name
@@ -154,7 +154,7 @@ resource "aws_route53_record" "resend_mx" {
 
 # ---------------------------------------------------------------------------
 # Security group: HTTP/HTTPS in from anywhere (Caddy needs 80 for ACME and 443
-# for traffic), everything out. No port 22 — access is via SSM Session Manager.
+# for traffic), everything out. No port 22: access is via SSM Session Manager.
 # ---------------------------------------------------------------------------
 resource "aws_security_group" "instance" {
   name        = "${var.project_name}-ec2-sg"
@@ -196,7 +196,7 @@ data "aws_caller_identity" "current" {}
 # Private S3 bucket for the box's static stack config (docker-compose.yml,
 # Caddyfile, prometheus.yml, the grafana provisioning tree). These used to be
 # inlined in user_data, which pushed it toward AWS's 16KB limit; the box now
-# `aws s3 sync`s them at boot. Everything here is non-secret config — secrets are
+# `aws s3 sync`s them at boot. Everything here is non-secret config: secrets are
 # still fetched from Secrets Manager and written into the env files at boot.
 # ---------------------------------------------------------------------------
 resource "aws_s3_bucket" "config" {
@@ -261,7 +261,7 @@ data "aws_secretsmanager_secret" "app" {
 }
 
 # The Postgres password lives in its OWN secret (not inlined into user_data or the
-# compose file, and not written into the shared app secret — which Terraform doesn't
+# compose file, and not written into the shared app secret, which Terraform doesn't
 # own and would clobber). Terraform generates it (random_password.postgres) and stores
 # it here; the box reads it at boot and hands it to compose via the environment.
 resource "aws_secretsmanager_secret" "ec2_db" {
@@ -291,7 +291,7 @@ resource "aws_iam_role_policy" "secrets" {
 }
 
 # Read-only access to the config bucket only (GetObject + ListBucket), so the box can
-# `aws s3 sync` its stack config at boot. Scoped to this one bucket — nothing else.
+# `aws s3 sync` its stack config at boot. Scoped to this one bucket, nothing else.
 data "aws_iam_policy_document" "config_bucket" {
   statement {
     sid       = "ListConfigBucket"
@@ -370,7 +370,7 @@ resource "aws_iam_role_policy" "backups" {
 # box's nightly cron dumps compose Postgres and uploads slice-YYYY-MM-DD.sql.gz
 # here; the hand-run pipeline failed only on AccessDenied because the instance
 # role could not PutObject. Scope: read/write objects in this one bucket and list
-# it — nothing broader.
+# it, nothing broader.
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "db_backups" {
   statement {
@@ -395,8 +395,8 @@ resource "aws_iam_role_policy" "db_backups" {
 
 # ---------------------------------------------------------------------------
 # Phase 18a: read-only permissions for the AWS security scanner. slice scans the
-# account it runs in — public S3, world-open security groups, unencrypted storage,
-# old IAM keys / direct AdministratorAccess — and pulls Cost Explorer spend.
+# account it runs in, public S3, world-open security groups, unencrypted storage,
+# old IAM keys / direct AdministratorAccess, and pulls Cost Explorer spend.
 #
 # Least privilege: every action is a read, scoped to exactly what the four checks and
 # the cost pull call. No writes, no wildcards. Resources are "*" only because these
@@ -404,8 +404,8 @@ resource "aws_iam_role_policy" "db_backups" {
 # security groups, volumes, or users without a list over the whole account); the actions
 # themselves are strictly read-only, so "*" here grants visibility, never mutation.
 #
-# The two beyond the base list — sts:GetCallerIdentity and s3control:GetPublicAccessBlock
-# — back the *account-level* S3 Block Public Access check (it needs the account id, then
+# The two beyond the base list, sts:GetCallerIdentity and s3control:GetPublicAccessBlock,
+# back the *account-level* S3 Block Public Access check (it needs the account id, then
 # the account-level BPA setting). That check fails open if they are denied, so they are a
 # clean addition rather than a hard requirement.
 data "aws_iam_policy_document" "scanner" {
@@ -483,7 +483,7 @@ resource "aws_iam_role_policy" "scanner" {
 # Phase 18b: the box assumes a read-only role in each connected user's account.
 #
 # Narrowest workable scope: sts:AssumeRole limited to roles under the fixed path
-# "/slice-scanner/" — the exact path the committed onboarding CloudFormation template
+# "/slice-scanner/", the exact path the committed onboarding CloudFormation template
 # (infra/user-onboarding/slice-readonly-role.yaml) creates. slice cannot assume any other
 # role, in any account. Cross-account role names are not knowable ahead of time (each user
 # creates their own in their own account), so a per-ARN allowlist is impractical; the path
@@ -492,7 +492,7 @@ resource "aws_iam_role_policy" "scanner" {
 # The real security gate is on the *target* side: each user's role trust policy allows only
 # slice's account (194133064379) AND requires the per-account External ID on every call, so
 # even this permission can only assume roles that explicitly opted in. (A plain
-# sts:AssumeRole on "*" would be the fallback if a path scheme were not used — avoided here.)
+# sts:AssumeRole on "*" would be the fallback if a path scheme were not used, avoided here.)
 data "aws_iam_policy_document" "scanner_assume" {
   statement {
     sid       = "AssumeUserScannerRoles"
@@ -565,7 +565,7 @@ resource "aws_instance" "app" {
   }
 
   lifecycle {
-    # The box is upgraded by hand, not by AMI churn — don't replace it when a newer AL2023 AMI ships.
+    # The box is upgraded by hand, not by AMI churn: don't replace it when a newer AL2023 AMI ships.
     ignore_changes = [ami]
   }
 

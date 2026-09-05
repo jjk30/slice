@@ -7,12 +7,12 @@ log row, switch rule and admin/dashboard read is scoped by its id.
 
 Modules:
 
-- ``keys``       — mint / hash / recognise slice keys (no I/O).
-- ``tokens``     — mint / verify HS256 session JWTs (no I/O).
-- ``resolver``   — ``Account``, the TTL ``KeyCache``, and ``Authenticator.resolve``.
-- ``middleware`` — the ASGI lock on the proxy, ``/admin/*`` and ``/dashboard/*`` paths.
-- ``github``     — the three GitHub device-flow calls.
-- ``routes``     — ``/auth/device/start``, ``/auth/device/poll``, ``/auth/me``.
+- ``keys``: mint / hash / recognise slice keys (no I/O).
+- ``tokens``: mint / verify HS256 session JWTs (no I/O).
+- ``resolver``: ``Account``, the TTL ``KeyCache``, and ``Authenticator.resolve``.
+- ``middleware``: the ASGI lock on the proxy, ``/admin/*`` and ``/dashboard/*`` paths.
+- ``github``: the three GitHub device-flow calls.
+- ``routes``: ``/auth/device/start``, ``/auth/device/poll``, ``/auth/me``.
 """
 
 from app.auth.keys import bearer_token, hash_key, is_slice_key, key_last4, key_prefix, mint_key  # noqa: F401

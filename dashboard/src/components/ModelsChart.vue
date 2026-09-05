@@ -192,7 +192,7 @@ onBeforeUnmount(() => {
       <h2 class="panel-title">Spend by model</h2>
       <span v-if="meta" class="meta">{{ meta }}</span>
     </div>
-    <p v-if="models === null && failed" class="empty">—</p>
+    <p v-if="models === null && failed" class="empty">&mdash;</p>
     <p v-else-if="models === null" class="loading">Loading…</p>
     <p v-else-if="models.length === 0" class="empty">No model spend this month yet.</p>
     <div v-else>

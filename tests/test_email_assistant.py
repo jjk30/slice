@@ -334,7 +334,7 @@ def test_reply_subject_and_tidy_answer():
     # Phase 26: an own-data reply ends with the AI setup line, not the AWS line.
     assert tidy_answer("You spent $1 \u2014 about half.").endswith(FOOTER_AI_SETUP)
     assert FOOTER_NOTE not in tidy_answer("hi")
-    assert "—" not in tidy_answer("a — b")
+    assert "\u2014" not in tidy_answer("a \u2014 b")
     assert tidy_answer("Done.\n\n" + FOOTER_AI_SETUP).count(FOOTER_AI_SETUP) == 1
     # A general reply starts with the disclaimer and ends with the general line, once each.
     general = tidy_general("Sonnet is fine for most work.")
@@ -884,6 +884,59 @@ async def test_general_question_without_aws_points_at_settings(client, env):
     from app.email_assistant.context import build_general_context
 
     assert await build_general_context(_BrokenConnection(), {"id": 7}) is None
+
+
+async def test_aws_connected_operator_follows_own_mode_scanning(monkeypatch):
+    """The operator has no ``aws_connections`` row: it counts as connected exactly while
+    own-mode scanning is on, and its general context reads the own storage scope (None),
+    the scope the scanner writes the operator's findings and cost rows under. A normal
+    account still needs a ``connected`` row with a role ARN."""
+    from app.email_assistant.context import aws_connected, build_general_context
+
+    class _ScopedDB(FakeEmailDB):
+        def __init__(self):
+            super().__init__()
+            self.scopes: list[tuple[str, object]] = []
+
+        async def latest_run_id(self, scope):
+            self.scopes.append(("run", scope))
+            return self.run_id
+
+        async def findings_for_run(self, scope, run_id):
+            self.scopes.append(("findings", scope))
+            return list(self.findings)
+
+        async def aws_cost_rows_since(self, scope, since):
+            self.scopes.append(("cost", scope))
+            return list(self.costs)
+
+    db = _ScopedDB()
+    monkeypatch.setattr(config, "SLICE_OPERATOR_ACCOUNT_ID", 1)
+    # Own-mode scanning on: connected, with no connection row at all.
+    monkeypatch.setattr(config, "SCANNER_ENABLED", True)
+    assert await aws_connected(db, 1) is True
+    # Own-mode scanning off: not connected, and no general context.
+    monkeypatch.setattr(config, "SCANNER_ENABLED", False)
+    assert await aws_connected(db, 1) is False
+    assert await build_general_context(db, {"id": 1}) is None
+    assert db.scopes == []
+    # Back on: the context is built from the operator's own findings and cost rows.
+    monkeypatch.setattr(config, "SCANNER_ENABLED", True)
+    db.run_id = "run-own"
+    db.findings = [{"severity": "high", "check": "s3_public", "resource_id": "bucket-a", "summary": "Bucket is public."}]
+    db.costs = [{"date": "2026-09-01", "amount_usd": Decimal("12.34"), "fetched_at": "2026-09-02T01:00:00+00:00"}]
+    context = await build_general_context(db, {"id": 1})
+    assert "Latest AWS scan: 1 findings (1 high)" in context and "bucket-a" in context
+    assert "AWS cost: yesterday $12.34, month to date $12.34" in context
+    assert db.scopes and all(scope is None for _, scope in db.scopes)
+    # A normal account still needs a connected row with a role ARN.
+    assert await aws_connected(db, 7) is False
+    db.connection = {"status": "pending", "role_arn": "arn:aws:iam::123:role/slice", "external_id": "ext"}
+    assert await aws_connected(db, 7) is False
+    db.connection = {"status": "connected", "role_arn": None, "external_id": "ext"}
+    assert await aws_connected(db, 7) is False
+    db.connection = {"status": "connected", "role_arn": "arn:aws:iam::123:role/slice", "external_id": "ext"}
+    assert await aws_connected(db, 7) is True
 
 
 def test_thread_key_prefers_references_then_in_reply_to_then_message_id():

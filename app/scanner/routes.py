@@ -4,18 +4,18 @@ Every endpoint resolves the caller's account (the auth middleware locks ``/scann
 operates only on that account's data:
 
 - The **operator** account (``SLICE_OPERATOR_ACCOUNT_ID``, or the lone tenant in local mode)
-  scans slice's own infrastructure — part-A behavior — with findings/costs under the NULL
+  scans slice's own infrastructure, part-A behavior, with findings/costs under the NULL
   own-account scope.
 - **Every other account** connects its own AWS account (a read-only cross-account role with
   a slice-issued External ID) and then scans, reads findings, and reads cost for THEIR
-  account only. Without a live connection, a scan is refused with a clear "not connected"
-  — it never scans slice's own infrastructure for them.
+  account only. Without a live connection, a scan is refused with a clear "not connected".
+  It never scans slice's own infrastructure for them.
 
 Connect flow:
 
 - ``GET  /scanner/connect``   issue/return the External ID + the CloudFormation quick-create
                               link and template path; includes the current status.
-- ``POST /scanner/connect``   {role_arn} — live-verify (assume + one read) and mark connected.
+- ``POST /scanner/connect``   {role_arn}: live-verify (assume + one read) and mark connected.
 - ``DELETE /scanner/connect`` disconnect (the External ID stays reserved for the account).
 
 Scan/read:
@@ -215,7 +215,7 @@ async def run(request: Request):
     async def _go() -> None:
         try:
             await service.run_scan_for_account(db, redis, account_id, run_id=run_id)
-        except Exception as exc:  # noqa: BLE001 — a detached scan never surfaces an error.
+        except Exception as exc:  # noqa: BLE001  # a detached scan never surfaces an error.
             logger.warning(json.dumps({"event": "scanner_run_error", "error": str(exc)}))
 
     try:
@@ -245,7 +245,7 @@ async def findings(request: Request, run_id: str | None = None):
         if run_id is None:
             return _findings_response(None, [])
         rows = await db.findings_for_run(scope, run_id)
-    except Exception:  # noqa: BLE001 — a read failure degrades to empty, not a 500.
+    except Exception:  # noqa: BLE001  # a read failure degrades to empty, not a 500.
         return _findings_response(run_id, [])
 
     expected = await _expected_keys(db, scope)
@@ -262,7 +262,7 @@ async def _expected_keys(db, scope) -> set[tuple[str, str]]:
     """The scope's live expectations as (check, resource_id) pairs; empty on any read failure."""
     try:
         return {(e["check"], e["resource_id"]) for e in await db.list_expectations(scope)}
-    except Exception:  # noqa: BLE001 — the findings list still answers, just without flags.
+    except Exception:  # noqa: BLE001  # the findings list still answers, just without flags.
         return set()
 
 
@@ -308,7 +308,7 @@ async def add_expectation(request: Request):
         return _error(503, "Expectation storage is unavailable (database not connected).")
     try:
         row = await db.add_expectation(_storage_scope(account.id), check, resource_id, note)
-    except Exception as exc:  # noqa: BLE001 — a user action: say it failed, never pretend.
+    except Exception as exc:  # noqa: BLE001  # a user action: say it failed, never pretend.
         logger.warning(json.dumps({"event": "scanner_expectation_write_error", "error": str(exc)}))
         return _error(500, "Could not save the expectation.")
     created = row.get("created_at")

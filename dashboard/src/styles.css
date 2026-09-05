@@ -1,7 +1,7 @@
-/* slice dashboard — design tokens lifted from the marketing mockups (hero.html).
+/* slice dashboard, design tokens lifted from the marketing mockups (hero.html).
    The cream light theme is the default and the only automatic theme: it renders the
    same whatever the OS setting. A dark token set is kept behind a manual `html.dark`
-   class for later — nothing applies it automatically. Spacing is an 8px scale. */
+   class for later: nothing applies it automatically. Spacing is an 8px scale. */
 
 :root {
   --ink: #1A1714;
@@ -58,7 +58,7 @@
   --s4: 32px;
 }
 
-/* Dark token set — manual only (add class="dark" to <html>); never applied by the
+/* Dark token set, manual only (add class="dark" to <html>); never applied by the
    OS setting. Ink background, paper text, the same cherry / teal / amber. */
 html.dark {
   --ink: #FBF8F1;

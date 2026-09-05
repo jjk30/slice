@@ -19,7 +19,7 @@ resources:
   - base/gateway.yaml
   - base/gateway-hpa.yaml
 
-# The Secret is generated from k8s/secrets.env, which is gitignored — nothing real
+# The Secret is generated from k8s/secrets.env, which is gitignored: nothing real
 # is ever committed. Copy k8s/secrets.env.example to k8s/secrets.env and fill it in
 # before deploying. The generated name gets a content hash suffix so any change to
 # the secret rolls the gateway pods; kustomize rewrites the references in the

@@ -8,7 +8,7 @@ log write.
 The whole point of this module is that a dashboard must never be able to slow the
 request path, so ``publish`` is deliberately synchronous and never awaits anything:
 
-- it never blocks — ``put_nowait`` only, no ``await put()``;
+- it never blocks: ``put_nowait`` only, no ``await put()``;
 - a slow or hung client just fills its own queue, at which point the OLDEST event in
   that queue is dropped to make room for the newest (a live view wants the latest
   state, not a faithful replay);
@@ -110,7 +110,7 @@ class Broadcaster:
     def publish(self, event: dict) -> int:
         """Hand one event to every subscribed client without ever blocking.
 
-        Returns how many queues received it (0 with no clients — a pure no-op). A full
+        Returns how many queues received it (0 with no clients, a pure no-op). A full
         queue drops its oldest event first; if the queue is somehow still full (another
         task raced a put in between), the event is dropped for that client rather than
         waited on. Never raises: a live view is never worth a request.

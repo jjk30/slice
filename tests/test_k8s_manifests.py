@@ -2,10 +2,10 @@
 
 Two layers, both light and dependency-free beyond PyYAML (already a dep):
 
-1. Structural YAML checks that always run — every manifest parses, and the key
+1. Structural YAML checks that always run, every manifest parses, and the key
    invariants the report promises hold (2 gateway replicas, probes, resources,
    HPA bounds, secret wiring, no real secrets committed).
-2. A `kubectl kustomize` lint that runs only when kubectl is installed — it proves
+2. A `kubectl kustomize` lint that runs only when kubectl is installed: it proves
    the whole kustomization renders and the secretGenerator references get
    rewritten. It manufactures a throwaway secrets.env from the example when the
    real one is absent (e.g. in CI) and removes only what it created.
@@ -199,7 +199,7 @@ def test_no_real_secrets_committed():
 
 def test_example_secrets_have_no_live_looking_values():
     text = (K8S / "secrets.env.example").read_text()
-    # Placeholder Anthropic key only — never a full-length real one.
+    # Placeholder Anthropic key only, never a full-length real one.
     for line in text.splitlines():
         if line.startswith("ANTHROPIC_API_KEY="):
             val = line.split("=", 1)[1]

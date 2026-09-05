@@ -1,11 +1,11 @@
 """Phase-7 agent loop tests: try cheap, check, escalate, stop at a ceiling.
 
 Two layers. The unit tests drive ``run_agent_loop`` (and its ladder/estimate
-helpers) against fake provider adapters, so the pure logic — escalation, cost
-summation, the ceiling gate, the checker heuristics — is exercised with no network.
+helpers) against fake provider adapters, so the pure logic, escalation, cost
+summation, the ceiling gate, the checker heuristics, is exercised with no network.
 The integration tests drive the whole thing through ``/v1/messages`` with respx and
-a stubbed checker, so the main.py wiring — the ``x-slice-agent`` header, the
-``attempts`` column, the summed ``cost_usd``, and the skip conditions — is verified
+a stubbed checker, so the main.py wiring, the ``x-slice-agent`` header, the
+``attempts`` column, the summed ``cost_usd``, and the skip conditions, is verified
 end to end.
 
 Auto-routing and the loop are both opt-in per test (see conftest): each test here
@@ -119,7 +119,7 @@ async def _run(served=CHEAP, requested=REQ, payload=None):
         {},          # headers
         "acme",      # team
         None,        # redis
-        None,        # httpx client — the fakes ignore it
+        None,        # httpx client, the fakes ignore it
         served_model=served,
         requested_model=requested,
     )
@@ -176,7 +176,7 @@ async def test_first_try_passes_served_one_attempt(monkeypatch):
     assert loop.header == "pass:1"
     assert loop.attempts == 1
     assert loop.model == CHEAP
-    # Spend is the first attempt plus its one check call — nothing more.
+    # Spend is the first attempt plus its one check call, nothing more.
     assert loop.spend == pricing.cost_usd(CHEAP, 1000, 1000) + pricing.cost_usd(CHECK, 10, 1)
     assert providers.calls == [CHEAP, CHECK]
 
@@ -213,7 +213,7 @@ async def test_ceiling_blocks_escalation_best_served_never_crossed(monkeypatch):
     monkeypatch.setattr(config, "AGENT_LADDER", f"{CHEAP},{REQ}")
     monkeypatch.setattr(config, "AGENT_COST_CEILING_USD", Decimal("0.01"))
     # The strong rung's answer is cheap in reality (tiny tokens), but its upper-bound
-    # estimate (priced from max_tokens) far exceeds the ceiling — so it must never run.
+    # estimate (priced from max_tokens) far exceeds the ceiling, so it must never run.
     providers = FakeProviders(
         {
             CHEAP: _result(_msg("BADANSWER", in_tok=10, out_tok=10)),
@@ -251,7 +251,7 @@ async def test_unknown_price_blocks_the_attempt(monkeypatch):
     loop = await _run(requested=UNPRICED)
 
     # An unpriced rung's estimate is infinite, so it is blocked rather than estimated
-    # at zero and attempted — exactly the ceiling behavior.
+    # at zero and attempted, exactly the ceiling behavior.
     assert loop.header == "ceiling"
     assert loop.attempts == 1
     assert UNPRICED not in providers.calls

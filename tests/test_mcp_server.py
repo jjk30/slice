@@ -1,6 +1,6 @@
 """Tests for the slice MCP server (phase 14).
 
-The gateway is always faked — respx intercepts httpx, so nothing hits the network. Each
+The gateway is always faked: respx intercepts httpx, so nothing hits the network. Each
 test drives the pure tool coroutines in ``mcp_server.tools`` against a ``SliceClient``
 pointed at a stand-in base URL, exactly as the real server would, and asserts on the
 human-readable text the tool returns (and, for the write tools, on whether the write
@@ -48,7 +48,7 @@ async def test_get_spend_shape():
     assert "2026-08" in out
     assert "$5.0000 of $25.0000" in out
     assert "$20.0000" in out
-    assert "OK — under budget" in out
+    assert "OK: under budget" in out
 
 
 @respx.mock
@@ -297,7 +297,7 @@ async def test_add_rule_invalid_rejected_before_confirm():
     route = respx.post(f"{BASE}/admin/rules").mock(
         return_value=httpx.Response(201, json={"rule": {"id": 1}})
     )
-    # Same from/to model is malformed — rejected even with confirm=true, no call made.
+    # Same from/to model is malformed: rejected even with confirm=true, no call made.
     out = await tools.add_rule(
         make_client(), team="default", from_model="x", to_model="x", confirm=True
     )

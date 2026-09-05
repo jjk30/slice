@@ -1,7 +1,7 @@
 """AWS Cost Explorer pull (phase 18a).
 
 One ``get_cost_and_usage`` call, DAILY granularity, from the first of the month through
-today (exclusive) — so it returns one completed-day figure per day this month in a single
+today (exclusive), so it returns one completed-day figure per day this month in a single
 request. From that we derive yesterday's spend and the month-to-date total, and we get a
 row per day to store. **Cost Explorer bills $0.01 per call**, so the caller latches this
 to at most once per day in Redis (see ``app.scanner.service.fetch_and_store_cost``); this
@@ -56,7 +56,7 @@ def _to_decimal(raw) -> Decimal:
 
 
 def parse_cost_response(response: dict, *, yesterday: date) -> CostReport:
-    """Turn a ``get_cost_and_usage`` response into a CostReport. Pure — unit-tested directly."""
+    """Turn a ``get_cost_and_usage`` response into a CostReport. Pure: unit-tested directly."""
     daily: list[tuple[date, Decimal]] = []
     total = Decimal(0)
     currency = "USD"
@@ -89,7 +89,7 @@ def fetch_costs(session, *, now: datetime | None = None) -> CostReport:
     """Pull this month's daily spend in one Cost Explorer call and parse it. Never raises.
 
     ``now`` is injectable for tests; production uses the current UTC instant. Any error
-    (no credentials, denied, throttled, malformed) logs and returns an empty report — the
+    (no credentials, denied, throttled, malformed) logs and returns an empty report, the
     scan and the endpoints degrade to "no cost data" rather than failing.
     """
     now = now or datetime.now(timezone.utc)
@@ -98,7 +98,7 @@ def fetch_costs(session, *, now: datetime | None = None) -> CostReport:
     start = _month_start(today)
 
     # End is exclusive in Cost Explorer, so [month_start, today) is every completed day
-    # this month — the last of which is yesterday.
+    # this month, the last of which is yesterday.
     if start >= today:
         # First of the month: nothing completed yet this month.
         return CostReport()
@@ -113,7 +113,7 @@ def fetch_costs(session, *, now: datetime | None = None) -> CostReport:
             # (e.g. the operator's) reports what usage actually cost, not $0 after credits.
             Filter={"Not": {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Credit", "Refund"]}}},
         )
-    except Exception as exc:  # noqa: BLE001 — cost data is best-effort, never a crash.
+    except Exception as exc:  # noqa: BLE001  # cost data is best-effort, never a crash.
         logger.warning(json.dumps({"event": "scanner_cost_error", "error": str(exc)}))
         return CostReport()
 

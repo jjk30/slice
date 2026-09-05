@@ -1,4 +1,4 @@
-"""Phase 18a: the AWS security scanner — scan the account slice itself runs in.
+"""Phase 18a: the AWS security scanner: scan the account slice itself runs in.
 
 A supervisor LangGraph (``app.scanner.graph``) fans out to four read-only boto3 checks
 (``app.scanner.checks``: public S3, world-open security groups, unencrypted storage, IAM
@@ -7,7 +7,7 @@ alerts on any *new* HIGH finding through the existing email/WhatsApp pipe. Cost 
 spend is pulled once a day (``app.scanner.cost``), latched in Redis because that API bills
 per call. The ``/scanner/*`` endpoints (``app.scanner.routes``) expose runs and costs.
 
-All of it is fire-and-forget — a detached background task, never the request path — and
+All of it is fire-and-forget, a detached background task, never the request path, and
 every boto3 call fails open. boto3 is imported lazily (only when a scan runs), so importing
 this package at startup, which ``app.main`` does, never pulls the SDK in.
 

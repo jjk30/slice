@@ -40,7 +40,7 @@ RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
-# Now the runtime code. Only what the app needs at run time — tests, dashboard,
+# Now the runtime code. Only what the app needs at run time: tests, dashboard,
 # .venv, .git, .env, rag_store etc. are kept out by .dockerignore.
 COPY app/ ./app/
 COPY migrations/ ./migrations/

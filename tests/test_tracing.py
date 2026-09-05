@@ -2,7 +2,7 @@
 
 These prove the two halves of the guarantee: configure_tracing does nothing unless
 tracing is explicitly on, and with tracing off / no key the router graph still runs
-and decides exactly as before — no code path depends on LangSmith.
+and decides exactly as before: no code path depends on LangSmith.
 """
 
 import json

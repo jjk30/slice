@@ -1,5 +1,5 @@
 -- Phase 20: the account profile the dashboard's first-time setup screen lets a
--- user set — an email and a WhatsApp number slice can reach them on. Both are
+-- user set: an email and a WhatsApp number slice can reach them on. Both are
 -- nullable and edited through PUT /account/profile. `email` already exists on
 -- accounts (it is the GitHub email captured at login, migrations/010_auth.sql), so
 -- this restates it with IF NOT EXISTS to keep the migration self-describing and

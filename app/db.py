@@ -44,7 +44,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 # The summary only needs these three columns per row; the aggregation happens in
 # summarize_eval_rows so it can be unit-tested without a live database. Phase 12: the
 # read is filtered to one account. A real account id returns only that account's rows
-# (a NULL account_id row — pre-auth — belongs to nobody and is never returned); a NULL
+# (a NULL account_id row, pre-auth, belongs to nobody and is never returned); a NULL
 # filter is local single-tenant mode and returns every row. Same pattern on every
 # account-scoped read below.
 SELECT_EVAL_ROWS = (
@@ -86,7 +86,7 @@ ORDER BY id DESC
 # Phase 18b: every row and read is scoped to an account. ``account_id`` NULL means slice's
 # own account (the operator's part-A data); a real id is a connected user's account. The
 # scoping predicate is ``account_id IS NOT DISTINCT FROM $n`` so a NULL argument matches the
-# own-account rows and a real id matches only that account's rows — one account never sees
+# own-account rows and a real id matches only that account's rows: one account never sees
 # another's findings or costs.
 INSERT_FINDING = """
 INSERT INTO scan_findings (run_id, account_id, "check", resource_id, severity, summary, detail)
@@ -104,7 +104,7 @@ SELECT run_id FROM scan_findings
 WHERE account_id IS NOT DISTINCT FROM $1
 ORDER BY id DESC LIMIT 1
 """
-# The newest run for this account other than the one passed in — the "previous run" the
+# The newest run for this account other than the one passed in, the "previous run" the
 # alert compares against. MAX(id) per run orders runs by when they last landed.
 SELECT_PREVIOUS_RUN_ID = """
 SELECT run_id FROM scan_findings
@@ -164,7 +164,7 @@ INSERT_AWS_COST = """
 INSERT INTO aws_costs (account_id, date, amount_usd, fetched_at)
 VALUES ($1, $2, $3, now())
 """
-# The current month's rows for one account, newest first — the endpoint derives yesterday
+# The current month's rows for one account, newest first: the endpoint derives yesterday
 # and month-to-date from these.
 SELECT_AWS_COSTS_SINCE = """
 SELECT date, amount_usd, fetched_at FROM aws_costs
@@ -252,14 +252,14 @@ WHERE account_id = $1 AND revoked_at IS NULL
 ORDER BY created_at DESC, id DESC
 LIMIT 1
 """
-# Revoke every live key an account holds — the dashboard rotate's first half (the kill
+# Revoke every live key an account holds: the dashboard rotate's first half (the kill
 # switch), so every old key stops working the moment the new one is minted.
 REVOKE_ACTIVE_KEYS = """
 UPDATE slice_keys SET revoked_at = now()
 WHERE account_id = $1 AND revoked_at IS NULL
 RETURNING id
 """
-# Revoke every live key an account holds under one name — the login flow's first half, so a
+# Revoke every live key an account holds under one name: the login flow's first half, so a
 # repeat login from the same machine replaces that machine's key without touching others.
 REVOKE_ACTIVE_KEYS_NAMED = """
 UPDATE slice_keys SET revoked_at = now()
@@ -392,8 +392,8 @@ class RequestRecord:
     # "default" when no team header was sent; the same value used for caps/rules.
     team: str | None = None
     # How many provider attempts the agent loop made (phase 7). 1 for every request
-    # that did not loop — cache hits, gate rejects, pins, rules, streams, and any
-    # request served on its first try — so the default matches pre-phase-7 behavior.
+    # that did not loop, cache hits, gate rejects, pins, rules, streams, and any
+    # request served on its first try, so the default matches pre-phase-7 behavior.
     attempts: int = 1
     # When the gateway finished the request (phase 10). The same instant is stamped on
     # the live dashboard event, so a row and its event carry an identical timestamp and
@@ -401,7 +401,7 @@ class RequestRecord:
     # phase 10, and any test that builds a record by hand) lets Postgres default to
     # now() at insert, exactly as before.
     created_at: datetime | None = None
-    # The account the request was made under (phase 12) — the tenant every dashboard
+    # The account the request was made under (phase 12), the tenant every dashboard
     # and admin read filters on. None for callers that build a record without one (the
     # tests, and any pre-auth path): the column is nullable and the write is unchanged.
     account_id: int | None = None
@@ -414,7 +414,7 @@ class EvalRecord:
     ``metric`` is which score this is ("answer_relevancy" or "context_relevance"),
     ``score`` is in [0, 1], and ``passed`` is score >= the configured threshold.
     ``model`` is the model that was actually served; ``routed_from`` is what the
-    client originally asked for. ``request_id`` is usually None — see the migration.
+    client originally asked for. ``request_id`` is usually None, see the migration.
     """
 
     model: str | None
@@ -434,8 +434,8 @@ class GuardrailEvent:
 
     ``rail`` is "input" or "output"; ``action`` is "blocked" (the rail stopped the
     request) or "error" (the rails engine failed and the loop failed open). ``reason``
-    is a short note — the rail name for a block, the error string for an error.
-    ``request_id`` is usually None, exactly like EvalRecord — see the migration.
+    is a short note, the rail name for a block, the error string for an error.
+    ``request_id`` is usually None, exactly like EvalRecord, see the migration.
     """
 
     team: str | None
@@ -453,8 +453,8 @@ class AlertRecord:
 
     ``kind`` is "warn" (the team crossed its warn ratio) or "block" (it hit its cap).
     ``channel`` names the delivery channel ("email" for now); ``status`` is "sent",
-    "failed", or "skipped_cooldown". ``detail`` is a small dict — spend so far, cap,
-    month, and the error text on a failure — stored as JSON text. ``ts`` is when the
+    "failed", or "skipped_cooldown". ``detail`` is a small dict, spend so far, cap,
+    month, and the error text on a failure, stored as JSON text. ``ts`` is when the
     attempt was made; None lets Postgres default to now().
     """
 
@@ -865,7 +865,7 @@ class Database:
         try:
             async with self._pool.acquire() as connection:
                 await connection.executemany(INSERT_FINDING, rows)
-        except Exception as exc:  # noqa: BLE001 — the scan is off the request path already.
+        except Exception as exc:  # noqa: BLE001  # the scan is off the request path already.
             logger.warning(
                 json.dumps({"event": "db_unavailable", "stage": "finding_write", "error": str(exc)})
             )
@@ -883,7 +883,7 @@ class Database:
         return value
 
     async def previous_run_id(self, account_id, current_run_id: str) -> str | None:
-        """The account's newest run other than ``current_run_id`` — the alert's comparison base."""
+        """The account's newest run other than ``current_run_id``, the alert's comparison base."""
         if self._pool is None:
             raise RuntimeError("database is not connected")
         async with self._pool.acquire() as connection:
@@ -911,7 +911,7 @@ class Database:
                     for day, amount in rows:
                         await connection.execute(DELETE_AWS_COST_DAY, account_id, day)
                         await connection.execute(INSERT_AWS_COST, account_id, day, amount)
-        except Exception as exc:  # noqa: BLE001 — cost logging is never worth a crash.
+        except Exception as exc:  # noqa: BLE001  # cost logging is never worth a crash.
             logger.warning(
                 json.dumps({"event": "db_unavailable", "stage": "cost_write", "error": str(exc)})
             )
@@ -970,7 +970,7 @@ class Database:
 
         Inserts a pending row with ``external_id`` on first call; on a later call the row
         already exists, so the insert is a no-op and the *existing* row (with its original
-        external id) is returned — the external id is issued exactly once per account.
+        external id) is returned: the external id is issued exactly once per account.
         """
         if self._pool is None:
             raise RuntimeError("database is not connected")
@@ -1017,7 +1017,7 @@ class Database:
         return [dict(row) for row in rows]
 
     async def dashboard_rows(self, since, account_id: int | None = None) -> list[dict]:
-        """One account's requests this month (at or after ``since``), pre-grouped — see SELECT_DASHBOARD_ROWS.
+        """One account's requests this month (at or after ``since``), pre-grouped, see SELECT_DASHBOARD_ROWS.
 
         Each returned dict is a group carrying ``n`` (how many requests it stands for)
         with tokens and cost summed; ``app.dashboard.stats`` treats it exactly like a
@@ -1075,7 +1075,7 @@ class Database:
         try:
             async with self._pool.acquire() as connection:
                 await connection.execute(FINISH_EMAIL_REPLY, email_id, verdict, account_id)
-        except Exception as exc:  # noqa: BLE001 — bookkeeping is never worth a crash.
+        except Exception as exc:  # noqa: BLE001  # bookkeeping is never worth a crash.
             logger.warning(
                 json.dumps({"event": "db_unavailable", "stage": "email_reply_write", "error": str(exc)})
             )
@@ -1114,8 +1114,8 @@ class Database:
     # --- Accounts and slice keys (phase 12) ----------------------------------
     # The login path (upsert_account, create_key) and the admin key endpoints raise on
     # failure like the other reads/writes the caller needs an answer from; the routes
-    # turn that into a clean 503. find_key is the one query on the request path — on a
-    # key-cache miss — and raises too, so the resolver can fail closed with a 503 rather
+    # turn that into a clean 503. find_key is the one query on the request path, on a
+    # key-cache miss, and raises too, so the resolver can fail closed with a 503 rather
     # than let an unknown key through. touch_key is fire-and-forget bookkeeping.
 
     async def upsert_account(self, github_id: int, github_login: str, email: str | None) -> dict:
@@ -1224,7 +1224,7 @@ class Database:
         try:
             async with self._pool.acquire() as connection:
                 await connection.execute(TOUCH_KEY, int(key_id))
-        except Exception as exc:  # noqa: BLE001 — bookkeeping is never worth a request.
+        except Exception as exc:  # noqa: BLE001  # bookkeeping is never worth a request.
             logger.debug(json.dumps({"event": "db_unavailable", "stage": "key_touch", "error": str(exc)}))
 
     async def revoke_key(self, key_id: int, account_id: int) -> bool:

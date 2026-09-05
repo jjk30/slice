@@ -17,7 +17,7 @@ const blockedCount = computed(() => {
 const blocked = computed(() => (props.guardrails ? integer(props.guardrails.blocked) : null))
 const tone = computed(() => (blockedCount.value > 0 ? 'tone-cherry' : ''))
 
-// "input N · output N" — omitted entirely when blocked_by_rail is empty.
+// "input N · output N", omitted entirely when blocked_by_rail is empty.
 const byRail = computed(() => {
   const rows = props.guardrails?.blocked_by_rail
   if (!Array.isArray(rows) || rows.length === 0) return ''
@@ -35,7 +35,7 @@ const errors = computed(() => {
   <section class="card">
     <p class="kpi-label">guardrail blocks this month</p>
     <p v-if="blocked === null && !failed" class="loading">Loading…</p>
-    <p v-else class="kpi-value" :class="tone">{{ blocked ?? '—' }}</p>
+    <p v-else class="kpi-value" :class="tone">{{ blocked ?? '\u2014' }}</p>
     <p v-if="byRail" class="kpi-sub">{{ byRail }}</p>
     <p v-if="errors" class="kpi-sub">{{ errors }}</p>
   </section>

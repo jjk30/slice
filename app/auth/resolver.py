@@ -31,7 +31,7 @@ class Account:
 
     ``key_id`` is the slice key that authenticated this request (None when the account
     came from a JWT). ``scope`` is the string the Redis rate-limit and budget counters
-    are keyed by — the account id, not the login, because logins can be renamed.
+    are keyed by: the account id, not the login, because logins can be renamed.
     """
 
     id: int
@@ -116,8 +116,8 @@ class Authenticator:
     async def resolve(self, token: str | None) -> Account | None:
         """The account for a slice key, or None. Raises AuthUnavailable if the store fails.
 
-        Only the store failing raises; every other outcome — no token, not a slice key,
-        unknown, revoked — is a plain None (a 401 to the caller).
+        Only the store failing raises; every other outcome, no token, not a slice key,
+        unknown, revoked, is a plain None (a 401 to the caller).
         """
         if not is_slice_key(token):
             return None
@@ -128,11 +128,11 @@ class Authenticator:
             return cached
 
         if self._store is None or not getattr(self._store, "enabled", True):
-            # No store at all: closed. Not "unavailable" — there is nothing to wait for.
+            # No store at all: closed. Not "unavailable": there is nothing to wait for.
             return None
         try:
             row = await self._store.find_key(key_hash)
-        except Exception as exc:  # noqa: BLE001 — a sick store is a 503, never a 500 or an open door.
+        except Exception as exc:  # noqa: BLE001  # a sick store is a 503, never a 500 or an open door.
             logger.warning(json.dumps({"event": "auth_store_error", "error": str(exc)}))
             raise AuthUnavailable(str(exc)) from exc
 

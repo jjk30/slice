@@ -40,7 +40,7 @@ def record_event(
     """Log one guardrail event and fire its DB write off into a detached task.
 
     Returns the task (or None if there is nothing to write or no loop to schedule on).
-    Never blocks and never raises — a guardrail event is not worth a request.
+    Never blocks and never raises: a guardrail event is not worth a request.
     """
     logger.info(
         json.dumps(

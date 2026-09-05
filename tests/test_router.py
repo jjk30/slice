@@ -1,7 +1,7 @@
 """Phase-5 router tests: pin ▸ rule ▸ auto, the judge, the rules cache, admin API.
 
-Everything runs against fakes — a fake judge (an injected ``classify``), a fake
-rules source, a fake writer — or against ``respx`` for the one place a real judge
+Everything runs against fakes, a fake judge (an injected ``classify``), a fake
+rules source, a fake writer, or against ``respx`` for the one place a real judge
 call is exercised. No test touches a real network, Redis, or Postgres.
 
 Auto-routing is off by default (see conftest); the tests here turn it on where the
@@ -149,7 +149,7 @@ async def _route(payload, *, headers=None, team="acme", redis=None, rules=None, 
         headers or {},
         team,
         redis,
-        None,  # httpx client — the fake classify ignores it
+        None,  # httpx client, the fake classify ignores it
         rules or FakeRules(),
         classify=classify or SpyClassify(),
     )
@@ -167,7 +167,7 @@ async def test_pin_beats_rule_and_auto(monkeypatch):
         REQUEST, headers={"x-slice-route": "off"}, rules=rules, classify=spy
     )
 
-    # Pin off means the client's model, exactly — rule ignored, judge never called.
+    # Pin off means the client's model, exactly: rule ignored, judge never called.
     assert decision.served_model == OPUS
     assert decision.routed is False
     assert decision.verdict == "none"

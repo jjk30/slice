@@ -2,7 +2,7 @@
 # RDS PostgreSQL (managed, private, multi-AZ)
 # ---------------------------------------------------------------------------
 
-# Subnet group across the two private subnets — RDS lives only in private space.
+# Subnet group across the two private subnets: RDS lives only in private space.
 resource "aws_db_subnet_group" "main" {
   name       = "${var.project_name}-db"
   subnet_ids = aws_subnet.private[*].id

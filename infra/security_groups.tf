@@ -38,7 +38,7 @@ resource "aws_security_group" "alb" {
 
 # ---------------------------------------------------------------------------
 # Gateway (app) security group: inbound app port ONLY from the ALB SG.
-# No CIDR ingress — the container is unreachable except via the load balancer,
+# No CIDR ingress: the container is unreachable except via the load balancer,
 # which is what keeps it private.
 # ---------------------------------------------------------------------------
 resource "aws_security_group" "gateway" {

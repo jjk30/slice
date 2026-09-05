@@ -73,12 +73,12 @@ def _safe_startup(step: str, build, default=None):
     RAGAS, guardrails' nemoguardrails) must never take down the whole gateway when that
     dependency is missing or broken. Any exception is caught, logged as one structured
     line, and ``default`` is returned instead so the server still starts and serves
-    traffic with that feature simply off. (A step that can *hang* — RAG's model import —
+    traffic with that feature simply off. (A step that can *hang*, RAG's model import,
     bounds itself with a timeout; see ``rag.retriever.load_default``.)
     """
     try:
         return build()
-    except Exception as exc:  # noqa: BLE001 — a broken optional dep never blocks startup.
+    except Exception as exc:  # noqa: BLE001  # a broken optional dep never blocks startup.
         logger.warning(json.dumps({"event": "startup_step_failed", "step": step, "error": str(exc)}))
         return default
 
@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
 
     # Phase 12: the slice-key resolver over the same database, with its own short TTL
     # cache so the proxy resolves a key without a Postgres round trip per request. With
-    # no database every lookup is closed (a 401), never open — fail closed for auth.
+    # no database every lookup is closed (a 401), never open: fail closed for auth.
     app.state.auth = Authenticator(app.state.db)
 
     # Phase 25: the per-account budget cap resolver. Module-level, like the alerts engine,
@@ -116,7 +116,7 @@ async def lifespan(app: FastAPI):
 
     # Phase 6: load the RAG index once at startup. Fail-open: a missing or broken
     # embedding dependency, a model that won't load, or a load that runs long leaves the
-    # retriever None (retrieval returns nothing) and the server still starts — load_default
+    # retriever None (retrieval returns nothing) and the server still starts, load_default
     # bounds the model import with a timeout, and _safe_startup catches anything it raises.
     # RAG off skips it entirely.
     app.state.retriever = _safe_startup(
@@ -129,13 +129,13 @@ async def lifespan(app: FastAPI):
     # broken ragas install disables evaluation rather than blocking startup.
     app.state.evaluator = _safe_startup("evaluator", evaluation.build_default_evaluator)
     # Phase 8: default the LangSmith project name when tracing is on. A no-op when
-    # tracing is off or unkeyed — no request path ever depends on LangSmith.
+    # tracing is off or unkeyed: no request path ever depends on LangSmith.
     _safe_startup("tracing", evaluation.configure_tracing)
 
     # Phase 9: the guardrails engine, or None when GUARDRAILS_ENABLED is off (the kill
     # switch) or the build fails. build_engine imports nemoguardrails lazily and already
     # fails open to None, but wrap it too so nothing in the build can block startup. A
-    # None here means the agent loop runs with no rails — exactly phase 7.
+    # None here means the agent loop runs with no rails, exactly phase 7.
     app.state.guardrails = _safe_startup("guardrails", guardrails.build_engine)
 
     # Phase 10: the live-event broadcaster for /dashboard/events. Pure in-process
@@ -159,7 +159,7 @@ async def lifespan(app: FastAPI):
 
     # Phase 23b: the reply-by-email assistant, or None when EMAIL_ASSISTANT_ENABLED is off.
     # It owns its own guardrails engine (the same config directory in NeMo's "email"
-    # prompting mode: the topic rail) and fails CLOSED on every step — an unbuildable engine
+    # prompting mode: the topic rail) and fails CLOSED on every step, an unbuildable engine
     # means every question gets the fixed line, never an unguarded answer. Guarded so nothing
     # in the build can block startup.
     app.state.email_assistant = _safe_startup(
@@ -172,7 +172,7 @@ async def lifespan(app: FastAPI):
     # Let an in-flight email reply finish before its clients (redis/db) go away. Bounded.
     try:
         await asyncio.wait_for(email_service.drain(), timeout=15)
-    except Exception:  # noqa: BLE001 — shutdown must not trip on an email reply.
+    except Exception:  # noqa: BLE001  # shutdown must not trip on an email reply.
         pass
 
     # Stop the scanner's daily loop before its clients (redis/db) go away.
@@ -181,14 +181,14 @@ async def lifespan(app: FastAPI):
         scanner_task.cancel()
         try:
             await scanner_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001 — shutdown never trips here.
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001  # shutdown never trips here.
             pass
 
     # Give any in-flight alert a moment to finish before the clients it uses go away.
     # Bounded: a hung channel can't hold shutdown (its own timeout is 10s anyway).
     try:
         await asyncio.wait_for(alerts.drain(), timeout=15)
-    except Exception:  # noqa: BLE001 — shutdown must not trip on an alert.
+    except Exception:  # noqa: BLE001  # shutdown must not trip on an alert.
         pass
     alerts.configure(None)
 
@@ -287,7 +287,7 @@ def get_auth(app: FastAPI) -> Authenticator:
 
 
 # Phase 12: the tenant a request is billed and logged under. When auth resolved an
-# account, that account is the tenant — its ``scope`` keys the Redis counters, its id
+# account, that account is the tenant: its ``scope`` keys the Redis counters, its id
 # stamps the row, its ``label`` names it in alert copy. With auth off (local mode) there
 # is no account, so the proxy keeps its pre-phase-12 behavior: the team header is the
 # scope and label, and the row's account_id is NULL.
@@ -366,7 +366,7 @@ def record_task(
 
     The error paths use this (invalid JSON, adapter and upstream errors); every served
     or gated response goes through ``after_response`` instead. Phase 10: the same task
-    also publishes the completed request to any live dashboard clients — a synchronous,
+    also publishes the completed request to any live dashboard clients, a synchronous,
     non-blocking fan-out that runs whether or not logging is on, so a dashboard sees
     every request even with no database. (Before phase 10 this returned None with
     logging off; now there is always the publish to do.)
@@ -441,7 +441,7 @@ def after_response(
 
     Three things happen once the bytes are on their way to the client: the
     Postgres row is written (if logging is on), the request's cost is added to
-    the team's monthly budget counter, and — on a cacheable 200 — the body is
+    the team's monthly budget counter and, on a cacheable 200, the body is
     stored. A cache hit logs a row with cost 0 and never touches the budget.
 
     ``cost_override`` (phase 7) replaces the computed cost when the agent loop ran:
@@ -451,7 +451,7 @@ def after_response(
 
     Phase 10: the same task publishes one event to the live dashboard broadcaster,
     right next to the Postgres write and before it. ``publish`` is synchronous and
-    never blocks — a slow, hung, or vanished dashboard client can't touch this task,
+    never blocks: a slow, hung, or vanished dashboard client can't touch this task,
     let alone the response, which is already on its way to the client.
     """
     if cost_override is not None:
@@ -533,7 +533,7 @@ async def messages(request: Request):
     path = request.url.path
 
     # Phase 6: the incoming prompt, logged so the per-team RAG index can be rebuilt
-    # offline — but only when RAG_STORE_PROMPTS is on. Off means we never store it.
+    # offline, but only when RAG_STORE_PROMPTS is on. Off means we never store it.
     # Extraction never raises; a null just means no prompt stored.
     prompt_text = extract_prompt_text(payload) if config.RAG_STORE_PROMPTS else None
 
@@ -593,8 +593,8 @@ async def messages(request: Request):
     rag = decision.rag
     # Phase 17: record which stage decided the route (pin/rule/auto/passthrough).
     metrics.record_router_decision(decision.reason)
-    # Phase 8: when evaluation is on, gather what a possible sampled scoring will need
-    # — the user prompt (extracted regardless of RAG_STORE_PROMPTS; evaluation needs it
+    # Phase 8: when evaluation is on, gather what a possible sampled scoring will need:
+    # the user prompt (extracted regardless of RAG_STORE_PROMPTS; evaluation needs it
     # even when prompt logging is off) and the retrieved neighbor texts. Skipped
     # entirely when evaluation is off, so a disabled gateway's hot path is unchanged.
     if get_evaluator(app) is not None:
@@ -618,7 +618,7 @@ async def messages(request: Request):
             agent_header = "off:stream"
         else:
             # --- Phase 9 guardrails: the input rail runs before the loop, the output
-            # rail after it, and ONLY here — the loop is the only path they wrap. When
+            # rail after it, and ONLY here: the loop is the only path they wrap. When
             # the engine is off/unbuilt (get_guardrails is None) the loop behaves exactly
             # as phase 7. Every rail fails open: an error is logged and the loop proceeds.
             engine = get_guardrails(app)
@@ -768,7 +768,7 @@ def _guardrail_output_refusal(
     """A 200 Anthropic-shaped refusal from the output rail, in place of the leaked answer.
 
     The loop really ran and really spent ``loop.spend`` across its attempts, so the
-    logged row bills that true cost and records the loop's attempt count — only the
+    logged row bills that true cost and records the loop's attempt count, only the
     served body is swapped for the refusal. The refusal is never cached (cache_key is
     None), so a blocked answer can't poison the cache under the real request's key.
     """
@@ -910,7 +910,7 @@ def _finalize_anthropic(
                 account=account,
             )()
             # Phase 8: the stream has closed, so the assembled answer is final. Score
-            # it off the hot path — spawn returns at once and never blocks this task.
+            # it off the hot path: spawn returns at once and never blocks this task.
             if eval_on and stream_text is not None:
                 evaluation.spawn(
                     evaluator,
@@ -992,7 +992,7 @@ def _inbound_provider_headers(headers) -> dict[str, str]:
     # Phase 12: Authorization now carries the slice key (stripped upstream by the auth
     # middleware), so the provider key comes from x-api-key. In local (auth-off) mode a
     # bearer Authorization is still accepted as the provider key for Codex-style clients
-    # that only send it there — the slice key never occupies that header in local mode.
+    # that only send it there: the slice key never occupies that header in local mode.
     if headers.get("x-api-key"):
         out["x-api-key"] = headers["x-api-key"]
     else:
@@ -1031,7 +1031,7 @@ async def chat_completions(request: Request):
     scope = _acct_scope(account, team)
     redis = get_redis(app)
 
-    # Same three checks, same order, same Redis counters as /v1/messages — one
+    # Same three checks, same order, same Redis counters as /v1/messages, one
     # account's budget and rate limit span both endpoints. Only the blocked-response
     # shape differs: OpenAI-shaped here.
     if not await redis_layer.check_rate_limit(redis, scope):

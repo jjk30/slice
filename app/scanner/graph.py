@@ -6,7 +6,7 @@
                 └─▶ iam_risk     ─┘
 
 The supervisor node fans out to the four check nodes, which run **in parallel** (one
-LangGraph superstep — each node offloads its blocking boto3 work to a thread, so the four
+LangGraph superstep: each node offloads its blocking boto3 work to a thread, so the four
 run concurrently on the event loop). A collector node merges their output. This mirrors
 the supervisor/worker agent pattern from the NVIDIA cert rather than a for-loop over the
 checks.
@@ -42,7 +42,7 @@ class ScanState(TypedDict, total=False):
 
 
 def _supervisor_node(state: ScanState) -> dict:
-    # The fan-out point. It holds no logic of its own — the graph's edges do the work —
+    # The fan-out point. It holds no logic of its own: the graph's edges do the work,
     # but keeping it a real node makes the supervisor/worker shape explicit.
     return {}
 
@@ -59,7 +59,7 @@ def _make_check_node(name: str, fn):
             # boto3 is blocking; run it in a thread so the four checks truly run at once.
             found = await asyncio.to_thread(fn, state["session"])
             return {"findings": list(found or []), "ran": [name]}
-        except Exception as exc:  # noqa: BLE001 — one check failing never kills the others.
+        except Exception as exc:  # noqa: BLE001  # one check failing never kills the others.
             logger.warning(
                 json.dumps({"event": "scanner_check_failed", "check": name, "error": str(exc)})
             )
@@ -95,7 +95,7 @@ async def run_scan_graph(session) -> list[Finding]:
     initial: ScanState = {"session": session, "findings": [], "ran": [], "errors": []}
     try:
         final = await _GRAPH.ainvoke(initial)
-    except Exception as exc:  # noqa: BLE001 — the whole scan fails open to nothing found.
+    except Exception as exc:  # noqa: BLE001  # the whole scan fails open to nothing found.
         logger.warning(json.dumps({"event": "scanner_graph_error", "error": str(exc)}))
         return []
 

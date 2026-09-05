@@ -4,12 +4,12 @@ This is the only place that talks to the network. It builds one short-timeout
 ``httpx.AsyncClient`` against ``SLICE_BASE_URL``, attaches the slice key on every call,
 and classifies the outcome into three failure kinds the tools can render cleanly:
 
-- ``GatewayUnreachable`` — the gateway isn't answering (connection refused, DNS, a
+- ``GatewayUnreachable``: the gateway isn't answering (connection refused, DNS, a
   timeout). The tools turn this into "slice gateway not running at <url>", never a stack
   trace. This is by far the most common failure while developing locally.
-- ``GatewayUnauthorized`` — the gateway answered 401. The slice key is missing, wrong, or
+- ``GatewayUnauthorized``: the gateway answered 401. The slice key is missing, wrong, or
   revoked; the tools tell the user to set ``SLICE_API_KEY``.
-- ``GatewayError`` — any other non-2xx (4xx/5xx). Carries the status and the gateway's own
+- ``GatewayError``: any other non-2xx (4xx/5xx). Carries the status and the gateway's own
   error message when it sent one, so a 404/503 surfaces the gateway's words.
 
 Nothing here raises a bare httpx exception up to the tools: ``request`` maps them all.
@@ -39,7 +39,7 @@ class GatewayUnreachable(Exception):
 
 
 class GatewayUnauthorized(Exception):
-    """The gateway answered 401 — the slice key is missing, invalid, or revoked."""
+    """The gateway answered 401: the slice key is missing, invalid, or revoked."""
 
     def __init__(self, message: str = "") -> None:
         self.message = message
@@ -113,14 +113,14 @@ class SliceClient:
 
         Every transport failure becomes ``GatewayUnreachable``; a 401 becomes
         ``GatewayUnauthorized``; any other non-2xx becomes ``GatewayError``. A 2xx with an
-        empty or non-JSON body returns ``None`` rather than raising — a few write
+        empty or non-JSON body returns ``None`` rather than raising: a few write
         responses carry only a short JSON object, and this stays lenient about the rest.
         """
         try:
             response = await self._http.request(method, path, params=params, json=json_body)
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
             raise GatewayUnreachable(self._settings.base_url, str(exc)) from exc
-        except httpx.RequestError as exc:  # DNS, protocol, pool — still "can't reach it".
+        except httpx.RequestError as exc:  # DNS, protocol, pool: still "can't reach it".
             raise GatewayUnreachable(self._settings.base_url, str(exc)) from exc
 
         if response.status_code == 401:

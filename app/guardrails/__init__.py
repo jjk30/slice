@@ -10,8 +10,8 @@ rails code runs, nemoguardrails is never imported, and the loop behaves exactly 
 phase 7. Any error or timeout inside the engine is caught, logged, and treated as a
 pass, so a rails failure never blocks or crashes a request.
 
-Import safety: this package and ``engine`` never import nemoguardrails at module load —
-the import happens inside ``build_engine`` — so ``import app.guardrails`` is safe even
+Import safety: this package and ``engine`` never import nemoguardrails at module load:
+the import happens inside ``build_engine``, so ``import app.guardrails`` is safe even
 when nemoguardrails is broken or absent and the kill switch is off.
 """
 

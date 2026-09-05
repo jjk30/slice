@@ -1,6 +1,6 @@
 # Redis: the gateway's cache, budget counters, and rate-limit counters. All of it
-# is disposable — if Redis is unreachable every check fails open and the gateway
-# keeps serving — so this is a plain Deployment with no volume. A restart starts
+# is disposable: if Redis is unreachable every check fails open and the gateway
+# keeps serving, so this is a plain Deployment with no volume. A restart starts
 # it empty and the gateway refills it.
 apiVersion: v1
 kind: Service

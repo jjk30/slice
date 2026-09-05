@@ -3,8 +3,8 @@
 
 Runs one fixed batch of prompts (demo/batch.json) twice:
 
-  * leg 1 — direct to the Anthropic API
-  * leg 2 — the same prompts, same baseline model in the body, through slice
+  * leg 1: direct to the Anthropic API
+  * leg 2: the same prompts, same baseline model in the body, through slice
 
 and produces one honest headline number: "same workload, X% cheaper through
 slice." slice decides where each request goes (route to a cheaper model, serve
@@ -17,12 +17,12 @@ Design notes
   branch with fake data and never touch the network.
 * Keys come only from the environment and are never printed.
 * ``PRICES`` is copied verbatim from ``app/pricing.py`` (slice's own pricing
-  config). An unknown model fails loud — a price is never guessed.
+  config). An unknown model fails loud: a price is never guessed.
 * Cache hits are read from slice's ``x-slice-cache: hit`` response header and
   routing from its ``x-slice-routed`` header / the answered model differing from
   the requested one. Both are documented in the generated report.
 
-This file does not import anything from ``app/`` — it is a standalone client.
+This file does not import anything from ``app/``: it is a standalone client.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from typing import Callable, Optional
 import httpx
 
 # --------------------------------------------------------------------------- #
-# Pricing — copied EXACTLY from app/pricing.py (dollars per million tokens).
+# Pricing: copied EXACTLY from app/pricing.py (dollars per million tokens).
 # A model missing from this table is UNKNOWN: this demo fails loud rather than
 # guessing a price (unlike the gateway, which logs a null cost and moves on).
 # --------------------------------------------------------------------------- #
@@ -95,7 +95,7 @@ class CircuitBreakerError(Exception):
     """Too many consecutive failures in a leg; abort loudly with partial results."""
 
     def __init__(self, leg: str, consecutive: int, records: list[dict]):
-        super().__init__(f"{leg} leg: {consecutive} consecutive failures — aborting")
+        super().__init__(f"{leg} leg: {consecutive} consecutive failures, aborting")
         self.leg = leg
         self.consecutive = consecutive
         self.records = records
@@ -107,7 +107,7 @@ class CircuitBreakerError(Exception):
 
 def resolve_price(model: Optional[str]) -> tuple[Decimal, Decimal]:
     """(input, output) per-million price for a model, resolving a dated snapshot
-    to its family. Raises UnknownModelError for a truly unknown model — never
+    to its family. Raises UnknownModelError for a truly unknown model, never
     guesses."""
     if not model:
         raise UnknownModelError(repr(model))
@@ -276,10 +276,10 @@ def render_summary(summary: dict) -> str:
     n = summary["paired_request_count"]
     pct = summary["pct_saved"]
     headline = (f"**Same {n}-prompt workload: {direct} direct, {slce} through "
-                f"slice — {pct}% cheaper.**")
+                f"slice, {pct}% cheaper.**")
 
     lines = [
-        "# slice cost demo — fixed-batch results",
+        "# slice cost demo: fixed-batch results",
         "",
         headline,
         "",
@@ -311,10 +311,10 @@ def render_summary(summary: dict) -> str:
         "",
         "_Routing + cache reconcile exactly to the total saved on the paired set._",
         "",
-        "## Per-model breakdown — direct leg",
+        "## Per-model breakdown: direct leg",
         "",
         _model_table(summary["per_model"]["direct"]),
-        "## Per-model breakdown — slice leg",
+        "## Per-model breakdown: slice leg",
         "",
         _model_table(summary["per_model"]["slice"]),
     ]
@@ -322,7 +322,7 @@ def render_summary(summary: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Network layer — one injected ``send`` callable per leg, so the run logic
+# Network layer: one injected ``send`` callable per leg, so the run logic
 # (retry, circuit breaker, smoke) is testable with fakes.
 # --------------------------------------------------------------------------- #
 
@@ -344,7 +344,7 @@ def _slice_headers(slice_key: str, anthropic_key: str) -> dict:
     """Headers for the slice leg. The bearer token authenticates the caller to
     slice; the caller's real Anthropic key must ALSO be sent as x-api-key so slice
     can forward it upstream. Without x-api-key, app/main.py lifts the bearer token
-    into x-api-key and sends the slice key to Anthropic — every request 401s."""
+    into x-api-key and sends the slice key to Anthropic: every request 401s."""
     return {
         "Authorization": f"Bearer {slice_key}",
         "x-api-key": anthropic_key,
@@ -387,7 +387,7 @@ def _http_send(client: httpx.Client, url: str, headers: dict, model: str, text: 
         parsed: Optional[dict] = None
         try:
             parsed = resp.json()
-        except Exception:  # noqa: BLE001 — a non-JSON body is just a failure here
+        except Exception:  # noqa: BLE001  # a non-JSON body is just a failure here
             parsed = None
         return Outcome(status=resp.status_code, body=parsed,
                        headers={k.lower(): v for k, v in resp.headers.items()},
@@ -498,7 +498,7 @@ def run_leg(leg: str, prompts: list[dict], requested_model: str,
             breaker_limit: int = 3,
             on_record: Callable[[dict], None] | None = None) -> list[dict]:
     """Send every prompt sequentially. Trips the circuit breaker after
-    ``breaker_limit`` consecutive failures — raising CircuitBreakerError with the
+    ``breaker_limit`` consecutive failures, raising CircuitBreakerError with the
     partial records attached, never silently continuing."""
     records: list[dict] = []
     consecutive = 0
@@ -568,7 +568,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         resolve_price(model)  # fail loud NOW, before spending, on a bad baseline
     except UnknownModelError:
-        print(f"error: baseline model {model!r} has no price in PRICES — "
+        print(f"error: baseline model {model!r} has no price in PRICES, "
               f"refusing to run a demo it can't cost", file=sys.stderr)
         return 2
 
@@ -623,10 +623,10 @@ def main(argv: list[str] | None = None) -> int:
         smoke_direct(direct_smoke_send)
         print("smoke: through slice …", flush=True)
         smoke_slice(slice_smoke_send)
-        print("smoke ok — both legs reachable.\n", flush=True)
+        print("smoke ok: both legs reachable.\n", flush=True)
 
         # ---- LEG 1: direct ----
-        print(f"leg 1 (direct) — {len(prompts)} prompts on {model} …", flush=True)
+        print(f"leg 1 (direct): {len(prompts)} prompts on {model} …", flush=True)
         try:
             direct_records = run_leg("direct", prompts, model, direct_send,
                                      sleep=args.sleep)
@@ -643,13 +643,13 @@ def main(argv: list[str] | None = None) -> int:
             smoke_slice(slice_smoke_send)
         except SmokeError as exc:
             aborted = f"between-legs smoke failed: {exc}"
-            print(f"ABORT: {aborted} — leg 1 results are saved.", file=sys.stderr)
+            print(f"ABORT: {aborted}. Leg 1 results are saved.", file=sys.stderr)
             save_partial(aborted)
             return 1
         print("smoke ok.\n", flush=True)
 
         # ---- LEG 2: slice ----
-        print(f"leg 2 (slice) — same {len(prompts)} prompts …", flush=True)
+        print(f"leg 2 (slice): same {len(prompts)} prompts …", flush=True)
         try:
             slice_records = run_leg("slice", prompts, model, slice_send,
                                     sleep=args.sleep)

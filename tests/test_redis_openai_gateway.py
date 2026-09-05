@@ -2,7 +2,7 @@
 
 Same three checks as the native endpoint, but blocked responses come back in
 OpenAI shape, and the cache stores the OpenAI-shaped body. The budget and rate
-limit counters are shared with /v1/messages — proven here by spending on one
+limit counters are shared with /v1/messages: proven here by spending on one
 endpoint and getting blocked on the other.
 """
 

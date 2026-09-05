@@ -1,4 +1,4 @@
--- Phase 9: guardrails. Two NeMo self-check rails wrap the agent loop — one on the
+-- Phase 9: guardrails. Two NeMo self-check rails wrap the agent loop, one on the
 -- incoming prompt, one on the assembled final answer. Every time a rail blocks a
 -- request or errors out (fail-open), it lands here as its own row, so the local
 -- /admin/guardrails/summary endpoint can report what the rails have been doing.

@@ -5,11 +5,11 @@
 
 -- Per-account connection. external_id is the confused-deputy guard: a random secret slice
 -- generates once per account and requires on every sts:AssumeRole (it survives a
--- disconnect, so reconnecting reuses it — see below). role_arn is the role the user
+-- disconnect, so reconnecting reuses it, see below). role_arn is the role the user
 -- created; status is 'pending' (external id issued, role not yet verified), 'connected'
 -- (a live assume-role + read succeeded), or 'error' (last verification/scan failed).
 -- last_error is the human-readable reason for the latest error. A DELETE /scanner/connect
--- does NOT drop this row — it resets role_arn/status to pending and keeps external_id
+-- does NOT drop this row: it resets role_arn/status to pending and keeps external_id
 -- reserved for the account.
 CREATE TABLE IF NOT EXISTS aws_connections (
     id           BIGSERIAL   PRIMARY KEY,

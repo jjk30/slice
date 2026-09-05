@@ -7,7 +7,7 @@
 -- together (a uuid hex minted per run). check is which check raised it ('s3_public',
 -- 'sg_open', 'unencrypted', 'iam_risk'); it is quoted throughout because CHECK is a SQL
 -- keyword. resource_id points at the bucket / group / volume / key / user. severity is
--- 'high', 'med' or 'low' — the alert path watches 'high'. summary is one plain sentence;
+-- 'high', 'med' or 'low': the alert path watches 'high'. summary is one plain sentence;
 -- detail is the specifics (open port, key age, grantee) as JSONB.
 CREATE TABLE IF NOT EXISTS scan_findings (
     id          BIGSERIAL   PRIMARY KEY,
@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS scan_findings_severity_idx ON scan_findings (severity
 -- (date is the primary key, so re-fetching a day just refreshes its amount and
 -- fetched_at). yesterday's spend is the newest row; month-to-date is the sum of the
 -- current month's rows. Cost Explorer bills $0.01 per call, so the fetch is latched to
--- once per day in Redis — this table is just where the numbers land.
+-- once per day in Redis: this table is just where the numbers land.
 CREATE TABLE IF NOT EXISTS aws_costs (
     date       DATE          PRIMARY KEY,
     amount_usd NUMERIC(14, 2) NOT NULL,

@@ -276,7 +276,7 @@ const { status: liveStatus, start: startLive, stop: stopLive } = useLiveEvents(
   },
   // The stream (re)opened. After an outage events may have been missed, so resync.
   // On the very first open only resync if the mount-time load already finished and
-  // failed (or never got the record-book list) — the page may have been opened while
+  // failed (or never got the record-book list), the page may have been opened while
   // the gateway was still starting. If that load is still in flight there is nothing
   // to refetch yet; if it later fails, the next event's refresh retries.
   (firstOpen) => {
@@ -311,7 +311,7 @@ const month = computed(() => summary.value?.month ?? teams.value?.month ?? model
 // null while loading; a dash once a load has failed.
 function kpi(fmt) {
   if (summary.value) return fmt(summary.value)
-  return failed.value ? '—' : null
+  return failed.value ? '\u2014' : null
 }
 
 const spend = computed(() => kpi((s) => money(s.spend_usd)))
@@ -344,7 +344,7 @@ function usd(raw) {
 const awsConnected = computed(() => usd(awsCost.value?.month_to_date) !== null)
 const awsBill = computed(() => {
   if (awsCost.value) return awsConnected.value ? usd(awsCost.value.month_to_date) : 'not connected'
-  return failed.value ? '—' : null
+  return failed.value ? '\u2014' : null
 })
 const awsBillSub = computed(() => {
   if (!awsCost.value) return ''
@@ -381,7 +381,7 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
         <span class="brand-path">/ dashboard</span>
       </div>
       <div class="header-right">
-        <span class="meta">this month · {{ month ?? '—' }}</span>
+        <span class="meta">this month · {{ month ?? '\u2014' }}</span>
         <span v-if="accountLogin" class="meta account">{{ accountLogin }}</span>
         <LivePill :status="liveStatus" />
         <a class="settings howto" href="https://sliceapp.dev/how-to.html" target="_blank" rel="noopener">How to</a>
@@ -391,7 +391,7 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
     </header>
 
     <div v-if="error" class="banner" role="alert">
-      Backend unavailable — {{ error }}
+      Backend unavailable: {{ error }}
     </div>
 
     <main class="grid">

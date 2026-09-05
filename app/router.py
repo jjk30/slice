@@ -1,6 +1,6 @@
 """The phase-5 router: pin ▸ rule ▸ auto, decided as a small LangGraph.
 
-LangGraph is the skeleton only — four steps wired in strict precedence — while the
+LangGraph is the skeleton only, four steps wired in strict precedence, while the
 judge model does the actual easy-or-hard thinking (see ``app.judge``). The graph:
 
     pin ──▶ rule ──▶ judge ──▶ decide ──▶ END
@@ -10,7 +10,7 @@ judge model does the actual easy-or-hard thinking (see ``app.judge``). The graph
 - **pin** reads the ``x-slice-route: off`` header. Off means no routing at all: the
   client's model is used exactly, and neither rule nor judge runs.
 - **rule** looks up an exact per-team (team, from_model) switch rule. A match swaps
-  the model and skips the judge — rules fire even when auto-routing is disabled.
+  the model and skips the judge: rules fire even when auto-routing is disabled.
 - **judge** runs only when auto-routing is on, no pin or rule applied, and there is
   non-empty user text. It classifies the request and bills the tiny call to the
   team budget.
@@ -47,7 +47,7 @@ ROUTED_HEADER = "x-slice-routed"
 
 # Response header describing the RAG retrieval outcome on the auto path: "hit:N"
 # when N neighbors were found, "empty" when the index had nothing to offer. Absent
-# when retrieval never ran (pin, rule, disabled, or empty prompt) — phase-5 shape.
+# when retrieval never ran (pin, rule, disabled, or empty prompt), phase-5 shape.
 RAG_HEADER = "x-slice-rag"
 
 VERDICT_NONE = "none"
@@ -67,11 +67,11 @@ class RoutingDecision:
     verdict: str
     reason: str
     # Phase 6: the RAG header value ("hit:N" / "empty"), or None when retrieval
-    # never ran. A hint only — it never overrides the verdict below.
+    # never ran. A hint only: it never overrides the verdict below.
     rag: str | None = None
     # Phase 8: the retrieved neighbors' prompt texts, carried through so evaluation
     # can score their context relevance. Empty when retrieval found nothing or never
-    # ran — a defaulted field, so nothing that builds a RoutingDecision without it breaks.
+    # ran, a defaulted field, so nothing that builds a RoutingDecision without it breaks.
     rag_neighbors: tuple[str, ...] = ()
 
     @property
@@ -170,7 +170,7 @@ async def _retrieve_node(state: _State) -> dict:
         neighbors = await asyncio.to_thread(
             retriever.retrieve, ctx["team"], state.get("user_text", ""), config.RAG_TOP_K
         )
-    except Exception as exc:  # noqa: BLE001 — retrieve() shouldn't raise; never trust it.
+    except Exception as exc:  # noqa: BLE001  # retrieve() shouldn't raise; never trust it.
         logger.debug(json.dumps({"event": "rag_node_error", "error": str(exc)}))
         return {}
     if not neighbors:
@@ -197,7 +197,7 @@ async def _judge_node(state: _State) -> dict:
             ctx["client"],
             hint=state.get("hint"),
         )
-    except Exception as exc:  # noqa: BLE001 — classify shouldn't raise, but never trust it.
+    except Exception as exc:  # noqa: BLE001  # classify shouldn't raise, but never trust it.
         logger.debug(json.dumps({"event": "judge_node_error", "error": str(exc)}))
         return {"verdict": judge.VERDICT_HARD}
 
@@ -231,7 +231,7 @@ def _decide_node(state: _State) -> dict:
     if verdict == judge.VERDICT_EASY:
         return {"served_model": config.ROUTE_EASY_MODEL, "verdict": verdict, "reason": "auto"}
 
-    # "hard" — keep the client's model.
+    # "hard", keep the client's model.
     return {"served_model": requested, "verdict": verdict, "reason": "auto"}
 
 
@@ -306,7 +306,7 @@ async def route(
     retriever=None,
     account=None,
 ) -> RoutingDecision:
-    """Run the router graph for one request. Never raises — forwards as asked on error.
+    """Run the router graph for one request. Never raises: forwards as asked on error.
 
     ``classify`` is injectable so tests can supply a fake judge; production leaves it
     as the real ``app.judge.classify``. ``retriever`` is the phase-6 RAG index; None
@@ -339,7 +339,7 @@ async def route(
 
     try:
         final = await _GRAPH.ainvoke(initial)
-    except Exception as exc:  # noqa: BLE001 — any graph failure forwards as asked.
+    except Exception as exc:  # noqa: BLE001  # any graph failure forwards as asked.
         logger.warning(json.dumps({"event": "router_error", "error": str(exc)}))
         return RoutingDecision(requested, requested, VERDICT_NONE, "error")
 

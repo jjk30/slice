@@ -1,4 +1,4 @@
-"""Phase-11 alerts tests. Fakes only — no real Resend, no real Redis, no real DB.
+"""Phase-11 alerts tests. Fakes only: no real Resend, no real Redis, no real DB.
 
 Three layers:
 
@@ -9,7 +9,7 @@ Three layers:
   2xx → sent, non-2xx and transport errors → failed, never a raise.
 - **Wire-in tests** prove the two exact spots in ``app.redis_layer`` fire: the SETNX
   warn latch in ``add_cost`` (once per month) and the blocked decision in
-  ``check_budget`` — plus a full ``/v1/messages`` over-budget round trip — and that
+  ``check_budget``, plus a full ``/v1/messages`` over-budget round trip, and that
   with ``ALERTS_ENABLED`` off nothing is ever spawned.
 - **DB / summary tests** cover the fire-and-forget writer, the pure aggregation, and
   the ``/admin/alerts/summary`` endpoint shape.
@@ -175,7 +175,7 @@ def no_whatsapp_config(monkeypatch):
     ``TWILIO_*`` settings are present (they are in the developer ``.env``, which
     python-dotenv loads into ``app.config`` during tests). The email-path tests below
     predate phase 13 and assert email-only behavior, so they clear the four settings
-    the same way they already clear ``RESEND_API_KEY``/``ALERT_EMAIL_TO`` — making the
+    the same way they already clear ``RESEND_API_KEY``/``ALERT_EMAIL_TO``, making the
     WhatsApp channel deterministically absent locally and in CI alike.
     """
     monkeypatch.setattr(config, "TWILIO_ACCOUNT_SID", None)
@@ -451,7 +451,7 @@ def test_build_engine_enabled_without_channels_still_builds(monkeypatch, no_what
 async def test_both_channels_build_and_a_warn_records_both(alerts_on, fake_redis, monkeypatch):
     """Phase-13 reality: with BOTH Resend and Twilio configured, ``build_default_channels``
     registers email AND whatsapp, and a single warn event drives one send attempt per
-    channel — recording one row each (the email-only tests above are the isolated path)."""
+    channel, recording one row each (the email-only tests above are the isolated path)."""
     sid = "AC_test_sid"
     monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
     monkeypatch.setattr(config, "ALERT_EMAIL_TO", "ops@example.com")
@@ -550,7 +550,7 @@ def test_subject_and_body_templates(monkeypatch):
 
 
 # The character we must never emit anywhere in an email: U+2014, the em dash.
-EM_DASH = "—"
+EM_DASH = "\u2014"
 
 SCAN_DETAIL = {
     "count": 2,

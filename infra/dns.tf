@@ -2,7 +2,7 @@
 # Route 53 hosted zone for the apex domain.
 # Creating this zone allocates a set of AWS nameservers (see the
 # route53_nameservers output). Those must be pasted into Namecheap to move DNS
-# authority to Route 53 — until that switch propagates, the ACM validation
+# authority to Route 53, until that switch propagates, the ACM validation
 # below cannot resolve.
 # ---------------------------------------------------------------------------
 resource "aws_route53_zone" "main" {
@@ -14,7 +14,7 @@ resource "aws_route53_zone" "main" {
 #   Primary domain:          sliceapp.dev
 #   Subject Alternative Name: api.sliceapp.dev
 # One cert therefore terminates TLS for both. Must live in the same region as
-# the ALB (us-east-1) — this whole config is us-east-1, so we're good.
+# the ALB (us-east-1), this whole config is us-east-1, so we're good.
 # ---------------------------------------------------------------------------
 resource "aws_acm_certificate" "main" {
   domain_name               = var.domain_name
@@ -52,7 +52,7 @@ resource "aws_route53_record" "cert_validation" {
 # Waits for ACM to see the validation records and issue the cert.
 # NOTE: `terraform apply` WILL BLOCK here until the Namecheap nameserver switch
 # to the Route 53 nameservers has propagated and ACM can resolve the CNAMEs
-# above. That hang is expected — the zone must exist and its nameservers be
+# above. That hang is expected: the zone must exist and its nameservers be
 # live at the registrar before this can complete. We manage that ordering
 # manually (apply, grab nameservers, set them at Namecheap, let apply finish).
 # ---------------------------------------------------------------------------

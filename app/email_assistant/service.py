@@ -5,12 +5,12 @@
 nothing, or sends the fixed line where the spec says so):
 
 1. **Claim** the ``email_replies`` row by Resend's ``email_id`` (a duplicate stops here).
-2. **Loop guard** — mail from our own ``ALERT_FROM`` address, a subject starting with
+2. **Loop guard**: mail from our own ``ALERT_FROM`` address, a subject starting with
    "Auto", or (once the headers are fetched) an ``Auto-Submitted`` header other than
    "no" is ignored.
-3. **Identity** — the sender must match ``accounts.email`` (case-insensitive). No match:
+3. **Identity**: the sender must match ``accounts.email`` (case-insensitive). No match:
    log and stop, nothing is sent, so a stranger never learns whether an address exists.
-4. **Body** — fetched from Resend's receiving API (``text``, else stripped ``html``),
+4. **Body**: fetched from Resend's receiving API (``text``, else stripped ``html``),
    cut at the first quoted line, trimmed to 2000 characters. The receiving API's
    ``headers`` set is small and leaves out the threading headers, so when the JSON has
    ``raw.download_url`` the raw MIME is fetched too (a signed link, no auth) and
@@ -475,7 +475,7 @@ def reply_subject(subject: str) -> str:
 
 def tidy_answer(answer: str, footer: str = FOOTER_AI_SETUP) -> str:
     """Belt and braces on the model's reply: no em dashes, and always the AI footer last."""
-    text = (answer or "").replace(" — ", ", ").replace("—", "-").strip()
+    text = (answer or "").replace(" \u2014 ", ", ").replace("\u2014", "-").strip()
     if not text.endswith(footer):
         text = f"{text}\n\n{footer}" if text else footer
     return text
@@ -882,7 +882,7 @@ class EmailAssistant:
             verdict = await self._run(event)
         except _Stop as stop:
             verdict = stop.verdict
-        except Exception as exc:  # noqa: BLE001 — a detached task never surfaces an error.
+        except Exception as exc:  # noqa: BLE001  # a detached task never surfaces an error.
             verdict = VERDICT_ERROR
             self._log("error", event, account_id, verdict, reason=f"{type(exc).__name__}: {exc}")
         account_id = getattr(self, "_account_id", None)
@@ -996,7 +996,7 @@ class EmailAssistant:
         # k. One model call.
         try:
             raw = await asyncio.wait_for(self.answer(system, user, model), timeout=self.answer_timeout)
-        except Exception as exc:  # noqa: BLE001 — timeout, provider, anything: send nothing.
+        except Exception as exc:  # noqa: BLE001  # timeout, provider, anything: send nothing.
             self._log("answer", event, account_id, VERDICT_ERROR, reason=f"{type(exc).__name__}: {exc}", model=model)
             raise _Stop(VERDICT_ERROR)
         answer = tidy_answer(raw) if bucket == LABEL_OWN_DATA else tidy_general(raw, tailored=tailored)
@@ -1057,7 +1057,7 @@ class EmailAssistant:
     async def _send(self, event: InboundEvent, account_id: int, text: str, verdict: str) -> None:
         try:
             result = await self._reply(event, text)
-        except Exception as exc:  # noqa: BLE001 — the channel never raises, but belt and braces.
+        except Exception as exc:  # noqa: BLE001  # the channel never raises, but belt and braces.
             result = DeliveryResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         if not result.ok:
             self._log("send", event, account_id, VERDICT_ERROR, reason=result.error)

@@ -1,6 +1,6 @@
-# slice cost demo — fixed-batch results
+# slice cost demo: fixed-batch results
 
-**Same 50-prompt workload: $0.258801 direct, $0.141615 through slice — 45.28% cheaper.**
+**Same 50-prompt workload: $0.258801 direct, $0.141615 through slice, 45.28% cheaper.**
 
 - Baseline model (sent in both legs): `claude-sonnet-4-6`
 - Cache-hit signal used: slice 'x-slice-cache: hit' response header
@@ -24,13 +24,13 @@ Total saved: $0.117186 (45.28% cheaper on the paired workload).
 
 _Routing + cache reconcile exactly to the total saved on the paired set._
 
-## Per-model breakdown — direct leg
+## Per-model breakdown: direct leg
 
 | model | requests | cache hits | input tok | output tok | cost |
 |---|---|---|---|---|---|
 | `claude-sonnet-4-6` | 50 | 0 | 1937 | 16866 | $0.258801 |
 
-## Per-model breakdown — slice leg
+## Per-model breakdown: slice leg
 
 | model | requests | cache hits | input tok | output tok | cost |
 |---|---|---|---|---|---|

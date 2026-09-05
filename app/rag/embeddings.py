@@ -1,7 +1,7 @@
 """Local sentence-transformers embeddings for the RAG index.
 
 The model (``config.RAG_EMBED_MODEL``, default ``all-MiniLM-L6-v2``, 384-dim) is
-loaded once at import and reused for every call. It runs on CPU — no GPU assumed,
+loaded once at import and reused for every call. It runs on CPU, no GPU assumed,
 no network at inference time once the weights are cached. Vectors are returned
 unnormalized; the FAISS layer (index build and retriever) normalizes them for
 cosine similarity via an IndexFlatIP.

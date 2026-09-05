@@ -2,11 +2,11 @@
 
 This module is deliberately free of the ``mcp`` SDK so the tests can drive it against a
 mocked gateway with nothing else in the way. Each function makes one (or, for a confirmed
-write, one) gateway call through ``SliceClient`` and returns compact, human-readable text
-— never a raw JSON dump, and never an unhandled exception. Every gateway failure is caught
+write, one) gateway call through ``SliceClient`` and returns compact, human-readable text,
+never a raw JSON dump, and never an unhandled exception. Every gateway failure is caught
 and rendered by ``_gateway_error`` into a plain sentence.
 
-Endpoint map (discovered from the existing FastAPI routes — nothing here is invented):
+Endpoint map (discovered from the existing FastAPI routes, nothing here is invented):
 
 - ``get_spend``            → ``GET  /dashboard/teams``       (spend vs budget, warn ratio, cap)
 - ``list_rules``           → ``GET  /admin/rules``           (the account's switch rules)
@@ -15,7 +15,7 @@ Endpoint map (discovered from the existing FastAPI routes — nothing here is in
 - ``add_rule``             → ``POST /admin/rules``            (confirm handshake)
 - ``delete_rule``          → ``DELETE /admin/rules/{id}``     (confirm handshake)
 
-Note (flagged for the report): ``/dashboard/recent`` does not expose ``latency_ms`` — the
+Note (flagged for the report): ``/dashboard/recent`` does not expose ``latency_ms``: the
 column exists in the ``requests`` table but the route's SQL and response omit it. Rather
 than change an existing route, ``get_recent_requests`` reports the fields the endpoint
 does return (model, status, cost, routed-from, cached, time) and simply has no latency to
@@ -53,11 +53,11 @@ def _gateway_error(exc: Exception, client: SliceClient) -> str:
         if not client.has_key:
             return (
                 "slice gateway returned 401 Unauthorized, but no SLICE_API_KEY is set. "
-                "The gateway has auth enabled — set SLICE_API_KEY to your slice key (slk_...)."
+                "The gateway has auth enabled: set SLICE_API_KEY to your slice key (slk_...)."
             )
         return (
             "slice gateway returned 401 Unauthorized. The slice key in SLICE_API_KEY was "
-            "rejected (invalid or revoked) — check the value."
+            "rejected (invalid or revoked): check the value."
         )
     if isinstance(exc, GatewayError):
         detail = f": {exc.message}" if exc.message else ""
@@ -69,22 +69,22 @@ def _gateway_error(exc: Exception, client: SliceClient) -> str:
 
 
 def _money(value) -> str:
-    """A dollar amount as ``$1.2345``; ``—`` for an unknown (null) amount."""
+    """A dollar amount as ``$1.2345``; an em dash for an unknown (null) amount."""
     if value is None:
-        return "—"
+        return "\u2014"
     try:
         return f"${float(value):.4f}"
     except (TypeError, ValueError):
-        return "—"
+        return "\u2014"
 
 
 def _pct(value) -> str:
     if value is None:
-        return "—"
+        return "\u2014"
     try:
         return f"{float(value) * 100:.1f}%"
     except (TypeError, ValueError):
-        return "—"
+        return "\u2014"
 
 
 # --- read tools --------------------------------------------------------------------
@@ -126,14 +126,14 @@ async def get_spend(client: SliceClient) -> str:
             warn = False
 
     if cap_hit:
-        status = "CAP HIT — budget exhausted, requests are being blocked"
+        status = "CAP HIT: budget exhausted, requests are being blocked"
     elif warn:
-        status = f"WARNING — over the {_pct(warn_ratio)} warn threshold"
+        status = f"WARNING: over the {_pct(warn_ratio)} warn threshold"
     else:
-        status = "OK — under budget"
+        status = "OK: under budget"
 
     lines = [
-        f"slice spend — {month}",
+        f"slice spend: {month}",
         f"  budget used:  {_money(used)} of {_money(budget_cap)}  (source: {source}){cap_note}",
         f"  remaining:    {_money(remaining)}",
         f"  recorded spend (Postgres): {_money(spend)}",

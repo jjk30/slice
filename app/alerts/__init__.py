@@ -3,7 +3,7 @@
 Two moments already detected by the Redis layer feed this package: the once-per-month
 warn latch in ``redis_layer.add_cost`` (kind ``warn``) and the blocked decision in
 ``redis_layer.check_budget`` (kind ``block``). Both call ``fire``, which does
-``asyncio.create_task(send_alert(...))`` and returns — nothing here is ever awaited
+``asyncio.create_task(send_alert(...))`` and returns: nothing here is ever awaited
 by a request, and every failure inside is caught and logged.
 
 ``engine`` holds the cooldown (a Redis key per team per kind, fail open when Redis

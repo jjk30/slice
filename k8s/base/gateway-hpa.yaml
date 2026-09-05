@@ -1,5 +1,5 @@
 # Horizontal Pod Autoscaler for the gateway: 2 replicas normally, up to 4 when
-# average CPU across the pods passes 70% of the request (250m) — i.e. ~175m/pod.
+# average CPU across the pods passes 70% of the request (250m), i.e. ~175m/pod.
 #
 # REQUIRES metrics-server in the cluster, or the HPA cannot read CPU and reports
 # `<unknown>` targets and never scales. On kind, install it with `make kind-up`

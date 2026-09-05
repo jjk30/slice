@@ -3,7 +3,7 @@
 The route does only what must happen before Resend's timeout: it verifies the Svix
 signature on the raw body (401 and stop on anything else), drops every event that is not
 ``email.received`` (200), skips an ``email_id`` already recorded (200, a Resend retry),
-then answers 202 and hands the event to a detached task — exactly the shape the scanner's
+then answers 202 and hands the event to a detached task, exactly the shape the scanner's
 ``/scanner/run`` uses. With ``EMAIL_ASSISTANT_ENABLED`` off the route answers 200 and
 does nothing at all, signature or not.
 """
@@ -69,7 +69,7 @@ async def inbound(request: Request):
             if await db.email_reply_seen(event.email_id):
                 logger.info(json.dumps({"event": "email_assistant", "step": "dedupe", "email_id": event.email_id, "verdict": "ignored", "reason": "duplicate_email_id"}))
                 return _status(200, "duplicate")
-        except Exception as exc:  # noqa: BLE001 — the claim inside the task settles it either way.
+        except Exception as exc:  # noqa: BLE001  # the claim inside the task settles it either way.
             logger.warning(json.dumps({"event": "email_assistant", "step": "dedupe", "email_id": event.email_id, "verdict": None, "reason": f"lookup_failed: {exc}"}))
 
     assistant = get_assistant(request.app)

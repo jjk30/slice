@@ -10,7 +10,7 @@ Phase 25: the account's monthly budget cap.
 
 Both are locked to a slice key (see ``LOCKED_PREFIXES`` in app/auth/middleware.py) and
 strictly per account: every read and write is scoped to the caller's own ``account.id``.
-``aws_connected`` is a pure read of the Phase 18 connection row — it is never rebuilt here.
+``aws_connected`` is a pure read of the Phase 18 connection row: it is never rebuilt here.
 
 Validation failures answer with a clean Anthropic-shaped 400 (``{"type": "error",
 "error": {"type": ..., "message": ...}}``), the same shape the /v1 proxy uses, so a
@@ -35,7 +35,7 @@ logger = logging.getLogger("slice.gateway")
 router = APIRouter(prefix="/account", tags=["account"])
 
 # A pragmatic email shape: one @, no spaces, a dotted domain. Not a full RFC 5322
-# validator (nobody wants that) — enough to reject obvious garbage.
+# validator (nobody wants that), enough to reject obvious garbage.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # E.164: a leading +, a non-zero country digit, then up to 14 more digits.
 _E164_RE = re.compile(r"^\+[1-9]\d{1,14}$")
@@ -68,7 +68,7 @@ async def _aws_connected(db, account_id: int) -> bool:
     """Read whether Phase 18 has a live role connection for this account. Pure read."""
     try:
         conn = await db.get_connection(account_id)
-    except Exception:  # noqa: BLE001 — a read failure just reports "not connected".
+    except Exception:  # noqa: BLE001  # a read failure just reports "not connected".
         return False
     return bool(conn and conn.get("status") == "connected" and conn.get("role_arn"))
 
@@ -90,7 +90,7 @@ async def get_profile(request: Request):
     if _db_ready(db):
         try:
             row = await db.get_account(account.id)
-        except Exception:  # noqa: BLE001 — fall back to what the token already carried.
+        except Exception:  # noqa: BLE001  # fall back to what the token already carried.
             row = None
         if row is not None:
             email = row.get("email")
@@ -116,7 +116,7 @@ async def put_profile(request: Request):
 
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error.
+    except Exception:  # noqa: BLE001  # malformed JSON is a client error.
         return _anthropic_error(400, "invalid_request_error", "Request body is not valid JSON.")
     if not isinstance(body, dict):
         return _anthropic_error(400, "invalid_request_error", "Request body must be a JSON object.")
@@ -156,7 +156,7 @@ async def put_profile(request: Request):
 
     try:
         row = await db.update_account_profile(account.id, email, whatsapp)
-    except Exception:  # noqa: BLE001 — surface a clean 503 rather than a 500 stack.
+    except Exception:  # noqa: BLE001  # surface a clean 503 rather than a 500 stack.
         return _anthropic_error(
             503, "api_error", "The account store is temporarily unavailable. Try again shortly."
         )
@@ -215,7 +215,7 @@ async def put_budget(request: Request):
 
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error.
+    except Exception:  # noqa: BLE001  # malformed JSON is a client error.
         return _anthropic_error(400, "invalid_request_error", "Request body is not valid JSON.")
     if not isinstance(body, dict) or "cap_usd" not in body:
         return _anthropic_error(
@@ -233,7 +233,7 @@ async def put_budget(request: Request):
     redis = getattr(request.app.state, "redis", None)
     try:
         stored = await budget.set_cap(account.id, cap, db=db, redis=redis)
-    except Exception:  # noqa: BLE001 — surface a clean 503 rather than a 500 stack.
+    except Exception:  # noqa: BLE001  # surface a clean 503 rather than a 500 stack.
         return _anthropic_error(
             503, "api_error", "The account store is temporarily unavailable. Try again shortly."
         )

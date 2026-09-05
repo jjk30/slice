@@ -2,7 +2,7 @@
 
 A single agent, wired as a small LangGraph, that extends the router's auto path.
 When auto-routing has sent a request down to a cheaper model, the loop tries that
-model, checks the answer, and — if the check fails — walks up a cross-provider
+model, checks the answer and, if the check fails, walks up a cross-provider
 ladder one rung at a time, stopping the moment the next attempt's upper-bound cost
 would cross the per-request ceiling. Every stage fails open: a dead provider is
 skipped, a checker that errors accepts the answer, and any unexpected failure falls

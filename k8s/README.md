@@ -2,7 +2,7 @@
 
 Plain manifests + kustomize to run the whole slice stack on a local
 [kind](https://kind.sigs.k8s.io/) cluster. This is a **parallel deploy target**,
-not a migration — the live EC2 box keeps running docker compose. Everything here
+not a migration: the live EC2 box keeps running docker compose. Everything here
 is self-contained under `k8s/`.
 
 ## What's in the box
@@ -11,21 +11,21 @@ is self-contained under `k8s/`.
 |-------|------|-------|
 | `namespace.yaml` | Namespace | Everything lives in `slice`; delete it to wipe the stack. |
 | `postgres.yaml` | StatefulSet + headless Service | `postgres:16`, 1 replica, 1Gi PVC from the default storageclass. Password from the Secret. The gateway self-applies migrations on startup, so there is no migration Job. |
-| `redis.yaml` | Deployment + Service | `redis:7`, no volume — the cache/counters are disposable. |
+| `redis.yaml` | Deployment + Service | `redis:7`, no volume, the cache/counters are disposable. |
 | `gateway-config.yaml` | ConfigMap | Non-secret env: `REDIS_URL`, `AWS_REGION`, `ALERT_FROM`, `SLICE_BASE_URL`. |
 | `gateway.yaml` | Deployment + Service | The FastAPI app, 2 replicas, ClusterIP Service on 8080. Secrets injected key-by-key; probes hit `/docs`; requests 750Mi/250m, limits 1.5Gi/1000m. An initContainer waits for Postgres. |
 | `gateway-hpa.yaml` | HorizontalPodAutoscaler | 2→4 replicas at 70% CPU. **Needs metrics-server.** |
 | Secret (generated) | Secret | Built by kustomize's `secretGenerator` from `secrets.env` (gitignored). Holds `POSTGRES_PASSWORD`, `DATABASE_URL`, `JWT_SECRET`, `ANTHROPIC_API_KEY`, `RESEND_API_KEY`. |
 
 The health probes use `/docs`: the app has no dedicated `/health` route, and
-FastAPI's `/docs` always returns 200 once the app is serving — the same endpoint
+FastAPI's `/docs` always returns 200 once the app is serving, the same endpoint
 the production ALB health check uses.
 
 ## Prerequisites
 
 - **Docker Desktop** (running).
-- **kubectl** — `brew install kubectl`
-- **kind** — `brew install kind` (or `go install sigs.k8s.io/kind@latest`)
+- **kubectl**: `brew install kubectl`
+- **kind**: `brew install kind` (or `go install sigs.k8s.io/kind@latest`)
 
 Check:
 
@@ -33,7 +33,7 @@ Check:
 docker info >/dev/null && kubectl version --client && kind version
 ```
 
-## Secrets — nothing real in git
+## Secrets: nothing real in git
 
 `k8s/secrets.env` is gitignored. Only `k8s/secrets.env.example` (placeholders) is
 committed. kustomize's `secretGenerator` reads `secrets.env` at deploy time and
@@ -42,7 +42,7 @@ rolls the gateway pods automatically.
 
 ```bash
 cp k8s/secrets.env.example k8s/secrets.env   # or: make -C k8s secrets
-# then edit k8s/secrets.env — keep POSTGRES_PASSWORD and the password inside
+# then edit k8s/secrets.env: keep POSTGRES_PASSWORD and the password inside
 # DATABASE_URL identical.
 ```
 
@@ -87,7 +87,7 @@ kubectl -n slice exec statefulset/postgres -- \
 ```
 
 To watch the HPA scale, drive CPU load through the gateway and `watch kubectl -n
-slice get hpa gateway` — replicas climb toward 4 as average CPU passes 70% of the
+slice get hpa gateway`: replicas climb toward 4 as average CPU passes 70% of the
 250m request.
 
 ## Deploying the ECR image instead of the local build

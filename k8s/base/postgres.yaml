@@ -6,7 +6,7 @@
 # and the StatefulSet never runs two pods against the same volume.
 #
 # The gateway self-applies migrations on startup (app/db.py), so there is no
-# migration Job here — a fresh empty database is enough.
+# migration Job here: a fresh empty database is enough.
 apiVersion: v1
 kind: Service
 metadata:

@@ -45,7 +45,7 @@ class RulesCache:
 
     ``source`` is anything exposing an async ``load_rules()`` returning a list of
     dict rows (the ``Database`` from ``app.db``), or None when logging/storage is
-    off — in which case there are simply no rules. The cache reloads lazily: the
+    off, in which case there are simply no rules. The cache reloads lazily: the
     first lookup after ``refresh_seconds`` have passed triggers a reload, and a
     write calls ``refresh`` directly.
     """

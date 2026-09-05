@@ -3,7 +3,7 @@
 A Codex-style client speaks OpenAI. This module translates its request into the
 Anthropic format slice uses internally, and translates the Anthropic result
 (buffered or streamed) back into OpenAI shape. The adapters in between are the
-same ones /v1/messages uses — this file only bridges the two wire formats.
+same ones /v1/messages uses: this file only bridges the two wire formats.
 """
 
 from __future__ import annotations

@@ -7,10 +7,10 @@ proxy traffic and the router path never construct or call it.
 Two rails, each a single small LLM self-check with a slice-specific prompt (see
 ``guardrails/config.yml`` and ``guardrails/prompts.yml``):
 
-- **input** — before the loop starts, does the user prompt try to manipulate slice
+- **input**: before the loop starts, does the user prompt try to manipulate slice
   itself (inject the routing judge or the loop's checker, force a pass/escalation,
   extract slice config)? A block stops the request before any provider is called.
-- **output** — after the loop finishes, does the assembled final answer leak slice
+- **output**: after the loop finishes, does the assembled final answer leak slice
   internals (config values, key names, internal prompts)? A block replaces the answer
   with a standard refusal.
 
@@ -22,7 +22,7 @@ logged and reported as an *error* outcome (not a block), so the loop proceeds ex
 as if the rail had passed. A broken rail can never block or crash a request.
 
 The rails LLM is ``GUARDRAILS_MODEL`` wired through langchain-anthropic's
-``ChatAnthropic`` — the same integration the phase-8 eval judge uses — passed to
+``ChatAnthropic``, the same integration the phase-8 eval judge uses, passed to
 ``LLMRails`` via NeMo's ``LangChainLLMAdapter``. The config enables only the two
 built-in self-check rails and declares no models, no flows, and no knowledge base, so
 constructing the engine never needs embeddings and never downloads a model at runtime.
@@ -96,7 +96,7 @@ def parse_label(text) -> str | None:
 class RailOutcome:
     """The result of running one rail.
 
-    ``blocked`` — the rail fired and stopped the request. ``errored`` — the engine
+    ``blocked``: the rail fired and stopped the request. ``errored``: the engine
     raised or timed out and the loop fails open (treated as passed); the two are never
     both true. Neither being true means the rail ran and passed. ``reason`` is a short
     note: the rail name for a block, the error string for an error.
@@ -119,8 +119,8 @@ class GuardrailEngine:
     """Wraps a constructed NeMo ``LLMRails`` and runs one rail type at a time.
 
     Built once at startup (see ``build_engine``) and reused per request. The two check
-    methods each drive ``generate_async`` with only their own rail enabled — no dialog,
-    no generation, no retrieval — so exactly one small self-check LLM call is made and
+    methods each drive ``generate_async`` with only their own rail enabled, no dialog,
+    no generation, no retrieval, so exactly one small self-check LLM call is made and
     nothing else runs. A block is read from ``activated_rails[*].stop`` in the response
     log, the reliable signal NeMo sets when a rail stops the request.
     """
@@ -227,7 +227,7 @@ class GuardrailEngine:
                 rails.generate_async(messages=messages, options=options),
                 timeout=self._timeout,
             )
-        except Exception as exc:  # noqa: BLE001 — timeout, transport, LLM, anything.
+        except Exception as exc:  # noqa: BLE001  # timeout, transport, LLM, anything.
             # Fail open: the loop proceeds as if the rail passed. Logged as an error
             # outcome so the caller can record it, but it never blocks the request.
             reason = _format_error(exc)
@@ -275,7 +275,7 @@ def build_engine(mode: str | None = None, general_mode: str | None = None) -> "G
     """Construct the engine, or return None when guardrails are off or unbuildable.
 
     Returns None (fail open, no rails) when the kill switch is off, or when anything in
-    the build fails — a missing config dir, a broken nemoguardrails, a rails LLM that
+    the build fails, a missing config dir, a broken nemoguardrails, a rails LLM that
     won't construct. nemoguardrails is imported HERE, lazily, so with the switch off it
     is never imported and the server starts even if the package is broken or absent.
 
@@ -284,7 +284,7 @@ def build_engine(mode: str | None = None, general_mode: str | None = None) -> "G
     of the default "standard" ones. The reply-by-email assistant builds its own engine
     with ``mode="email"`` to get its topic rail; ``None`` is the agent-loop engine, exactly
     as before. Whether a *caller* fails open or closed on an errored outcome is the
-    caller's decision — the agent loop fails open, the email assistant fails closed.
+    caller's decision: the agent loop fails open, the email assistant fails closed.
 
     ``general_mode`` (phase 26 follow-up) builds a second rails object in that prompting
     mode, on the same LLM, for ``check_output(..., bucket="general")``. The email
@@ -339,7 +339,7 @@ def build_engine(mode: str | None = None, general_mode: str | None = None) -> "G
             response = await llm_call(rails.llm, prompt, stop=stop, llm_params={"max_tokens": 16})
             return getattr(response, "content", response)
 
-    except Exception as exc:  # noqa: BLE001 — a broken build just disables the rails.
+    except Exception as exc:  # noqa: BLE001  # a broken build just disables the rails.
         logger.warning(
             json.dumps({"event": "guardrail_engine_unavailable", "error": _format_error(exc)})
         )

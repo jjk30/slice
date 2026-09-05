@@ -1,4 +1,4 @@
-# slice on Kubernetes (kind) — see README.md for the full walkthrough.
+# slice on Kubernetes (kind): see README.md for the full walkthrough.
 #
 # Usage order for a from-scratch local run:
 #   make kind-up        # create the cluster + metrics-server
@@ -24,7 +24,7 @@ help:
 
 ## Create the kind cluster (if absent) and install metrics-server for the HPA.
 kind-up:
-	@command -v kind >/dev/null 2>&1 || { echo "kind not installed — see README.md"; exit 1; }
+	@command -v kind >/dev/null 2>&1 || { echo "kind not installed: see README.md"; exit 1; }
 	@if kind get clusters 2>/dev/null | grep -qx "$(CLUSTER)"; then \
 		echo "cluster '$(CLUSTER)' already exists"; \
 	else \
@@ -47,16 +47,16 @@ kind-load:
 ## Create k8s/secrets.env from the example if it does not exist yet.
 secrets:
 	@if [ -f secrets.env ]; then \
-		echo "secrets.env already exists — leaving it alone"; \
+		echo "secrets.env already exists, leaving it alone"; \
 	else \
 		cp secrets.env.example secrets.env; \
-		echo "created secrets.env from the example — edit it before deploying"; \
+		echo "created secrets.env from the example: edit it before deploying"; \
 	fi
 
 ## Render + apply all manifests, then wait for the gateway rollout.
 deploy:
 	@if [ ! -f secrets.env ]; then \
-		echo "k8s/secrets.env missing — run 'make secrets' and edit it first"; exit 1; \
+		echo "k8s/secrets.env missing: run 'make secrets' and edit it first"; exit 1; \
 	fi
 	kubectl apply -k .
 	kubectl -n "$(NAMESPACE)" rollout status statefulset/postgres --timeout=180s

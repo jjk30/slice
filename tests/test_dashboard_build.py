@@ -1,13 +1,13 @@
 """Guard: the production dashboard bundle must be same-origin (no baked-in gateway host).
 
 The gateway serves dashboard/dist same-origin (app.main.DASHBOARD_DIST), so every URL the
-dashboard builds — the GitHub login redirect, logout, the slice-key card, the SSE stream,
-every fetch — must be relative. apiBase() returns "" when VITE_API_BASE_URL is unset/empty,
+dashboard builds, the GitHub login redirect, logout, the slice-key card, the SSE stream,
+every fetch, must be relative. apiBase() returns "" when VITE_API_BASE_URL is unset/empty,
 which is the only correct value for a production build; a stray VITE_API_BASE_URL (e.g. a
 localhost value left in .env, which Vite loads in every mode) would bake an absolute host
 into the shipped assets and break production. This test fails if that regresses.
 
-It scans the committed/built dist/assets/*.js — the exact files that ship. If the bundle
+It scans the committed/built dist/assets/*.js: the exact files that ship. If the bundle
 has not been built (no dist), the test skips rather than failing, so a source-only checkout
 still passes; run `cd dashboard && npm run build` to produce it.
 """

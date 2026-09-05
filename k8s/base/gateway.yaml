@@ -1,5 +1,5 @@
 # The slice gateway itself: the FastAPI app (uvicorn app.main:app on :8080).
-# Stateless — all state lives in Postgres and Redis — so it is a Deployment with
+# Stateless (all state lives in Postgres and Redis), so it is a Deployment with
 # 2 replicas, and the HPA (gateway-hpa.yaml) can add more under CPU load.
 #
 # On startup the app self-applies every file in migrations/ against the database

@@ -2,7 +2,7 @@
 // UI never shows a fake zero for an unknown value. Numeric formatters only
 // accept finite numbers: '', false, 'abc', Infinity all render as a dash too.
 
-const DASH = '—'
+const DASH = '\u2014'
 
 function isNil(v) {
   return v === null || v === undefined || Number.isNaN(v)
@@ -70,7 +70,7 @@ export function integer(v) {
 export function providerOf(model) {
   if (typeof model !== 'string' || !model) return 'other'
   if (model.startsWith('claude-')) return 'anthropic'
-  // OpenAI: gpt-*, or the o-series (leading 'o', a dash, and no slash — a slash is NIM).
+  // OpenAI: gpt-*, or the o-series (leading 'o', a dash, and no slash: a slash is NIM).
   if (model.startsWith('gpt-') || (model.startsWith('o') && model.includes('-') && !model.includes('/'))) return 'openai'
   if (model.startsWith('gemini-')) return 'google'
   if (model.includes('/')) return 'nvidia'
@@ -90,7 +90,7 @@ export function providerLabel(model) {
   return PROVIDER_LABELS[providerOf(model)] || 'Other'
 }
 
-// "Aug 24 00:52" — short month, day, and HH:MM (24h), in the viewer's local time zone
+// "Aug 24 00:52", short month, day, and HH:MM (24h), in the viewer's local time zone
 // (the same local basis every other timestamp on the dashboard uses). The date is shown
 // with the time so a row can't be mistaken for today when it is from another day.
 export function time(iso) {

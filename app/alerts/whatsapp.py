@@ -3,13 +3,13 @@
 A second channel next to ``ResendEmailChannel``, same contract: a ``name`` and an
 ``async send(alert) -> DeliveryResult`` that never raises. The engine makes one
 cooldown decision and fans it out to every channel, so email and WhatsApp fire off
-the *same* latch — there is no second cooldown here.
+the *same* latch: there is no second cooldown here.
 
 The wire is one POST to Twilio's Messages endpoint over httpx (no ``twilio`` SDK):
 ``POST /2010-04-01/Accounts/{ACCOUNT_SID}/Messages.json`` with HTTP basic auth
 (Account SID as username, Auth Token as password) and a form-encoded ``From``/``To``/
 ``Body``. A non-2xx or any exception (timeout, DNS, connection refused) comes back as
-``DeliveryResult(ok=False, error=...)`` for the engine to record as ``failed`` — it
+``DeliveryResult(ok=False, error=...)`` for the engine to record as ``failed``, it
 never propagates. Missing any of the four Twilio settings means the channel is
 disabled: a debug line, no call attempted, and it is left out of
 ``build_default_channels`` so nothing is ever recorded for it.
@@ -53,7 +53,7 @@ async def send_whatsapp_message(
     error (timeout, DNS, refused) comes back as ``DeliveryResult(ok=False, error=...)``.
 
     ``client`` lets a caller share an ``httpx.AsyncClient``; by default each send opens a
-    short-lived one (alerts are rare — at most one per team per kind per cooldown window).
+    short-lived one (alerts are rare, at most one per team per kind per cooldown window).
     """
     if not (account_sid and auth_token and from_ and to):
         logger.debug(json.dumps({"event": "alerts_channel_disabled", "channel": "whatsapp"}))
@@ -68,7 +68,7 @@ async def send_whatsapp_message(
         else:
             async with httpx.AsyncClient(timeout=timeout) as fresh:
                 response = await fresh.post(url, data=data, auth=auth)
-    except Exception as exc:  # noqa: BLE001 — a channel never raises into the engine.
+    except Exception as exc:  # noqa: BLE001  # a channel never raises into the engine.
         return DeliveryResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
     if 200 <= response.status_code < 300:

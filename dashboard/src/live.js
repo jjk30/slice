@@ -11,7 +11,7 @@ const BACKOFF_CAP_MS = 15000
 // - onOpen(firstOpen): called on EVERY successful open. `firstOpen` is true the
 //   first time the stream connects and false on every reopen after an outage;
 //   the caller decides whether a resync is due (App.vue reloads on any reopen,
-//   and on the first open only when its initial load had failed — e.g. the
+//   and on the first open only when its initial load had failed, e.g. the
 //   page was opened while the gateway was still starting).
 //
 // Reconnection is manual: on error we close the source and reopen after a

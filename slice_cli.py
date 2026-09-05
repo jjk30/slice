@@ -60,7 +60,7 @@ def device_name() -> str:
     """This machine's name for the poll request, trimmed. Empty if the host has none."""
     try:
         return (platform.node() or "").strip()[:MAX_DEVICE_CHARS]
-    except Exception:  # noqa: BLE001 — a nameless host just logs in without a device.
+    except Exception:  # noqa: BLE001  # a nameless host just logs in without a device.
         return ""
 
 

@@ -2,7 +2,7 @@
 
 The three GitHub calls the login makes, and nothing else. The gateway holds the OAuth
 App's client id (public); device flow needs no client secret, so no GitHub secret ever
-exists on this side. The CLI never talks to GitHub directly — it talks to
+exists on this side. The CLI never talks to GitHub directly: it talks to
 ``/auth/device/*`` (see ``app.auth.routes``), which calls these.
 
 Every method returns plain data or raises ``GitHubError``. Nothing here is on the

@@ -1,7 +1,7 @@
 """Phase 25: the per-account monthly budget cap, and the token estimates built from it.
 
 One question, one function: ``get_cap(account_id)`` is the cap every account-path read of
-the budget uses — the gate (``check_budget``), the warn latch (``add_cost``), the
+the budget uses, the gate (``check_budget``), the warn latch (``add_cost``), the
 dashboard meter, the MCP ``get_spend`` tool, the email assistant's context, and the
 warn/block alert detail the emails are rendered from. ``config.BUDGET_MONTHLY_USD`` is
 only the default now: it applies when the account has no cap of its own (NULL in
@@ -87,7 +87,7 @@ async def resolve_cap(account_id: int | None, *, db=None, redis=None) -> CapReso
     if redis is not None:
         try:
             raw = await redis.get(key)
-        except Exception as exc:  # noqa: BLE001 — Redis down: read Postgres instead.
+        except Exception as exc:  # noqa: BLE001  # Redis down: read Postgres instead.
             _debug("cache_get", exc)
             raw = None
         if raw is not None:
@@ -104,7 +104,7 @@ async def resolve_cap(account_id: int | None, *, db=None, redis=None) -> CapReso
         return CapResolution(default_cap(), True, "default")
     try:
         stored = await db.get_budget_cap(account_id)
-    except Exception as exc:  # noqa: BLE001 — fail open, do not cache the failure.
+    except Exception as exc:  # noqa: BLE001  # fail open, do not cache the failure.
         _debug("db_read", exc)
         return CapResolution(default_cap(), True, "default")
 
@@ -142,7 +142,7 @@ async def set_cap(account_id: int, cap: Decimal, *, db=None, redis=None) -> Deci
     if redis is not None:
         try:
             await redis.delete(cache_key(account_id))
-        except Exception as exc:  # noqa: BLE001 — the entry expires on its own within 60s.
+        except Exception as exc:  # noqa: BLE001  # the entry expires on its own within 60s.
             _debug("cache_delete", exc)
     return Decimal(str(stored)) if stored is not None else cap
 

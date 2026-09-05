@@ -4,13 +4,13 @@ Two layers, cheapest first:
 
 1. **Heuristics**, no model call. A provider error (status >= 400), empty content,
    or a truncated answer (``stop_reason`` of ``max_tokens`` or equivalent) is a
-   fail — the loop escalates without spending anything on a check.
+   fail: the loop escalates without spending anything on a check.
 2. **One small LLM call** to ``AGENT_CHECK_MODEL`` (the judge model by default),
    with a tiny ``max_tokens``, asking for a single word: pass or fail. Its cost
    counts toward the request's ceiling.
 
 The LLM layer is fail-open: if the check call itself errors, times out, or returns
-a provider error, the answer is accepted. The checker must never block traffic — a
+a provider error, the answer is accepted. The checker must never block traffic: a
 broken checker degrades to "serve what we have", never to "escalate forever".
 """
 
@@ -38,7 +38,7 @@ CHECK_SYSTEM = (
     "exactly one word, lowercase: pass or fail. No punctuation, no explanation."
 )
 
-# A tiny output cap — the reply is a single word.
+# A tiny output cap: the reply is a single word.
 CHECK_MAX_TOKENS = 5
 
 # Anthropic's truncation stop_reason, plus the OpenAI term the adapters normalize
@@ -136,7 +136,7 @@ async def _llm_check(prompt_text: str, answer_text: str, headers, client) -> Che
             adapter.send(payload, raw, headers, stream=False, client=client),
             timeout=config.JUDGE_TIMEOUT_SECONDS,
         )
-    except Exception as exc:  # noqa: BLE001 — timeout, transport, missing key, anything.
+    except Exception as exc:  # noqa: BLE001  # timeout, transport, missing key, anything.
         # A checker that fails must not block traffic: accept the answer, bill nothing.
         logger.debug(json.dumps({"event": "checker_error", "error": str(exc)}))
         return CheckOutcome(True)

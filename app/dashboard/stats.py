@@ -3,13 +3,13 @@
 Every function here takes plain row dicts and returns JSON-ready values. Nothing
 touches Postgres, Redis, or the clock except ``month_start``/``month_label``, which
 take an optional ``now`` for tests. Keeping the math here, off the router, is what lets
-the numbers be unit-tested against seeded rows — the same shape as
+the numbers be unit-tested against seeded rows, the same shape as
 ``summarize_eval_rows`` (phase 8) and ``summarize_guardrail_rows`` (phase 9).
 
 **Rows may be pre-grouped.** A row is either one request or a group of identical
 requests carrying ``n`` (how many it stands for) with token and cost columns already
-summed. In production ``Database.dashboard_rows`` returns groups — one ``GROUP BY``
-over (team, model, status, cached, routed_from, cost-known) — so a month of traffic
+summed. In production ``Database.dashboard_rows`` returns groups, one ``GROUP BY``
+over (team, model, status, cached, routed_from, cost-known), so a month of traffic
 reduces to a few hundred rows in SQL instead of a full table scan being decoded and
 reduced on the gateway's event loop. Tests seed plain rows (no ``n`` = 1). Every
 formula below is linear in tokens and cost, so a group and its member rows give the
@@ -19,12 +19,12 @@ The rules the numbers follow, so nothing on the dashboard is ever a guess:
 
 - **Spend** is the sum of ``cost_usd``. A null cost (unpriced model) adds nothing; it
   is unknown, not zero. So the total is never overstated but can be understated, and
-  ``unpriced_requests`` — served (status-200) rows whose cost is unknown — says by how
+  ``unpriced_requests``, served (status-200) rows whose cost is unknown, says by how
   many requests, so the dashboard can say so too.
 - **Savings** is only ever claimed for a status-200 request the router actually swapped
   (``routed_from`` set): what the requested model would have charged for the same input
   and output tokens, at the pricing table's dated-snapshot resolution, minus what was
-  actually paid. An unpriced ``routed_from`` or an unpriced actual cost contributes 0 —
+  actually paid. An unpriced ``routed_from`` or an unpriced actual cost contributes 0,
   never an estimate. A negative row (a rule routed to a pricier model) is kept as-is:
   the total is the honest net.
 - **routed_down** counts every request the router swapped (``routed_from`` set),
@@ -32,16 +32,16 @@ The rules the numbers follow, so nothing on the dashboard is ever a guess:
   can point anywhere, and such a swap is still counted here while its cost effect
   shows up (possibly negative) in savings.
 - **Blended cost per token** for a team is total cost / total tokens over that team's
-  status-200 rows that carry a known cost — the spec's "total cost / total tokens
+  status-200 rows that carry a known cost, the spec's "total cost / total tokens
   across status-200 requests". Cache hits are status-200 rows with an explicit cost of
   0 and real tokens, so they count and pull the rate down: that is what the team's
   tokens really cost this month given its cache hit rate. Rows with a null cost are
   left out of BOTH sums (their tokens would drag the rate down and inflate the
   estimate). No such rows, or zero tokens, or a zero rate (all traffic free, e.g. only
   cache hits) → ``None``.
-- **Budget used** is the live Redis gate counter when it can be read — the number the
+- **Budget used** is the live Redis gate counter when it can be read, the number the
   budget gate actually enforces (it also carries the judge's own cost, which never
-  becomes a request row) — and the Postgres spend when Redis is down (fail open,
+  becomes a request row), and the Postgres spend when Redis is down (fail open,
   exactly what the gate itself does). **Dollars remaining** is the cap minus that,
   floored at 0. **Estimated tokens remaining** = dollars remaining / blended rate,
   floored to an int; ``None`` whenever the rate is ``None``. Never a divide-by-zero,
@@ -62,7 +62,7 @@ _MONEY = Decimal("0.000001")
 
 
 def month_start(now: datetime | None = None) -> datetime:
-    """The first instant of the current UTC month — the dashboard's "this month"."""
+    """The first instant of the current UTC month, the dashboard's "this month"."""
     now = now or datetime.now(timezone.utc)
     return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
 
@@ -75,7 +75,7 @@ def month_label(now: datetime | None = None) -> str:
 def as_decimal(value) -> Decimal | None:
     """Coerce a stored money value to Decimal. None stays None (unknown, not zero).
 
-    A non-finite value (NaN, Infinity — legal in a NUMERIC column and in a Redis
+    A non-finite value (NaN, Infinity, legal in a NUMERIC column and in a Redis
     string, never written by slice) is unknown too: it must render as a dash, not
     crash the endpoint.
     """
@@ -109,7 +109,7 @@ def is_unpriced(row: dict) -> bool:
 
     Only status-200 rows count. A gate reject or an error never reached a provider (a
     real nothing, stored as null), and a cache hit stores an explicit 0, so neither is
-    "unpriced" — only a served answer on an unpriced model, or a stream whose usage
+    "unpriced", only a served answer on an unpriced model, or a stream whose usage
     never arrived, is.
     """
     return row.get("status") == 200 and as_decimal(row.get("cost_usd")) is None
@@ -257,12 +257,12 @@ def per_team(rows: list[dict]) -> tuple[list[dict], dict]:
 
 
 def account_bucket(rows: list[dict], *, label: str | None = None) -> dict:
-    """One bucket over *all* of an account's rows — every team label and none alike.
+    """One bucket over *all* of an account's rows, every team label and none alike.
 
     Phase 12: the budget cap and its gate counter are per account, not per team label,
     so the dashboard's one budget meter is built from this. Same shape as a ``per_team``
     bucket (``spend`` / ``priced_cost_200`` / ``tokens_200`` for ``team_view``), but the
-    rows are not partitioned by ``team`` — a NULL team label is the account's traffic
+    rows are not partitioned by ``team``: a NULL team label is the account's traffic
     too. ``label`` is the human name ``team_view`` echoes back (the account's login).
     """
     bucket = {
@@ -315,8 +315,8 @@ def team_view(bucket: dict, budget_usd: Decimal, gate_spend: Decimal | None) -> 
     """The JSON shape for one team given its bucket, the cap, and the live Redis counter.
 
     ``gate_spend`` is the team's Redis budget counter, or None when Redis could not be
-    read. When it is known it is what "budget used" means — it is the number the gate
-    blocks on — and dollars/tokens remaining follow from it; when it is not, the
+    read. When it is known it is what "budget used" means, it is the number the gate
+    blocks on, and dollars/tokens remaining follow from it; when it is not, the
     Postgres spend stands in (fail open, like the gate). Both spend figures are always
     returned, with ``budget_source`` saying which one the meter is built on.
     """
@@ -334,7 +334,7 @@ def team_view(bucket: dict, budget_usd: Decimal, gate_spend: Decimal | None) -> 
         "requests": bucket["requests"],
         # What the record book says the team's requests cost this month.
         "spend_usd": money(spend),
-        # Served requests whose cost is unknown — the budget gate never charged them,
+        # Served requests whose cost is unknown, the budget gate never charged them,
         # so spend_usd (and the meter) exclude them; this says how many there were.
         "unpriced_requests": bucket.get("unpriced", 0),
         "budget_usd": money(budget_usd),

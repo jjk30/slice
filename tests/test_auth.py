@@ -1,4 +1,4 @@
-"""Phase-12 auth tests. Fakes only — no real GitHub, no real Postgres, no real Redis.
+"""Phase-12 auth tests. Fakes only: no real GitHub, no real Postgres, no real Redis.
 
 Layers, mirroring the earlier suites:
 
@@ -272,7 +272,7 @@ def test_hash_is_sha256_and_prefix_is_short():
     key = keymod.mint_key()
     assert keymod.hash_key(key) == __import__("hashlib").sha256(key.encode()).hexdigest()
     assert keymod.key_prefix(key).startswith("slk_live_") and keymod.key_prefix(key).endswith("...")
-    # The prefix reveals only a few chars — never enough to reconstruct the key.
+    # The prefix reveals only a few chars, never enough to reconstruct the key.
     assert len(keymod.key_prefix(key)) < len(key)
 
 
@@ -322,7 +322,7 @@ def test_jwt_valid_round_trips(monkeypatch):
 def test_jwt_none_when_no_secret(monkeypatch):
     monkeypatch.setattr(config, "JWT_SECRET", None)
     assert tokmod.mint_jwt(42) is None
-    # And with no secret configured, every token is rejected — closed, not open.
+    # And with no secret configured, every token is rejected, closed, not open.
     assert tokmod.verify_jwt("anything") is None
 
 
@@ -540,7 +540,7 @@ async def test_login_without_device_field_still_works(client, device_env):
 
 async def test_dashboard_rotate_revokes_every_live_key(client, auth_on, wired_auth, device_env):
     # Two machines each hold a live key; the dashboard "Create new key" kill switch
-    # revokes them all and leaves exactly one — its own, named `dashboard`.
+    # revokes them all and leaves exactly one, its own, named `dashboard`.
     first = await _device_login(client, device="my-laptop")
     account_id = first.json()["account"]["id"]
     await _device_login(client, device="my-desktop")
@@ -992,7 +992,7 @@ async def test_dashboard_key_returns_masked_fields_only(client, auth_on, wired_a
     assert card["prefix"] == keymod.KEY_PREFIX
     assert card["last4"] == key[-4:]
     assert "created_at" in card
-    # The plain key is never stored, so it can never be echoed back — not the whole key,
+    # The plain key is never stored, so it can never be echoed back, not the whole key,
     # and no more of it than the four public tail characters.
     assert key not in r.text
     assert key[len(keymod.KEY_PREFIX):-4] not in r.text

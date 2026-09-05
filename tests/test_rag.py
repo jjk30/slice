@@ -1,6 +1,6 @@
 """Phase-6 RAG tests: embeddings, the per-team retriever, and the router hint.
 
-Split by cost. The embeddings and seeded-index tests load the real local model —
+Split by cost. The embeddings and seeded-index tests load the real local model,
 nothing here reaches a network at inference once the weights are cached. The router
 tests lean on fakes: a ``FakeRetriever`` of canned neighbors and the same
 ``SpyClassify`` judge the phase-5 suite uses, so the RAG wiring can be checked
@@ -101,7 +101,7 @@ async def _route(payload, *, team="acme", classify=None, retriever=None):
         {},  # headers
         team,
         None,  # redis
-        None,  # httpx client — the fake judge ignores it
+        None,  # httpx client, the fake judge ignores it
         _NoRules(),
         classify=classify or SpyClassify(),
         retriever=retriever,
@@ -285,7 +285,7 @@ async def test_rag_disabled_is_identical_to_phase_5(monkeypatch):
 
     assert retriever.calls == 0  # never consulted
     assert decision.rag is None  # no x-slice-rag header
-    assert spy.hints[0] is None  # judge got no hint — phase-5 behavior
+    assert spy.hints[0] is None  # judge got no hint, phase-5 behavior
     assert decision.served_model == EASY_MODEL
     assert decision.reason == "auto"
 
@@ -548,7 +548,7 @@ def test_prompt_extraction_only_first_4000_when_joined():
 def _seed_index_dir(base, team="team-a"):
     """Create a store with one team directory that *looks* like it has a built index,
     so load_default() decides there is something to warm (the files' contents don't
-    matter — the warm step is faked)."""
+    matter, the warm step is faked)."""
     team_dir = base / team
     team_dir.mkdir(parents=True)
     (team_dir / INDEX_FILENAME).write_bytes(b"not-a-real-index")

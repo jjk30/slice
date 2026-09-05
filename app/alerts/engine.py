@@ -3,7 +3,7 @@
 The request path touches exactly one thing here: ``fire(team, kind, detail)``, called
 from the two spots in ``app.redis_layer`` that already detect the budget warn (the
 once-per-month latch in ``add_cost``) and the block (``check_budget``). ``fire`` does
-``asyncio.create_task(send_alert(...))`` and returns at once — nothing is awaited by
+``asyncio.create_task(send_alert(...))`` and returns at once: nothing is awaited by
 the request, and with ``ALERTS_ENABLED`` off it returns before creating anything.
 
 ``send_alert`` runs inside that detached task and never raises: the whole body is
@@ -19,8 +19,8 @@ a traceback in the request's task. Per call:
    ``acct:<id>`` whenever the alert carries an account id, so two accounts never share
    a window even if their labels collide; the team label is the scope only for an
    alert with no account (local single-tenant mode).
-3. Phase 25b: the email recipient is resolved per account — the account's saved
-   profile email (``accounts.email``) — and falls back to the channel's configured
+3. Phase 25b: the email recipient is resolved per account, the account's saved
+   profile email (``accounts.email``), and falls back to the channel's configured
    ``ALERT_EMAIL_TO`` when the account has no saved email, when the alert carries no
    account, when the account is the operator (``SLICE_OPERATOR_ACCOUNT_ID``), or when
    the store cannot be read. Only the email channel uses it.
@@ -40,7 +40,7 @@ import logging
 from datetime import datetime, timezone
 
 from app import config
-from app.alerts.channels import (  # noqa: F401 — KIND_* re-exported for the wire-in sites.
+from app.alerts.channels import (  # noqa: F401  # KIND_* re-exported for the wire-in sites.
     KIND_BLOCK,
     KIND_SCAN,
     KIND_WARN,
@@ -57,7 +57,7 @@ from app.db import (
 
 logger = logging.getLogger("slice.gateway")
 
-# Exact key shape (no "slice:" prefix — this is the documented name). ``{team}`` is the
+# Exact key shape (no "slice:" prefix, this is the documented name). ``{team}`` is the
 # cooldown scope: ``acct:<id>`` for an alert with an account id, else the team label.
 COOLDOWN_KEY = "alert:cooldown:{team}:{kind}"
 
@@ -110,7 +110,7 @@ class AlertEngine:
             ttl = max(1, int(config.ALERT_COOLDOWN_SECONDS))
             claimed = await self.redis.set(cooldown_key(team, kind), b"1", nx=True, ex=ttl)
             return not claimed
-        except Exception as exc:  # noqa: BLE001 — Redis down: send anyway.
+        except Exception as exc:  # noqa: BLE001  # Redis down: send anyway.
             logger.debug(
                 json.dumps({"event": "redis_skip", "feature": "alert_cooldown", "error": str(exc)})
             )
@@ -131,7 +131,7 @@ class AlertEngine:
             return None
         try:
             row = await db.get_account(account_id)
-        except Exception as exc:  # noqa: BLE001 — a sick store means the operator hears instead.
+        except Exception as exc:  # noqa: BLE001  # a sick store means the operator hears instead.
             logger.debug(
                 json.dumps({"event": "alert_recipient_lookup_failed", "account_id": account_id, "error": str(exc)})
             )
@@ -160,7 +160,7 @@ class AlertEngine:
             return
         try:
             await self.database.record_alert(record)
-        except Exception as exc:  # noqa: BLE001 — Database swallows its own errors; belt and braces.
+        except Exception as exc:  # noqa: BLE001  # Database swallows its own errors; belt and braces.
             logger.warning(json.dumps({"event": "alert_record_failed", "error": str(exc)}))
 
     async def send(
@@ -208,7 +208,7 @@ class AlertEngine:
                 try:
                     result = await channel.send(alert)
                     ok, error = bool(result.ok), result.error
-                except Exception as exc:  # noqa: BLE001 — a channel that raises is a failed attempt.
+                except Exception as exc:  # noqa: BLE001  # a channel that raises is a failed attempt.
                     ok, error = False, f"{type(exc).__name__}: {exc}"
                 row_detail = dict(detail)
                 if error:
@@ -220,7 +220,7 @@ class AlertEngine:
                 )
                 records.append(record)
                 await self._record(record)
-        except Exception as exc:  # noqa: BLE001 — a detached task must never surface an error.
+        except Exception as exc:  # noqa: BLE001  # a detached task must never surface an error.
             logger.warning(
                 json.dumps({"event": "alert_task_failed", "team": team, "kind": kind, "error": str(exc)})
             )
@@ -247,7 +247,7 @@ def build_engine(*, redis=None, database=None) -> AlertEngine | None:
     """The production engine from config, or None when the kill switch is off.
 
     With the switch on but no channel configured the engine still exists (so a
-    channel added later by config works) — it just no-ops with a debug line.
+    channel added later by config works): it just no-ops with a debug line.
     """
     if not config.ALERTS_ENABLED:
         return None
@@ -265,7 +265,7 @@ async def send_alert(
     """Send one alert through the configured engine. Never raises.
 
     The coroutine the budget paths hand to ``asyncio.create_task`` (see ``fire``).
-    No engine configured means nothing to do — lifespan installs one whenever
+    No engine configured means nothing to do: lifespan installs one whenever
     ``ALERTS_ENABLED`` is on.
     """
     try:
@@ -275,7 +275,7 @@ async def send_alert(
         if engine is None:
             return []
         return await engine.send(team, kind, detail, account_id=account_id)
-    except Exception as exc:  # noqa: BLE001 — never into the caller's task.
+    except Exception as exc:  # noqa: BLE001  # never into the caller's task.
         logger.warning(
             json.dumps({"event": "alert_task_failed", "team": team, "kind": kind, "error": str(exc)})
         )

@@ -2,11 +2,11 @@
 
 Two gates, cheap and pure, both off the request path's critical section:
 
-- **trigger** — only requests that were served *cheaper than asked* are worth
+- **trigger**: only requests that were served *cheaper than asked* are worth
   scoring: routed down on the auto path (``routed_from`` is set) or served by the
   agent loop passing on a cheap rung (its header starts with ``pass``). Everything
   else the client got exactly the model it requested, so there is nothing to grade.
-- **sample** — of those, keep a random fraction (``EVAL_SAMPLE_RATE``). Rate 0
+- **sample**: of those, keep a random fraction (``EVAL_SAMPLE_RATE``). Rate 0
   keeps none (evaluation is off), rate 1 keeps all. This is the entire cost control:
   scoring is an out-of-band LLM call, so only a small sample ever runs it.
 """

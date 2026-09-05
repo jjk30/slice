@@ -9,11 +9,11 @@
 #
 # The bulky, static config (docker-compose.yml, Caddyfile, prometheus.yml, the
 # grafana provisioning tree) lives in a private S3 bucket and is pulled with
-# `aws s3 sync` — this keeps the rendered user_data well under AWS's 16KB limit.
+# `aws s3 sync`: this keeps the rendered user_data well under AWS's 16KB limit.
 # Secrets are NEVER in S3: they are fetched from Secrets Manager here and written
 # into /opt/slice/.env and /opt/slice/grafana.env at boot. The Postgres password
 # is its own secret (slice/ec2-db), so it is never inlined into the rendered
-# user_data or the compose file — it is fetched here and passed to compose via the
+# user_data or the compose file: it is fetched here and passed to compose via the
 # shell environment (compose interpolates $${POSTGRES_PASSWORD} from it).
 #
 # Idempotent and safe to re-run: it re-syncs config, re-writes the env files, and
@@ -100,11 +100,11 @@ export API_DOMAIN="${api_domain}"
 export GRAFANA_DOMAIN="${grafana_domain}"
 
 # --- Secret env files (never in S3) ----------------------------------------
-# .env — the env vars the gateway expects, DATABASE_URL embedding the Postgres password
+# .env: the env vars the gateway expects, DATABASE_URL embedding the Postgres password
 # fetched above (never rendered into user_data or the compose file). It ALSO carries the
 # six compose-interpolation vars (POSTGRES_PASSWORD/DB_USERNAME/DB_NAME/GATEWAY_IMAGE/
 # API_DOMAIN/GRAFANA_DOMAIN) plus AWS_REGION: the boot shell exports them (below/above),
-# but a later manual `docker compose` over SSM has no such exports — compose auto-reads
+# but a later manual `docker compose` over SSM has no such exports: compose auto-reads
 # this .env, so those runs resolve $${...} too instead of failing with "no image specified".
 cat > /opt/slice/.env <<EOF
 DATABASE_URL=postgresql://$DB_USERNAME:$POSTGRES_PASSWORD@postgres:5432/$DB_NAME
@@ -129,7 +129,7 @@ EOF
 [ -n "$SCANNER_TEMPLATE_URL" ] && echo "SCANNER_TEMPLATE_URL=$SCANNER_TEMPLATE_URL" >> /opt/slice/.env
 chmod 600 /opt/slice/.env
 
-# grafana.env — kept SEPARATE from the app .env so the gateway's secrets never enter
+# grafana.env: kept SEPARATE from the app .env so the gateway's secrets never enter
 # the Grafana container. Only the GF_* config Grafana reads directly.
 cat > /opt/slice/grafana.env <<EOF
 GF_SECURITY_ADMIN_USER=admin

@@ -15,7 +15,7 @@ terraform {
   # State is intentionally LOCAL for this cheap always-on stack. There is no
   # remote backend here: the box is single-instance and disposable, so the
   # convenience of local state outweighs remote locking. terraform.tfstate is
-  # gitignored (it holds the generated Postgres password) — this is accepted.
+  # gitignored (it holds the generated Postgres password): this is accepted.
 }
 
 provider "aws" {

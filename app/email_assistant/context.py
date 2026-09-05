@@ -6,7 +6,7 @@ savings, request counts and top models; ``recent_rows`` for the last calls; the 
 Redis budget counter for "budget used" (Postgres spend when Redis is down, exactly like
 the dashboard meter); the newest scan run's findings; and the month's AWS cost rows when
 the account is connected. Nothing here writes anywhere, calls AWS, or touches rules or
-caps — the assistant answers from stored data only.
+caps, the assistant answers from stored data only.
 
 Every section is guarded on its own: a read that fails becomes "unknown" in the text,
 never an exception, so a down Redis or an empty findings table still yields a context
@@ -166,11 +166,17 @@ async def _cost_lines(db, account_id: int, storage_scope, now: datetime) -> list
 
 
 async def aws_connected(db, account_id: int) -> bool:
-    """True when the account's ``aws_connections`` row is ``connected`` with a role ARN.
+    """True when the scanner has an AWS account to scan for ``account_id``.
 
-    The same read the scanner makes (``db.get_connection``); a failed read counts as
-    not connected, never as an error.
+    The operator (``scanner_service.is_operator``, the same check ``resolve_target`` makes)
+    has no ``aws_connections`` row: the scanner scans slice's own AWS account for it in own
+    mode and stores the findings and cost rows under the own scope, so it counts as
+    connected exactly while own-mode scanning is on (``SCANNER_ENABLED``). Every other
+    account needs a ``connected`` row with a role ARN, the same read the scanner makes
+    (``db.get_connection``); a failed read counts as not connected, never as an error.
     """
+    if scanner_service.is_operator(account_id):
+        return bool(config.SCANNER_ENABLED)
     try:
         conn = await db.get_connection(account_id)
     except Exception as exc:  # noqa: BLE001

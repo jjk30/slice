@@ -6,7 +6,7 @@ task, and returns. Scoring, its LLM judge, and the database write all happen aft
 response is gone, and every failure is swallowed. ``EVAL_SAMPLE_RATE=0`` turns the whole
 thing off, imports nothing heavy, and cannot break startup.
 
-Part 2, LangSmith tracing, lives in ``tracing`` and is pure env-var configuration —
+Part 2, LangSmith tracing, lives in ``tracing`` and is pure env-var configuration,
 see ``configure_tracing``.
 """
 
@@ -41,7 +41,7 @@ __all__ = [
 def build_default_evaluator() -> "RagasEvaluator | None":
     """The evaluator to hang on app.state, or None when evaluation is off.
 
-    Rate 0 means no scoring ever runs, so no evaluator is built — and because
+    Rate 0 means no scoring ever runs, so no evaluator is built, and because
     RagasEvaluator construction imports nothing heavy (ragas and torch load lazily on
     the first real score), even an enabled-but-idle gateway pays almost nothing here.
     """

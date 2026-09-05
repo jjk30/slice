@@ -1,4 +1,4 @@
-"""Phase-18a/b AWS scanner tests. Stubbed boto3 (botocore Stubber) and fakes only — no real
+"""Phase-18a/b AWS scanner tests. Stubbed boto3 (botocore Stubber) and fakes only: no real
 AWS, no real Redis, no real database.
 
 Layers:
@@ -85,7 +85,7 @@ def _client_error(code: str, message: str, op: str = "AssumeRole") -> ClientErro
 class FakeSession:
     """A stand-in for boto3.Session: returns pre-stubbed clients by service name.
 
-    A service with no stub raises when built, which the checks catch and fail open on —
+    A service with no stub raises when built, which the checks catch and fail open on,
     exactly what a denied or absent client does in production.
     """
 
@@ -757,7 +757,7 @@ async def test_scan_email_renders_s3_public_doc_link(monkeypatch, scan_alerts_on
         "Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/"
         "access-control-block-public-access.html" in body
     )
-    assert "—" not in body  # no em dash anywhere
+    assert "\u2014" not in body  # no em dash anywhere
 
 
 # --- Phase 24b: expectations ------------------------------------------------
@@ -845,7 +845,7 @@ async def test_email_says_how_many_expected_findings_were_skipped(monkeypatch, s
     body = body_for(alert)
     assert "1 expected finding not shown. Manage them on the dashboard." in body
     assert "acme-site" not in body
-    assert "—" not in body
+    assert "\u2014" not in body
 
 
 async def test_expectations_read_failure_skips_nothing(monkeypatch, scan_alerts_on):
@@ -899,7 +899,7 @@ async def test_cooldown_collapses_repeated_new_highs(monkeypatch, scan_alerts_on
 
 
 async def test_alert_cooldown_is_per_account(monkeypatch, scan_alerts_on):
-    """A new high in account A and in account B each alert — cooldown is keyed per account."""
+    """A new high in account A and in account B each alert: cooldown is keyed per account."""
     channel = scan_alerts_on
     monkeypatch.setattr(
         service, "run_scan_graph",
