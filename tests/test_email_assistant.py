@@ -842,6 +842,14 @@ def test_answer_cap_and_prompt_rules():
             "the user to answer well, ask one short question and stop. When the user answers "
             "a question you asked, use their answer." in system
         )
+        # The rewrite rule (a shorter or simpler version of an earlier answer is a rewrite
+        # of that answer, from that answer only), in both prompts too.
+        assert (
+            "If the user asks for a shorter, simpler, or longer version of an earlier answer, "
+            "rewrite that earlier answer as asked. Do not answer a new question. Use only what "
+            "the earlier answer said. Do not add new facts, numbers, or services that were not "
+            "in it. If the earlier answer did not cover something, say so instead of guessing." in system
+        )
         assert "\u2014" not in system
     assert GENERAL_CONTEXT_HEADING in GENERAL_SYSTEM_PROMPT
     assert GENERAL_TAILORED_OPENER in GENERAL_SYSTEM_PROMPT
