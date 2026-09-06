@@ -92,6 +92,7 @@ from app.guardrails import (
     THREAD_HEADING,
     build_engine,
     format_thread_turns,
+    record_event,
 )
 
 logger = logging.getLogger("slice.gateway")
@@ -1024,14 +1025,14 @@ class EmailAssistant:
         question in context; an empty list leaves the rail prompt exactly as it was."""
         step = "guardrail_input"
         if self.guardrails is None:
-            self._log(step, event, account_id, "blocked", reason="no_engine")
+            self._block(step, "input", event, account_id, reason="no_engine")
             return None
         outcome = await self.guardrails.classify_input(question, turns=turns)
         if outcome.errored:
-            self._log(step, event, account_id, "blocked", reason=f"rail_error: {outcome.reason}")
+            self._block(step, "input", event, account_id, reason=f"rail_error: {outcome.reason}")
             return None
         if outcome.blocked or outcome.label not in (LABEL_OWN_DATA, LABEL_GENERAL):
-            self._log(step, event, account_id, "blocked", reason=outcome.reason or "unknown label", label=outcome.label)
+            self._block(step, "input", event, account_id, reason=outcome.reason or "unknown label", label=outcome.label)
             return None
         self._log(step, event, account_id, "passed", label=outcome.label)
         return outcome.label
@@ -1039,20 +1040,40 @@ class EmailAssistant:
     async def _rail_passes(self, rail: str, text: str, event: InboundEvent, account_id: int, *, bucket: str | None = None) -> bool:
         step = f"guardrail_{rail}"
         if self.guardrails is None:
-            self._log(step, event, account_id, "blocked", reason="no_engine", bucket=bucket)
+            self._block(step, rail, event, account_id, reason="no_engine", bucket=bucket)
             return False
         if rail == "input":
             outcome = await self.guardrails.check_input(text)
         else:
             outcome = await self.guardrails.check_output(text, bucket=bucket)
         if outcome.blocked:
-            self._log(step, event, account_id, "blocked", reason=outcome.reason, bucket=bucket)
+            self._block(step, rail, event, account_id, reason=outcome.reason, bucket=bucket)
             return False
         if outcome.errored:
-            self._log(step, event, account_id, "blocked", reason=f"rail_error: {outcome.reason}", bucket=bucket)
+            self._block(step, rail, event, account_id, reason=f"rail_error: {outcome.reason}", bucket=bucket)
             return False
         self._log(step, event, account_id, "passed", bucket=bucket)
         return True
+
+    def _block(self, step: str, rail: str, event: InboundEvent, account_id: int, *, reason: str | None, **fields) -> None:
+        """Log a blocked mail and count it (phase 28).
+
+        The count is the same ``guardrail_events`` row a blocked gateway request writes,
+        with ``source="email"``, so the dashboard's "guardrail blocks this month" tile sees
+        email blocks too. Every block verdict counts, a rail that errored or a missing
+        engine included: the mail got the fixed line either way (fail closed). The write
+        is a detached task kept in ``_pending`` so shutdown and tests drain it. A mail from
+        an unknown sender never reaches a rail, so it is never counted: there is no account
+        to attribute it to.
+        """
+        self._log(step, event, account_id, "blocked", reason=reason, **fields)
+        task = record_event(
+            self.db if self._db_ready() else None,
+            team=None, rail=rail, action="blocked", reason=reason, account_id=account_id, source="email",
+        )
+        if task is not None:
+            _pending.add(task)
+            task.add_done_callback(_pending.discard)
 
     async def _send(self, event: InboundEvent, account_id: int, text: str, verdict: str) -> None:
         try:

@@ -40,6 +40,7 @@ EXPECTED_NAMES = [
     "slice_cache_events_total",
     "slice_router_decisions_total",
     "slice_budget_events_total",
+    "slice_guardrail_events_total",
     "slice_agent_escalations_total",
 ]
 

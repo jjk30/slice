@@ -3,7 +3,8 @@
 Endpoints under /dashboard, all read-only:
 
 - ``GET /dashboard/summary``: this month's spend, requests, cache hits, routed count,
-  honest savings, the phase-8 eval pass rate, and the phase-9 guardrail block count.
+  honest savings, the phase-8 eval pass rate, and the phase-9 guardrail block count
+  (split by source since phase 28: the gateway's rails and the email assistant's).
 - ``GET /dashboard/models``: per-model request count and spend, this month.
 - ``GET /dashboard/teams``: the account's budget (spend vs cap, dollars remaining,
   and an estimate of tokens remaining at its blended rate; null when not estimable)
@@ -45,7 +46,7 @@ from app.auth.middleware import get_authenticator, read_account
 from app.auth.routes import DASHBOARD_KEY_NAME
 from app.dashboard import stats
 from app.dashboard.broadcaster import EVENT_NAME, get_broadcaster
-from app.db import summarize_eval_rows, summarize_guardrail_rows
+from app.db import GUARDRAIL_SOURCE_EMAIL, GUARDRAIL_SOURCE_GATEWAY, guardrail_source, summarize_eval_rows, summarize_guardrail_rows
 from app.scanner.routes import _cost_summary, _storage_scope
 
 logger = logging.getLogger("slice.gateway")
@@ -99,6 +100,21 @@ def _blocked_by_rail(rows: list[dict]) -> list[dict]:
     return summarize_guardrail_rows(blocked)["by_rail"]
 
 
+def _blocked_by_source(rows: list[dict]) -> dict[str, int]:
+    """Blocks split by who blocked (phase 28): the email assistant's rails and the gateway's.
+
+    Both keys are always present, so the tile can print "0 email, 3 gateway" without
+    guessing; a row with no source (pre-migration) is the gateway's.
+    """
+    counts = {GUARDRAIL_SOURCE_EMAIL: 0, GUARDRAIL_SOURCE_GATEWAY: 0}
+    for row in rows:
+        if row.get("action") != "blocked":
+            continue
+        source = guardrail_source(row)
+        counts[source] = counts.get(source, 0) + 1
+    return counts
+
+
 def _action_count(summary: dict, action: str) -> int:
     return next((a["count"] for a in summary["by_action"] if a["action"] == action), 0)
 
@@ -140,6 +156,7 @@ async def summary(request: Request):
             "blocked": _action_count(guardrail_summary, "blocked"),
             "errors": _action_count(guardrail_summary, "error"),
             "blocked_by_rail": _blocked_by_rail(guardrail_rows),
+            "blocked_by_source": _blocked_by_source(guardrail_rows),
         },
     }
 

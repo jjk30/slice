@@ -564,9 +564,9 @@ async def test_summary_endpoint_shape(client, dash_db):
         {"model": HAIKU, "routed_from": OPUS, "passed": False},
     ]
     dash_db.guardrail_rows = [
-        {"rail": "input", "action": "blocked", "reason": "x", "team": "t", "created_at": None},
-        {"rail": "output", "action": "blocked", "reason": "y", "team": "t", "created_at": None},
-        {"rail": "input", "action": "error", "reason": "boom", "team": "t", "created_at": None},
+        {"rail": "input", "action": "blocked", "reason": "x", "team": "t", "source": "gateway", "created_at": None},
+        {"rail": "output", "action": "blocked", "reason": "y", "team": None, "source": "email", "created_at": None},
+        {"rail": "input", "action": "error", "reason": "boom", "team": "t", "source": "email", "created_at": None},
     ]
 
     r = await client.get("/dashboard/summary")
@@ -588,6 +588,8 @@ async def test_summary_endpoint_shape(client, dash_db):
         {"rail": "input", "count": 1},
         {"rail": "output", "count": 1},
     ]
+    # Phase 28: blocks split by who blocked; the email error is not a block.
+    assert body["guardrails"]["blocked_by_source"] == {"email": 1, "gateway": 1}
     # Every read was scoped to this month.
     assert all(s == stats.month_start() for s in dash_db.since_calls)
 
@@ -600,7 +602,10 @@ async def test_summary_endpoint_empty_month_is_honest_zeros(client, dash_db):
     assert body["spend_usd"] == 0.0
     assert body["savings_usd"] == 0.0
     assert body["eval"] == {"count": 0, "passed": 0, "pass_rate": None}
-    assert body["guardrails"] == {"total": 0, "blocked": 0, "errors": 0, "blocked_by_rail": []}
+    assert body["guardrails"] == {
+        "total": 0, "blocked": 0, "errors": 0, "blocked_by_rail": [],
+        "blocked_by_source": {"email": 0, "gateway": 0},
+    }
 
 
 AWS_COST_EMPTY = {"yesterday": None, "month_to_date": None, "currency": "USD", "fetched_at": None, "daily": []}

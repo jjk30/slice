@@ -17,6 +17,18 @@ const blockedCount = computed(() => {
 const blocked = computed(() => (props.guardrails ? integer(props.guardrails.blocked) : null))
 const tone = computed(() => (blockedCount.value > 0 ? 'tone-cherry' : ''))
 
+// "{email} email, {gateway} gateway": who blocked (the email assistant's rails or the
+// gateway's), from summary.guardrails.blocked_by_source. "none yet" when both are 0.
+// Empty (no line) until the summary has loaded a block count at all.
+const bySource = computed(() => {
+  if (blockedCount.value === null) return ''
+  const split = props.guardrails?.blocked_by_source || {}
+  const email = typeof split.email === 'number' ? split.email : 0
+  const gateway = typeof split.gateway === 'number' ? split.gateway : 0
+  if (email === 0 && gateway === 0) return 'none yet'
+  return `${integer(email)} email, ${integer(gateway)} gateway`
+})
+
 // "input N · output N", omitted entirely when blocked_by_rail is empty.
 const byRail = computed(() => {
   const rows = props.guardrails?.blocked_by_rail
@@ -36,6 +48,7 @@ const errors = computed(() => {
     <p class="kpi-label">guardrail blocks this month</p>
     <p v-if="blocked === null && !failed" class="loading">Loading…</p>
     <p v-else class="kpi-value" :class="tone">{{ blocked ?? '\u2014' }}</p>
+    <p v-if="bySource" class="kpi-sub by-source">{{ bySource }}</p>
     <p v-if="byRail" class="kpi-sub">{{ byRail }}</p>
     <p v-if="errors" class="kpi-sub">{{ errors }}</p>
   </section>

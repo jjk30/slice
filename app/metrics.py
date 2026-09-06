@@ -80,6 +80,12 @@ BUDGET_EVENTS = Counter(
     ["kind"],
 )
 
+GUARDRAIL_EVENTS = Counter(
+    "slice_guardrail_events",
+    "Guardrail rail events, by source (gateway|email), rail (input|output) and action (blocked|error).",
+    ["source", "rail", "action"],
+)
+
 AGENT_ESCALATIONS = Counter(
     "slice_agent_escalations",
     "Agent-loop escalations to a more capable model.",
@@ -176,6 +182,14 @@ def record_budget_event(kind: str) -> None:
             BUDGET_EVENTS.labels(kind=kind).inc()
     except Exception:  # noqa: BLE001
         logger.debug("metrics.record_budget_event failed", exc_info=True)
+
+
+def record_guardrail_event(source: str, rail: str, action: str) -> None:
+    """Increment the guardrail event counter (phase 28: split by source). Never raises."""
+    try:
+        GUARDRAIL_EVENTS.labels(source=str(source), rail=str(rail), action=str(action)).inc()
+    except Exception:  # noqa: BLE001
+        logger.debug("metrics.record_guardrail_event failed", exc_info=True)
 
 
 def record_agent_escalation() -> None:

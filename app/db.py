@@ -54,13 +54,13 @@ SELECT_EVAL_ROWS = (
 
 # --- Guardrail events (phase 9) ---------------------------------------------
 INSERT_GUARDRAIL = """
-INSERT INTO guardrail_events (request_id, team, rail, action, reason, account_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO guardrail_events (request_id, team, rail, action, reason, account_id, source)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 """
 # The summary needs the rail/action for counting and created_at for the recent list;
 # summarize_guardrail_rows does the aggregation so it can be tested without a database.
 SELECT_GUARDRAIL_ROWS = """
-SELECT rail, action, reason, team, created_at FROM guardrail_events
+SELECT rail, action, reason, team, source, created_at FROM guardrail_events
 WHERE ($1::bigint IS NULL OR account_id = $1)
 ORDER BY id DESC
 """
@@ -349,7 +349,7 @@ SELECT_EVAL_ROWS_SINCE = (
     "WHERE created_at >= $1 AND ($2::bigint IS NULL OR account_id = $2)"
 )
 SELECT_GUARDRAIL_ROWS_SINCE = """
-SELECT rail, action, reason, team, created_at
+SELECT rail, action, reason, team, source, created_at
 FROM guardrail_events
 WHERE created_at >= $1 AND ($2::bigint IS NULL OR account_id = $2)
 ORDER BY id DESC
@@ -430,12 +430,14 @@ class EvalRecord:
 
 @dataclass(frozen=True)
 class GuardrailEvent:
-    """One guardrail rail firing on one agent-loop request (phase 9).
+    """One guardrail rail firing on one request or one mail (phase 9, phase 28).
 
     ``rail`` is "input" or "output"; ``action`` is "blocked" (the rail stopped the
     request) or "error" (the rails engine failed and the loop failed open). ``reason``
     is a short note, the rail name for a block, the error string for an error.
     ``request_id`` is usually None, exactly like EvalRecord, see the migration.
+    ``source`` says whose rails fired (phase 28): "gateway" for the agent loop,
+    "email" for the email assistant, so the dashboard can split its block count.
     """
 
     team: str | None
@@ -445,6 +447,7 @@ class GuardrailEvent:
     request_id: int | None = None
     # The account whose request the rail fired on (phase 12); None when unknown.
     account_id: int | None = None
+    source: str = "gateway"
 
 
 @dataclass(frozen=True)
@@ -541,21 +544,34 @@ def summarize_alert_rows(rows: list[dict], *, recent_limit: int = 10) -> dict:
     }
 
 
+GUARDRAIL_SOURCE_GATEWAY = "gateway"
+GUARDRAIL_SOURCE_EMAIL = "email"
+
+
+def guardrail_source(row: dict) -> str:
+    """The row's source label; a row from before migration 020 has none and is the gateway's."""
+    return row.get("source") or GUARDRAIL_SOURCE_GATEWAY
+
+
 def summarize_guardrail_rows(rows: list[dict], *, recent_limit: int = 10) -> dict:
-    """Aggregate raw guardrail rows into per-rail / per-action counts plus recents.
+    """Aggregate raw guardrail rows into per-rail / per-action / per-source counts plus recents.
 
     Each row needs ``rail`` and ``action``; the recent list also uses ``reason``,
-    ``team`` and ``created_at``. A pure function so the summary shape can be tested
-    against seeded rows without a database. ``recent`` is the most recent events,
+    ``team``, ``source`` and ``created_at``. A row with no ``source`` (written before
+    migration 020) counts as the gateway's. A pure function so the summary shape can be
+    tested against seeded rows without a database. ``recent`` is the most recent events,
     newest first, capped at ``recent_limit``.
     """
     by_rail: dict = {}
     by_action: dict = {}
+    by_source: dict = {}
     for row in rows:
         rail = row.get("rail")
         action = row.get("action")
+        source = guardrail_source(row)
         by_rail[rail] = by_rail.get(rail, 0) + 1
         by_action[action] = by_action.get(action, 0) + 1
+        by_source[source] = by_source.get(source, 0) + 1
 
     def _created(row: dict):
         # Sort key that tolerates a missing timestamp (sorts it oldest).
@@ -571,6 +587,7 @@ def summarize_guardrail_rows(rows: list[dict], *, recent_limit: int = 10) -> dic
             "action": row.get("action"),
             "reason": row.get("reason"),
             "team": row.get("team"),
+            "source": guardrail_source(row),
             "created_at": _iso(row.get("created_at")),
         }
         for row in sorted(rows, key=_created, reverse=True)[:recent_limit]
@@ -585,6 +602,10 @@ def summarize_guardrail_rows(rows: list[dict], *, recent_limit: int = 10) -> dic
         "by_action": [
             {"action": action, "count": count}
             for action, count in sorted(by_action.items(), key=lambda kv: (kv[0] or ""))
+        ],
+        "by_source": [
+            {"source": source, "count": count}
+            for source, count in sorted(by_source.items(), key=lambda kv: (kv[0] or ""))
         ],
         "recent": recent,
     }
@@ -781,6 +802,7 @@ class Database:
                     record.action,
                     record.reason,
                     record.account_id,
+                    record.source,
                 )
         except Exception as exc:
             # The response is already out the door; note it and drop the row.

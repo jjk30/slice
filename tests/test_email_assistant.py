@@ -115,6 +115,8 @@ class FakeEmailDB:
         self.findings: list[dict] = []
         self.connection = None
         self.costs: list[dict] = []
+        # Phase 28: the guardrail rows a blocked mail writes, the gateway's shape.
+        self.guardrail_events: list = []
 
     def seed_account(self, account_id, *, login, email):
         self.accounts.append({"id": account_id, "github_id": None, "github_login": login, "email": email})
@@ -157,6 +159,9 @@ class FakeEmailDB:
 
     async def aws_cost_rows_since(self, scope, since):
         return list(self.costs)
+
+    async def record_guardrail(self, record):
+        self.guardrail_events.append(record)
 
 
 class FakeEngine:
@@ -590,6 +595,46 @@ async def test_general_reply_gets_the_disclaimer_even_when_the_model_forgets(cli
     assert "\u2014" not in text
     assert text.endswith(FOOTER_GENERAL)
     assert env.db.replies["em_1"]["verdict"] == "answered_general"
+
+
+async def test_email_blocks_count_as_guardrail_events_for_the_account(client, env):
+    """A blocked mail lands in guardrail_events exactly like a blocked request (phase 28),
+    with source "email", so the dashboard tile counts it: the input rail and the output
+    rail alike, attributed to the sender's account. A fail-closed block (a rail error)
+    counts too. An unknown sender never reaches a rail, so nothing is recorded for it."""
+    env.engine.input_outcome = RailOutcome(blocked=True, reason="topic rail", label=LABEL_BLOCKED)
+    await post(client, received_event(email_id="em_in"))
+    assert env.db.replies["em_in"]["verdict"] == "blocked_input"
+    events = env.db.guardrail_events
+    assert [(e.source, e.rail, e.action, e.reason, e.account_id, e.team) for e in events] == [
+        ("email", "input", "blocked", "topic rail", 7, None),
+    ]
+
+    env.engine.input_outcome = RailOutcome(label=LABEL_OWN_DATA)
+    env.engine.output_outcome = RailOutcome(blocked=True, reason="self check output")
+    await post(client, received_event(email_id="em_out"))
+    assert env.db.replies["em_out"]["verdict"] == "blocked_output"
+    assert [(e.source, e.rail, e.action, e.reason, e.account_id) for e in events[1:]] == [
+        ("email", "output", "blocked", "self check output", 7),
+    ]
+
+    env.engine.input_outcome = RailOutcome(errored=True, reason="TimeoutError")
+    await post(client, received_event(email_id="em_err"))
+    assert env.db.replies["em_err"]["verdict"] == "blocked_input"
+    assert (events[-1].source, events[-1].rail, events[-1].action, events[-1].reason) == (
+        "email", "input", "blocked", "rail_error: TimeoutError",
+    )
+
+    # An answered mail writes nothing; a stranger's mail writes nothing either.
+    env.engine.input_outcome = RailOutcome(label=LABEL_OWN_DATA)
+    env.engine.output_outcome = RailOutcome()
+    await post(client, received_event(email_id="em_ok"))
+    assert env.db.replies["em_ok"]["verdict"] == "answered_own"
+    await post(client, received_event(email_id="em_stranger", sender="Nobody <nobody@example.com>"))
+    assert env.db.replies["em_stranger"]["account_id"] is None
+    assert len(events) == 3
+    assert env.engine.input_calls[-1] != ""  # the stranger's mail never reached the rail
+    assert len(env.engine.input_calls) == 4
 
 
 async def test_blocked_output_on_a_general_reply_sends_the_fixed_line(client, env):

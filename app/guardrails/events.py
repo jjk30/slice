@@ -1,10 +1,14 @@
 """Fire-and-forget recording of guardrail events (phase 9).
 
 When a rail blocks a request or errors out (fail-open), the gateway calls
-``record_event`` exactly once. It does two things and never blocks the request:
+``record_event`` exactly once; the email assistant calls it the same way when one of
+its rails blocks a mail (phase 28), with ``source="email"``. It does three things and
+never blocks the caller:
 
 - emits one structured log line immediately (synchronous, cheap), so every event is
-  visible in the logs even with no database, and
+  visible in the logs even with no database,
+- bumps the ``slice_guardrail_events`` Prometheus counter, labelled by source, rail and
+  action, and
 - fires the Postgres write into a detached ``asyncio.create_task`` and returns at once.
 
 The write itself (``Database.record_guardrail``) is fire-and-forget and swallows every
@@ -19,7 +23,8 @@ import asyncio
 import json
 import logging
 
-from app.db import GuardrailEvent
+from app import metrics
+from app.db import GUARDRAIL_SOURCE_GATEWAY, GuardrailEvent
 
 logger = logging.getLogger("slice.gateway")
 
@@ -36,9 +41,12 @@ def record_event(
     action: str,
     reason: str | None,
     account_id: int | None = None,
+    source: str = GUARDRAIL_SOURCE_GATEWAY,
 ) -> "asyncio.Task | None":
-    """Log one guardrail event and fire its DB write off into a detached task.
+    """Log one guardrail event, count it, and fire its DB write off into a detached task.
 
+    ``source`` is "gateway" (the agent loop's rails, the default) or "email" (the email
+    assistant's rails), the label the dashboard splits its block count by.
     Returns the task (or None if there is nothing to write or no loop to schedule on).
     Never blocks and never raises: a guardrail event is not worth a request.
     """
@@ -46,6 +54,7 @@ def record_event(
         json.dumps(
             {
                 "event": "guardrail",
+                "source": source,
                 "rail": rail,
                 "action": action,
                 "team": team,
@@ -54,12 +63,15 @@ def record_event(
             }
         )
     )
+    metrics.record_guardrail_event(source, rail, action)
 
     if database is None:
         return None
 
     coro = database.record_guardrail(
-        GuardrailEvent(team=team, rail=rail, action=action, reason=reason, account_id=account_id)
+        GuardrailEvent(
+            team=team, rail=rail, action=action, reason=reason, account_id=account_id, source=source,
+        )
     )
     try:
         task = asyncio.create_task(coro)

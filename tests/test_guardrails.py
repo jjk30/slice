@@ -154,6 +154,7 @@ class FakeGuardrailDB:
                 "action": e.action,
                 "reason": e.reason,
                 "team": e.team,
+                "source": e.source,
                 "created_at": None,
             }
             for e in self.events
@@ -603,9 +604,9 @@ def test_summarize_guardrail_rows_counts_and_recent():
     rows = [
         {"rail": "input", "action": "blocked", "reason": "a", "team": "acme",
          "created_at": dt.datetime(2026, 8, 17, 1, 0, 0)},
-        {"rail": "output", "action": "blocked", "reason": "b", "team": "acme",
+        {"rail": "output", "action": "blocked", "reason": "b", "team": "acme", "source": "email",
          "created_at": dt.datetime(2026, 8, 17, 3, 0, 0)},
-        {"rail": "input", "action": "error", "reason": "c", "team": "beta",
+        {"rail": "input", "action": "error", "reason": "c", "team": "beta", "source": "gateway",
          "created_at": dt.datetime(2026, 8, 17, 2, 0, 0)},
     ]
     summary = summarize_guardrail_rows(rows, recent_limit=2)
@@ -615,6 +616,10 @@ def test_summarize_guardrail_rows_counts_and_recent():
     assert by_rail == {"input": 2, "output": 1}
     by_action = {r["action"]: r["count"] for r in summary["by_action"]}
     assert by_action == {"blocked": 2, "error": 1}
+    # Phase 28: split by source; a row with no source (pre-migration) is the gateway's.
+    by_source = {r["source"]: r["count"] for r in summary["by_source"]}
+    assert by_source == {"email": 1, "gateway": 2}
+    assert [r["source"] for r in summary["recent"]] == ["email", "gateway"]
     # Recent is newest-first and capped at the limit; created_at is ISO-serialized.
     assert len(summary["recent"]) == 2
     assert summary["recent"][0]["reason"] == "b"  # 03:00, newest
@@ -624,7 +629,7 @@ def test_summarize_guardrail_rows_counts_and_recent():
 
 def test_summarize_guardrail_rows_empty():
     summary = summarize_guardrail_rows([])
-    assert summary == {"total": 0, "by_rail": [], "by_action": [], "recent": []}
+    assert summary == {"total": 0, "by_rail": [], "by_action": [], "by_source": [], "recent": []}
 
 
 # ============================================================================
@@ -659,6 +664,8 @@ async def test_input_block_returns_400_and_never_calls_provider(
     assert len(guard_db.events) == 1
     ev = guard_db.events[0]
     assert (ev.rail, ev.action, ev.team) == ("input", "blocked", "acme")
+    # Phase 28: a gateway block is labelled as the gateway's, the default source.
+    assert ev.source == "gateway"
 
 
 @respx.mock
