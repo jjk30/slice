@@ -314,7 +314,8 @@ resource "aws_iam_role_policy" "config_bucket" {
 # ---------------------------------------------------------------------------
 # Nightly Postgres backup bucket. The box runs infra/ec2/scripts/backup.sh from
 # cron, dumps the compose Postgres, and uploads slice-YYYY-MM-DD.dump here. All
-# public access is blocked, and objects expire after 30 days. The bucket name
+# public access is blocked. Objects stay in the default storage class for 30
+# days, move to GLACIER at day 30, and expire at day 365. The bucket name
 # carries no secret (project name plus account id, same scheme as the config
 # bucket).
 # ---------------------------------------------------------------------------
@@ -330,18 +331,24 @@ resource "aws_s3_bucket_public_access_block" "backups" {
   restrict_public_buckets = true
 }
 
-# Expire backups after 30 days. The empty filter applies the rule to every object.
+# Keep dumps as they are for 30 days, then move them to GLACIER, then expire
+# them at day 365. The empty filter applies the rule to every object.
 resource "aws_s3_bucket_lifecycle_configuration" "backups" {
   bucket = aws_s3_bucket.backups.id
 
   rule {
-    id     = "expire-after-30-days"
+    id     = "glacier-at-30-days-expire-at-365"
     status = "Enabled"
 
     filter {}
 
+    transition {
+      days          = 30
+      storage_class = "GLACIER"
+    }
+
     expiration {
-      days = 30
+      days = 365
     }
   }
 }
@@ -364,26 +371,70 @@ resource "aws_iam_role_policy" "backups" {
 }
 
 # ---------------------------------------------------------------------------
-# Access to the CLI-created nightly dump bucket `slice-db-backups-jjk30`. That
-# bucket is NOT managed by Terraform (created out of band, kept that way), so it
-# is referenced here by its literal ARN rather than a resource attribute. The
-# box's nightly cron dumps compose Postgres and uploads slice-YYYY-MM-DD.sql.gz
-# here; the hand-run pipeline failed only on AccessDenied because the instance
-# role could not PutObject. Scope: read/write objects in this one bucket and list
-# it, nothing broader.
+# The hand-made bucket `slice-db-backups-jjk30`. It was created by hand with the
+# CLI and is IMPORTED into this state, not recreated: prevent_destroy guards it
+# so a plan can never delete it. It holds the LoRA judge model (judge-models/),
+# training data (training-data/), site staging files (site-staging/), and old
+# nightly dumps under the slice- prefix that age out. Only the slice- dumps are
+# touched by the lifecycle rule below: they move to GLACIER at day 30 and expire
+# at day 365. The other three prefixes never match that rule and are kept.
+#
+# The instance role gets read/write on objects in this one bucket plus list on
+# the bucket itself, nothing broader.
 # ---------------------------------------------------------------------------
+resource "aws_s3_bucket" "db_backups" {
+  bucket = "slice-db-backups-jjk30"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "db_backups" {
+  bucket                  = aws_s3_bucket.db_backups.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Only objects whose key starts with "slice-" (the old nightly dumps) match.
+# judge-models/, training-data/ and site-staging/ do not start with that prefix
+# and are left alone.
+resource "aws_s3_bucket_lifecycle_configuration" "db_backups" {
+  bucket = aws_s3_bucket.db_backups.id
+
+  rule {
+    id     = "slice-dumps-glacier-at-30-days-expire-at-365"
+    status = "Enabled"
+
+    filter {
+      prefix = "slice-"
+    }
+
+    transition {
+      days          = 30
+      storage_class = "GLACIER"
+    }
+
+    expiration {
+      days = 365
+    }
+  }
+}
+
 data "aws_iam_policy_document" "db_backups" {
   statement {
     sid       = "RwDbBackupObjects"
     effect    = "Allow"
     actions   = ["s3:PutObject", "s3:GetObject"]
-    resources = ["arn:aws:s3:::slice-db-backups-jjk30/*"]
+    resources = ["${aws_s3_bucket.db_backups.arn}/*"]
   }
   statement {
     sid       = "ListDbBackupBucket"
     effect    = "Allow"
     actions   = ["s3:ListBucket"]
-    resources = ["arn:aws:s3:::slice-db-backups-jjk30"]
+    resources = [aws_s3_bucket.db_backups.arn]
   }
 }
 
