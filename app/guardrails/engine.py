@@ -31,9 +31,11 @@ constructing the engine never needs embeddings and never downloads a model at ru
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -73,6 +75,17 @@ _LABEL_RE = re.compile(r"\b(OWN_DATA|GENERAL|BLOCKED)\b", re.IGNORECASE)
 # The heading the email prompts put over the remembered turns of a thread (phase 27).
 THREAD_HEADING = "Earlier in this email thread:"
 
+# The template variable the email prompts read the remembered turns from, and the
+# contextvar behind it. The topic rail renders its own prompt, so it could pass the turns
+# as plain template context; the output rails run inside NeMo's own self-check action,
+# which hands the template only the bot message. So the engine registers
+# ``EARLIER_TURNS_VAR`` as NeMo prompt context (see ``_register_thread_turns``), a callable
+# that reads this contextvar, and every check that has turns sets it for the duration of
+# its one LLM call (``thread_turns``). One source for both rails: "" when there are none,
+# so the Jinja block renders nothing and the prompt is exactly what it was.
+EARLIER_TURNS_VAR = "earlier_turns"
+_earlier_turns: contextvars.ContextVar[str] = contextvars.ContextVar("slice_earlier_turns", default="")
+
 
 def format_thread_turns(turns) -> str:
     """The remembered turns of an email thread as plain text, oldest first, one block per
@@ -82,6 +95,26 @@ def format_thread_turns(turns) -> str:
     for index, turn in enumerate(turns or (), 1):
         blocks.append(f"Turn {index}. The user wrote:\n{turn['q']}\nslice replied:\n{turn['a']}")
     return "\n".join(blocks)
+
+
+@contextmanager
+def thread_turns(turns):
+    """Set the remembered turns the email prompts render, for the checks made inside.
+
+    The value is ``format_thread_turns(turns)``; asyncio tasks started inside (NeMo's own
+    action tasks, ``asyncio.wait_for``) inherit it. Reset on the way out, so nothing
+    leaks into the next check.
+    """
+    token = _earlier_turns.set(format_thread_turns(turns))
+    try:
+        yield
+    finally:
+        _earlier_turns.reset(token)
+
+
+def _register_thread_turns(rails) -> None:
+    """Make ``earlier_turns`` available to every prompt this rails object renders."""
+    rails.runtime.llm_task_manager.register_prompt_context(EARLIER_TURNS_VAR, _earlier_turns.get)
 
 
 def parse_label(text) -> str | None:
@@ -149,7 +182,7 @@ class GuardrailEngine:
             options=self._options_input,
         )
 
-    async def check_output(self, answer: str, bucket: str | None = None) -> RailOutcome:
+    async def check_output(self, answer: str, bucket: str | None = None, turns=()) -> RailOutcome:
         """Run only the output rail on the assembled ``answer``. Never raises; fails open.
 
         The answer is handed to NeMo as the assistant turn to check; a placeholder user
@@ -160,6 +193,13 @@ class GuardrailEngine:
         ``general`` is the second rails object built in the "email_general" mode, whose
         prompt allows general advice. A general check on an engine with no general rails,
         or any other bucket, is an error outcome, so a caller that fails closed blocks.
+
+        ``turns`` are the remembered earlier turns of the email thread, oldest first, each
+        ``{"q", "a"}``, the same ones the topic rail saw. The email output prompts render
+        them under "Earlier in this email thread:" so a reply that only rewrites an earlier
+        answer (shorter, simpler, longer) is judged by that answer's subject instead of
+        being read cold as off topic. No turns means no section. The agent loop never
+        passes any, and its prompts do not read the variable.
         """
         if bucket is None or bucket == LABEL_OWN_DATA:
             rails = self._rails
@@ -169,15 +209,16 @@ class GuardrailEngine:
                 return RailOutcome(errored=True, reason="no general output rail")
         else:
             return RailOutcome(errored=True, reason=f"unknown bucket: {bucket}")
-        return await self._run(
-            RAIL_OUTPUT,
-            messages=[
-                {"role": "user", "content": ""},
-                {"role": "assistant", "content": answer},
-            ],
-            options=self._options_output,
-            rails=rails,
-        )
+        with thread_turns(turns):
+            return await self._run(
+                RAIL_OUTPUT,
+                messages=[
+                    {"role": "user", "content": ""},
+                    {"role": "assistant", "content": answer},
+                ],
+                options=self._options_output,
+                rails=rails,
+            )
 
     async def classify_input(self, prompt: str, turns=()) -> RailOutcome:
         """Run the input rail as a three-way sort (phase 26): the rail answers with a label.
@@ -208,7 +249,8 @@ class GuardrailEngine:
         if self._classify is None:
             return RailOutcome(errored=True, reason="no classifier")
         try:
-            raw = await asyncio.wait_for(self._classify(prompt, turns=list(turns or ())), timeout=self._timeout)
+            with thread_turns(turns):
+                raw = await asyncio.wait_for(self._classify(prompt, turns=list(turns or ())), timeout=self._timeout)
         except Exception as exc:  # noqa: BLE001, timeout, transport, LLM, anything.
             reason = _format_error(exc)
             logger.warning(json.dumps({"event": "guardrail_error", "rail": RAIL_INPUT, "error": reason}))
@@ -308,10 +350,12 @@ def build_engine(mode: str | None = None, general_mode: str | None = None) -> "G
             rails_config = rails_config.model_copy(update={"prompting_mode": mode})
         llm = NoSamplingAdapter(ChatAnthropic(model=config.GUARDRAILS_MODEL))
         rails = LLMRails(config=rails_config, llm=llm)
+        _register_thread_turns(rails)
         general_rails = None
         if general_mode:
             general_config = rails_config.model_copy(update={"prompting_mode": general_mode})
             general_rails = LLMRails(config=general_config, llm=llm)
+            _register_thread_turns(general_rails)
 
         # Each check runs exactly one rail type; everything else (dialog, generation,
         # retrieval) is off, so no bot answer is generated and no embeddings are touched.
@@ -327,13 +371,16 @@ def build_engine(mode: str | None = None, general_mode: str | None = None) -> "G
         # Phase 26: the label-returning form of the input rail. The same task prompt NeMo's
         # self_check_input action renders (so the mode's prompt from prompts.yml is what
         # runs) and the same rails LLM; only the parsing differs. No temperature (see
-        # NoSamplingAdapter), just a small token cap for the one-word answer.
+        # NoSamplingAdapter), just a small token cap for the one-word answer. The earlier
+        # turns reach the template through the registered prompt context, which
+        # ``classify_input`` sets around this call; ``turns`` is the same list, kept on
+        # the signature so the collaborator is honest about what it was asked to judge.
         task_manager = rails.runtime.llm_task_manager
 
         async def classify(user_input: str, turns=()) -> str:
             prompt = task_manager.render_task_prompt(
                 task=Task.SELF_CHECK_INPUT,
-                context={"user_input": user_input, "earlier_turns": format_thread_turns(turns)},
+                context={"user_input": user_input},
             )
             stop = task_manager.get_stop_tokens(task=Task.SELF_CHECK_INPUT)
             response = await llm_call(rails.llm, prompt, stop=stop, llm_params={"max_tokens": 16})

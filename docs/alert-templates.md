@@ -256,8 +256,11 @@ output rail written for its bucket: the `email` output prompt for own data, the
 cost, AI models and AI cost, requires one of the two openers first, lets a tailored reply
 repeat the findings and cost figures slice read, and still blocks commands, scripts, code,
 IAM policy text, guesses about the sender's own account or numbers, other accounts' data,
-slice internals, harmful content, and anything off those subjects). A block either way
-sends the fixed line (`blocked_output`). Dollar amounts under one cent in the context read
+slice internals, harmful content, and anything off those subjects). Both output rails
+also see the earlier turns of the thread, and a reply that only rewrites an earlier
+answer, shorter, simpler or longer with no new facts, passes on that answer's subject
+rather than being read on its own. A block either way sends the fixed line
+(`blocked_output`). Dollar amounts under one cent in the context read
 `less than a cent`, never `$0.00`.
 
 Each account gets at most `EMAIL_ASSISTANT_DAILY_LIMIT` replies per UTC day (default 20).
@@ -270,7 +273,7 @@ nothing (`limit_silenced`).
 slice remembers the last three answered turns of each email thread in Redis for seven
 days, keyed by the thread's first message id, with every other id in the mail's chain as
 an alias so the thread is found however the client rewrites its headers. The earlier
-turns go to both the topic rail (so a follow-up like "the cheaper option you mentioned"
-is judged as the question it really is) and the answer prompt. Only the real content of
+turns go to the topic rail (so a follow-up like "the cheaper option you mentioned"
+is judged as the question it really is), the answer prompt, and the output rail. Only the real content of
 an answer is kept, without the footer, disclaimer or connect lines; blocked, limited and
 failed mails are never stored, and if Redis is down there is simply no memory.

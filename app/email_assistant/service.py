@@ -51,9 +51,14 @@ nothing, or sends the fixed line where the spec says so):
    on AWS setup, cloud cost, AI models and AI cost, requires one of the two openers
    first, lets a tailored reply repeat the findings and cost figures slice read, and still
    blocks commands, code, policy text, guesses about the sender's account, other accounts'
-   data, slice internals, harm, and anything off those subjects). Same fail-closed rule
-   for both; a block sends the fixed line.
-10. **Reply**: through the existing Resend channel, threaded under the original:
+   data, slice internals, harm, and anything off those subjects). Both output rails see
+   the same earlier turns the topic rail saw, so a reply that only rewrites an earlier
+   answer (shorter, simpler, longer, no new facts) is judged by that answer's subject
+   instead of being read cold. Same fail-closed rule for both; a block sends the fixed
+   line.
+10. **Reply**: through the existing Resend channel, threaded under the original, with
+    the subject "Re: " plus the inbound subject (a subject already starting with "Re:"
+    is kept as is; no subject at all gives "Re: your slice alert"):
     ``In-Reply-To`` is the inbound message id and ``References`` is the inbound mail's
     whole ``References`` chain plus that id, so the client's next reply keeps the chain
     and the thread memory keeps its root.
@@ -471,7 +476,8 @@ def is_auto_subject(subject: str) -> bool:
 
 
 def reply_subject(subject: str) -> str:
-    """``Re: `` plus the original, without stacking a second ``Re:`` on a reply."""
+    """``Re: `` plus the inbound subject, without stacking a second ``Re:`` on a reply that
+    already has one (any case). No subject, or only whitespace: ``Re: your slice alert``."""
     subject = (subject or "").strip() or "your slice alert"
     if subject.lower().startswith("re:"):
         return subject
@@ -1009,7 +1015,7 @@ class EmailAssistant:
 
         # l. Output rail, the one for this bucket (the general-advice reply has its own
         # prompt; the own-data prompt would block it as off topic). Same fail-closed rule.
-        if not await self._rail_passes("output", answer, event, account_id, bucket=bucket):
+        if not await self._rail_passes("output", answer, event, account_id, bucket=bucket, turns=turns):
             await self._send(event, account_id, FIXED_LINE, VERDICT_BLOCKED_OUTPUT)
             raise _Stop(VERDICT_BLOCKED_OUTPUT)
 
@@ -1041,7 +1047,12 @@ class EmailAssistant:
         self._log(step, event, account_id, "passed", label=outcome.label)
         return outcome.label
 
-    async def _rail_passes(self, rail: str, text: str, event: InboundEvent, account_id: int, *, bucket: str | None = None) -> bool:
+    async def _rail_passes(
+        self, rail: str, text: str, event: InboundEvent, account_id: int, *, bucket: str | None = None, turns=()
+    ) -> bool:
+        """Whether the rail passes ``text``; logs and counts a block or an error (fail closed).
+        ``turns`` are the thread's earlier turns for the output rail, the same list the topic
+        rail was given, so a rewrite of an earlier answer is judged by that answer's subject."""
         step = f"guardrail_{rail}"
         if self.guardrails is None:
             self._block(step, rail, event, account_id, reason="no_engine", bucket=bucket)
@@ -1049,7 +1060,7 @@ class EmailAssistant:
         if rail == "input":
             outcome = await self.guardrails.check_input(text)
         else:
-            outcome = await self.guardrails.check_output(text, bucket=bucket)
+            outcome = await self.guardrails.check_output(text, bucket=bucket, turns=turns)
         if outcome.blocked:
             self._block(step, rail, event, account_id, reason=outcome.reason, bucket=bucket)
             return False

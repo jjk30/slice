@@ -13,7 +13,10 @@ follow-up that only makes sense with the earlier turn is GENERAL, an instruction
 ignore rules in that same thread is BLOCKED, the bare follow-up with no earlier turn is
 BLOCKED, a request to explain an earlier answer about S3 Intelligent-Tiering in simpler
 words is GENERAL, and that same request with no earlier turn is OWN_DATA (it reads as a
-request to explain the alert the user just received).
+request to explain the alert the user just received). The two rewrite cases (phase 27
+follow-up) are the output side of that last thread: a short plain rewrite of the
+Intelligent-Tiering answer passes the general output rail when the earlier turn is
+supplied, and the same rewrite with one off-topic sentence added is blocked.
 """
 
 from __future__ import annotations
@@ -86,6 +89,24 @@ INTELLIGENT_TIERING_TURN = [
 ]
 REPHRASE = "explain in shorter and simpler words"
 
+# The rewrite the model wrote for REPHRASE: the Intelligent-Tiering answer in shorter,
+# simpler words with nothing new in it. Read cold, this is what the general output rail
+# used to block; read with the turn it rewrites, it passes. The same text with one
+# off-topic sentence tacked on is not a rewrite any more and is blocked.
+SIMPLER_TIERING = tidy_general(
+    "S3 Intelligent-Tiering moves each file to cheaper storage when it is not read much, "
+    "and back when it is, for a small monthly fee per file. It helps when you cannot "
+    "predict which files will be read. It costs more than plain Standard for very small "
+    "files or files that are read all the time."
+)
+SIMPLER_TIERING_OFF_TOPIC = tidy_general(
+    "S3 Intelligent-Tiering moves each file to cheaper storage when it is not read much, "
+    "and back when it is, for a small monthly fee per file. It helps when you cannot "
+    "predict which files will be read. It costs more than plain Standard for very small "
+    "files or files that are read all the time. Also, the fastest way to learn Python is "
+    "to build one small project a week and read other people's code."
+)
+
 
 @pytest.fixture(scope="module")
 def engine():
@@ -119,6 +140,19 @@ async def test_general_reply_with_a_shell_command_is_blocked(engine):
 
 async def test_general_reply_that_claims_to_know_the_setup_is_blocked(engine):
     outcome = await _outcome(engine, CLAIMS_SETUP, LABEL_GENERAL)
+    assert outcome.blocked, outcome
+
+
+async def test_simpler_rewrite_of_the_tiering_answer_passes_with_the_turn(engine):
+    assert SIMPLER_TIERING.startswith(GENERAL_DISCLAIMER) and SIMPLER_TIERING.endswith(FOOTER_GENERAL)
+    outcome = await engine.check_output(SIMPLER_TIERING, bucket=LABEL_GENERAL, turns=INTELLIGENT_TIERING_TURN)
+    assert not outcome.errored, f"rail errored: {outcome.reason}"
+    assert outcome.passed, outcome
+
+
+async def test_simpler_rewrite_with_an_off_topic_sentence_is_blocked(engine):
+    outcome = await engine.check_output(SIMPLER_TIERING_OFF_TOPIC, bucket=LABEL_GENERAL, turns=INTELLIGENT_TIERING_TURN)
+    assert not outcome.errored, f"rail errored: {outcome.reason}"
     assert outcome.blocked, outcome
 
 

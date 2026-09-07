@@ -283,6 +283,24 @@ async def test_check_output_blocks_when_output_rail_stops():
     assert outcome.reason == "self check output"
 
 
+async def test_check_output_sets_the_thread_turns_for_the_call_only():
+    """Phase 27 follow-up: the earlier turns are set (as the rendered text the prompts read)
+    for the one generate_async call and cleared again after it; none means ""."""
+    seen: list[str] = []
+
+    class _Rails(FakeRails):
+        async def generate_async(self, *, messages, options):
+            seen.append(guardrails_engine._earlier_turns.get())
+            return await super().generate_async(messages=messages, options=options)
+
+    engine = GuardrailEngine(_Rails([]), object(), object(), 5.0)
+    turns = [{"q": "Is Opus worth it?", "a": "Sonnet is cheaper."}]
+    assert (await engine.check_output("Sonnet is the cheaper one.", turns=turns)).passed
+    assert (await engine.check_output("Sonnet is the cheaper one.")).passed
+    assert seen == [format_thread_turns(turns), ""]
+    assert guardrails_engine._earlier_turns.get() == ""
+
+
 async def test_output_rail_ignores_an_input_stop():
     # A stop on a different rail type must not count as an output block.
     eng = _engine([_FakeActivatedRail("input", True, "self check input")])
@@ -569,6 +587,61 @@ async def test_real_engine_uses_the_general_output_prompt_for_the_general_bucket
         assert "drifts off topic into general knowledge, coding help, or advice unrelated to" in own_prompt
         assert "The reply must start with exactly this line" not in own_prompt
         assert "You spent $1." in own_prompt
+    for call in route.calls:
+        assert "temperature" not in json.loads(call.request.content)
+
+
+async def test_real_engine_output_rails_render_the_earlier_turns(monkeypatch):
+    """The real NeMo engine in the email modes: with turns, both output prompts carry the
+    thread section and the rewrite rule; without them neither does and the prompt is
+    exactly what it was. NeMo's own output check hands the template only the bot message,
+    so the turns arrive through the registered prompt context."""
+    monkeypatch.setattr(config, "GUARDRAILS_ENABLED", True)
+    monkeypatch.setattr(config, "GUARDRAILS_MODEL", "claude-sonnet-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    turns = [
+        {
+            "q": "Is S3 Intelligent-Tiering worth turning on?",
+            "a": "It moves objects between tiers based on how often they are read, for a small monthly fee.",
+        }
+    ]
+    rewrite = "General advice, not from your account.\n\nIt moves files to cheaper storage when they are not read much."
+
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post(url__regex=r".*/v1/messages$").mock(return_value=httpx.Response(200, json=_anthropic_reply("No")))
+        engine = build_engine(mode="email", general_mode="email_general")
+        assert engine is not None
+        assert (await engine.check_output(rewrite, bucket="general", turns=turns)).passed
+        assert (await engine.check_output(rewrite, bucket="general")).passed
+        assert (await engine.check_output("It moves files to cheaper storage.", bucket="own_data", turns=turns)).passed
+        assert (await engine.check_output("It moves files to cheaper storage.", bucket="own_data")).passed
+
+    assert route.call_count == 4
+    # The prompts are line-wrapped in prompts.yml, so compare on collapsed whitespace.
+    general_with, general_alone, own_with, own_alone = (
+        " ".join(" ".join(m["content"] for m in json.loads(c.request.content)["messages"]).split()) for c in route.calls
+    )
+    rule = (
+        "If the earlier turns contain an answer and the reply is a shorter, simpler, or longer "
+        "version of that answer with no new facts, the reply passes. Judge it by the subject of "
+        "the answer it rewrites."
+    )
+    for prompt in (general_with, own_with):
+        assert "Earlier in this email thread:" in prompt
+        assert "Turn 1. The user wrote:" in prompt and "Is S3 Intelligent-Tiering worth turning on?" in prompt
+        assert "for a small monthly fee." in prompt
+        assert rule in prompt
+        # The section sits right before the bot message, after the block list.
+        assert prompt.index("Block the reply if it does ANY") < prompt.index("Earlier in this email thread:")
+        assert prompt.index("Earlier in this email thread:") < prompt.index("Bot message:")
+        assert "{%" not in prompt and "earlier_turns" not in prompt
+    for prompt in (general_alone, own_alone):
+        assert "Earlier in this email thread:" not in prompt and "Turn 1." not in prompt
+        assert "Intelligent-Tiering" not in prompt and "the reply passes" not in prompt
+        assert "{%" not in prompt and "earlier_turns" not in prompt
+    # Each still renders its own prompt, and the reply under check is in it.
+    assert "The reply must start with exactly this line" in general_with and "cheaper storage when" in general_with
+    assert "drifts off topic into general knowledge" in own_with and "The reply must start with" not in own_with
     for call in route.calls:
         assert "temperature" not in json.loads(call.request.content)
 

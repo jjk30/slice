@@ -179,6 +179,8 @@ class FakeEngine:
         self.input_rule = None
         self.output_calls: list[str] = []
         self.output_buckets: list[str | None] = []
+        # The earlier turns each output check was given (the same list the input rail saw).
+        self.output_turns: list[list[dict]] = []
 
     async def classify_input(self, prompt, turns=()):
         self.input_calls.append(prompt)
@@ -190,9 +192,10 @@ class FakeEngine:
     async def check_input(self, prompt):  # the Yes/No form; the assistant no longer calls it
         raise AssertionError("the email assistant must use classify_input")
 
-    async def check_output(self, answer, bucket=None):
+    async def check_output(self, answer, bucket=None, turns=()):
         self.output_calls.append(answer)
         self.output_buckets.append(bucket)
+        self.output_turns.append(list(turns))
         return self.output_outcomes.get(bucket, self.output_outcome)
 
 
@@ -330,6 +333,27 @@ def test_new_text_falls_back_to_html_and_trims():
     long = "x" * 5000
     assert len(new_text({"text": long})) == 2000
     assert new_text({"text": "   ", "html": None}) == ""
+
+
+def test_reply_subject_rule():
+    """A reply's subject is "Re: " plus the inbound subject; a subject that already starts
+    with "Re:" (any case) is kept as is, never doubled; no subject at all keeps the
+    fallback "Re: your slice alert"."""
+    assert reply_subject(SUBJECT) == "Re: " + SUBJECT
+    assert reply_subject("Your slice budget warning") == "Re: Your slice budget warning"
+    assert reply_subject("  Your slice budget warning \n") == "Re: Your slice budget warning"
+    # Already a reply: kept as is, whatever the case of the prefix.
+    assert reply_subject("Re: " + SUBJECT) == "Re: " + SUBJECT
+    assert reply_subject("RE: " + SUBJECT) == "RE: " + SUBJECT
+    assert reply_subject("re: " + SUBJECT) == "re: " + SUBJECT
+    assert reply_subject("Re: Re: " + SUBJECT) == "Re: Re: " + SUBJECT
+    assert not reply_subject("Re: " + SUBJECT).startswith("Re: Re:")
+    # No subject: the fallback.
+    assert reply_subject("") == "Re: your slice alert"
+    assert reply_subject("   ") == "Re: your slice alert"
+    assert reply_subject(None) == "Re: your slice alert"
+    # A subject that merely contains "re" is a normal subject.
+    assert reply_subject("Reminder about your cap") == "Re: Reminder about your cap"
 
 
 def test_reply_subject_and_tidy_answer():
@@ -690,9 +714,9 @@ async def test_general_output_rail_error_or_missing_fails_closed(client, env):
             super().__init__()
             self._engine = GuardrailEngine(_Rails(), object(), object(), 1.0)
 
-        async def check_output(self, answer, bucket=None):
+        async def check_output(self, answer, bucket=None, turns=()):
             self.output_buckets.append(bucket)
-            return await self._engine.check_output(answer, bucket=bucket)
+            return await self._engine.check_output(answer, bucket=bucket, turns=turns)
 
     hybrid = _Hybrid()
     hybrid.input_outcome = RailOutcome(label=LABEL_GENERAL)
@@ -1281,6 +1305,9 @@ async def test_follow_up_is_judged_with_the_earlier_turns(client, env):
     assert env.engine.input_calls[1] == follow_up
     assert [turn["q"] for turn in env.engine.input_turns[1]] == ["Is Opus worth it over Sonnet for coding?"]
     assert env.engine.input_turns[1][0]["a"] == "Sonnet is the cheaper option and is enough for most coding."
+    # The output rail got the very same turns, so a rewrite of the earlier answer is judged
+    # by that answer's subject; the first mail's output check had none to give.
+    assert env.engine.output_turns == [[], env.engine.input_turns[1]]
 
     # The same follow-up in a thread slice has no memory of: nothing to fill in, blocked.
     env.fakes.received["headers"] = {"References": "<other@slice>"}

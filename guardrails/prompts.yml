@@ -82,7 +82,12 @@ prompts:
   # are none) so a follow-up is read in context but still judged by its own subject;
   # with no turns the Jinja block below renders nothing. The OUTPUT prompts keep the Yes/No contract:
   # the one in mode "email" checks an own-data reply, the one in mode "email_general"
-  # checks a general-advice reply.
+  # checks a general-advice reply. Both get the same ``earlier_turns`` block (the engine
+  # registers it as NeMo prompt context, since NeMo's own output check hands the template
+  # only the bot message) with one extra rule: a reply that only rewrites an earlier
+  # answer, shorter, simpler or longer, with no new facts, passes, judged by that
+  # answer's subject. That is the case a rewrite of a general answer used to fail on:
+  # read on its own, it looked off topic or like a guess about the account.
   - task: self_check_input
     mode: email
     content: |
@@ -177,6 +182,14 @@ prompts:
       plain words, says "I don't have that number", or ends with the note that slice
       is an AI is fine: allow it.
 
+      {% if earlier_turns %}
+      Earlier in this email thread:
+      {{ earlier_turns }}
+
+      If the earlier turns contain an answer and the reply is a shorter, simpler, or
+      longer version of that answer with no new facts, the reply passes. Judge it by
+      the subject of the answer it rewrites.
+      {% endif %}
       Bot message: "{{ bot_response }}"
 
       Question: Should the message be blocked (Yes or No)?
@@ -227,6 +240,14 @@ prompts:
       subjects, is fine. Naming AWS services, model names, or prices in general is
       fine. Pointing at an AWS console page or an AWS doc page is fine.
 
+      {% if earlier_turns %}
+      Earlier in this email thread:
+      {{ earlier_turns }}
+
+      If the earlier turns contain an answer and the reply is a shorter, simpler, or
+      longer version of that answer with no new facts, the reply passes. Judge it by
+      the subject of the answer it rewrites.
+      {% endif %}
       Bot message: "{{ bot_response }}"
 
       Question: Should the message be blocked (Yes or No)?
