@@ -43,8 +43,6 @@
   .lede-h h1{font-family:var(--display);font-weight:700;font-size:clamp(30px,5.4vw,46px);line-height:1.02;letter-spacing:-.03em;max-width:18ch}
   .lede-h p{font-size:16.5px;color:var(--muted);max-width:36em;margin:16px 0 0;line-height:1.55}
   .h-mark{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--green);margin-bottom:14px}
-  .legend{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin:14px 0 0;line-height:1.6}
-  .legend .sw{color:#EAC58C;border-bottom:1px dotted rgba(192,124,30,.55)}
   .toc{list-style:none;display:flex;flex-wrap:wrap;gap:8px 18px;margin:22px 0 10px;padding:0}
   .toc a{font-family:var(--mono);font-size:12.5px;color:var(--muted);border-bottom:1px solid var(--dot)}
   .toc a:hover{color:var(--ink);border-color:var(--ink)}
@@ -70,6 +68,9 @@
   .tile .v{color:var(--muted)}
   .conn-note{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:18px;line-height:1.7}
   .conn-note b{color:var(--ink);font-weight:500}
+  .fill{display:grid;gap:5px;margin-top:10px;padding:12px 14px;background:var(--paper2);border:1px solid var(--edge);border-radius:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted);line-height:1.7;max-width:46em}
+  .fill b{color:var(--ink);font-weight:500}
+  .fill code{font-family:var(--mono);font-size:12px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
 
   /* terminal blocks */
   .term{background:var(--ink);border-radius:12px;overflow:hidden;box-shadow:0 20px 40px -30px rgba(28,24,21,.6)}
@@ -128,7 +129,6 @@
     <div class="h-mark">how to</div>
     <h1>Set up slice, step by step.</h1>
     <p>Eight short steps, from install to uninstall. Every block below can be copied with the button in its top right corner.</p>
-    <p class="legend"><span class="sw">(like&nbsp;this)</span> &nbsp;means a value you fill in with your own. Everything else you can copy as-is.</p>
     <ul class="toc">
       <li><a href="#install"><span class="n">01</span>Install</a></li>
       <li><a href="#login"><span class="n">02</span>Log in</a></li>
@@ -188,8 +188,9 @@ slice-gateway 0.2.1</pre>
     <span class="st">WXYZ-1234</span>
 
 Waiting for you to authorize in the browser...
-Logged in as <span class="ph">(your-github-username)</span></pre>
+Logged in as <span class="dim">jjk30</span></pre>
     </div>
+    <p class="conn-note">You will see your own GitHub username and account number here.</p>
     <p>Self-hosted? Pass <code>--base-url http://localhost:8080</code> once, or set <code>SLICE_BASE_URL</code>. slice saves the address with your login.</p>
 
     <h3>Your slice key</h3>
@@ -211,8 +212,8 @@ Logged in as <span class="ph">(your-github-username)</span></pre>
 <pre><span class="dim">$</span> slice init
 
 Gateway:  https://api.sliceapp.dev
-Config:   <span class="ph">(your home folder)</span>/.slice/config.json
-Logged in as <span class="ph">(your-github-username)</span> (account <span class="ph">(id)</span>).</pre>
+Config:   <span class="dim">/Users/you/.slice/config.json</span>
+Logged in as <span class="dim">jjk30</span> <span class="dim">(account 14)</span>.</pre>
     </div>
   </section>
 
@@ -232,7 +233,13 @@ Logged in as <span class="ph">(your-github-username)</span> (account <span class
       </div>
 <pre><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
 <span class="kw">export</span> ANTHROPIC_API_KEY=<span class="ph">(your own Anthropic key)</span>
-<span class="kw">export</span> ANTHROPIC_AUTH_TOKEN=<span class="ph">(your slice key, from ~/.slice/config.json)</span></pre>
+<span class="kw">export</span> ANTHROPIC_AUTH_TOKEN=<span class="ph">(your slice key)</span></pre>
+    </div>
+    <div class="fill">
+      <b>Fill in two things:</b>
+      <span><code>(your own Anthropic key)</code>: your Anthropic API key. Get it at console.anthropic.com under API keys. Starts with sk-ant-.</span>
+      <span><code>(your slice key)</code>: your slice login key. Starts with slk_live_. Easiest: run <code>slice use claude-code</code> and it prints these three lines with your slice key already in. Or open <code>~/.slice/config.json</code> and copy it from there.</span>
+      <span>Delete the brackets when you paste.</span>
     </div>
     <p><code>ANTHROPIC_AUTH_TOKEN</code> goes out as <code>Authorization: Bearer</code>, which is where slice reads its key. <code>ANTHROPIC_API_KEY</code> stays your own Anthropic key in <code>x-api-key</code>. Claude Code prints a notice that env auth takes precedence over your claude.ai login while these are set. That is expected. Unset the three variables to go back to normal.</p>
 
@@ -258,6 +265,9 @@ message = client.messages.create(
     messages=[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: <span class="st">"hi"</span>}],
 )
 <span class="kw">print</span>(message.content[0].text)</pre>
+    </div>
+    <div class="fill">
+      <b>Fill in two things:</b> the same two keys as above. Delete the brackets and keep the quotes.
     </div>
 
     <h3>curl</h3>
@@ -323,6 +333,12 @@ message = client.messages.create(
       </div>
 <pre>arn:aws:iam::<span class="ph">(your AWS account id)</span>:role/slice-scanner/<span class="ph">(the name CloudFormation gave the role)</span></pre>
     </div>
+    <div class="fill">
+      <b>Fill in two things:</b>
+      <span><code>(your AWS account id)</code>: the 12 digit number shown when you click your name at the top right of the AWS console.</span>
+      <span><code>(the name CloudFormation gave the role)</code>: on the Outputs tab of the stack once it finishes. Easiest: copy the whole ARN line from Outputs.</span>
+      <span>Delete the brackets when you paste.</span>
+    </div>
     <p>The first scan runs within about an hour. After that, once a day.</p>
 
     <h3>What the role can read</h3>
@@ -378,7 +394,7 @@ message = client.messages.create(
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre>Your S3 storage bucket <span class="ph">(bucket name)</span> in us-east-1 is open to the internet.
+<pre>Your S3 storage bucket <span class="dim">my-app-uploads</span> in us-east-1 is open to the internet.
 Anyone who finds the link can read what is inside, and that is how private files leak.
 In the S3 console, open the bucket, go to Permissions, and turn on Block all public access.
 Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html</pre>
