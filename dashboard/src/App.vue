@@ -17,6 +17,7 @@ import SetupScreen from './components/SetupScreen.vue'
 import SigningOut from './components/SigningOut.vue'
 import Saving from './components/Saving.vue'
 import FirstRequestCard from './components/FirstRequestCard.vue'
+import awsMark from './assets/aws-mark.svg'
 
 // Phase 21: the dashboard is locked behind a GitHub session (an httpOnly cookie). On
 // mount we ask /auth/me who we are. No session -> the login screen. A session whose
@@ -516,7 +517,7 @@ const firstRequest = computed(() => requestCount.value === 0)
       <FirstRequestCard class="span-4" :requests="requestCount" />
       <div class="kpis" :class="{ dimmed: firstRequest }">
         <KpiTile label="spend this month" :value="spend" :sub="spendSub" :failed="failed" tone="cherry" tint="lavender" />
-        <KpiTile label="AWS bill this month" :value="awsBill" :sub="awsBillSub" :failed="failed" tint="rose" />
+        <KpiTile label="bill this month" :icon="awsMark" icon-alt="AWS" :value="awsBill" :sub="awsBillSub" :failed="failed" tint="white" />
         <KpiTile label="saved this month" :value="saved" :failed="failed" tone="teal" tint="green" />
         <KpiTile label="requests" :value="requests" :sub="requestsSub" :failed="failed" tint="bluegrey" />
         <KpiTile label="eval pass rate" :value="passRate" :sub="passRateSub" :failed="failed" tint="amber" />

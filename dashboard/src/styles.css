@@ -400,10 +400,32 @@ a {
   border-color: var(--tint-rose-line);
 }
 
-.card[class*="tint-"] .kpi-label,
-.card[class*="tint-"] .kpi-sub,
-.card[class*="tint-"] .loading {
+/* The explicit white tile (the AWS bill): the plain card look, same radius, padding
+   and size as the tinted ones, and the standard muted text rather than the tint's. */
+.card.tint-white {
+  background: var(--card);
+  border-color: var(--line);
+}
+
+.card[class*="tint-"]:not(.tint-white) .kpi-label,
+.card[class*="tint-"]:not(.tint-white) .kpi-sub,
+.card[class*="tint-"]:not(.tint-white) .loading {
   color: var(--muted-on-tint);
+}
+
+/* A label with a leading image: the image 18px tall at its own ratio, 7px before the
+   text, both on one centre line. */
+.kpi-label.with-icon {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.kpi-icon {
+  height: 18px;
+  width: auto;
+  display: block;
+  flex: 0 0 auto;
 }
 
 .kpi-label {

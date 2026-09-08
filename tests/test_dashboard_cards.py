@@ -324,10 +324,40 @@ def test_aws_bill_tile_points_at_settings():
     app = APP.read_text(encoding="utf-8")
     assert "'connect AWS in Settings'" in app and "in the scanner" not in app
     html, = _render([
-        {"component": "KpiTile.vue", "props": {"label": "AWS bill this month", "value": "not connected", "sub": "connect AWS in Settings", "tint": "rose"}},
+        {"component": "KpiTile.vue", "props": {"label": "bill this month", "value": "not connected", "sub": "connect AWS in Settings", "tint": "white"}},
     ])
     assert ">not connected</p>" in html
     assert re.search(r'<p class="kpi-sub"[^>]*>connect AWS in Settings</p>', html)
+
+
+def test_aws_bill_tile_is_white_with_the_mark_and_the_others_are_not():
+    """The AWS bill tile: white card, the AWS mark before the label "bill this month";
+    a plain tile renders no image and no icon class. The other four tiles in App.vue
+    keep their tints."""
+    app = APP.read_text(encoding="utf-8")
+    assert 'label="bill this month" :icon="awsMark" icon-alt="AWS"' in app and 'tint="white"' in app
+    assert "import awsMark from './assets/aws-mark.svg'" in app
+    assert 'tint="rose"' not in app
+    for tint in ("lavender", "green", "bluegrey", "amber"):
+        assert f'tint="{tint}"' in app, tint
+    css = (DASHBOARD / "src" / "styles.css").read_text(encoding="utf-8")
+    assert ".card.tint-white {\n  background: var(--card);\n  border-color: var(--line);\n}" in css
+    assert ".kpi-icon {\n  height: 18px;\n  width: auto;" in css and "gap: 7px" in css
+
+    aws_connected, aws_off, plain = _render([
+        {"component": "KpiTile.vue", "props": {"label": "bill this month", "icon": "/aws-mark.svg", "iconAlt": "AWS", "value": "$12.34", "sub": "yesterday $3.25", "tint": "white"}},
+        {"component": "KpiTile.vue", "props": {"label": "bill this month", "icon": "/aws-mark.svg", "iconAlt": "AWS", "value": "not connected", "sub": "connect AWS in Settings", "tint": "white"}},
+        {"component": "KpiTile.vue", "props": {"label": "spend this month", "value": "$1.00", "tint": "lavender"}},
+    ])
+    for html in (aws_connected, aws_off):
+        assert re.search(r'<section class="[^"]*tint-white[^"]*"', html)
+        assert re.search(r'<img class="kpi-icon" src="/aws-mark.svg" alt="AWS"', html)
+        # The renderer may order the static and dynamic classes either way.
+        assert re.search(r'<p class="(kpi-label with-icon|with-icon kpi-label)"[^>]*>.*bill this month</p>', html, re.S)
+        assert "AWS bill" not in html
+    assert ">$12.34</p>" in aws_connected and "yesterday $3.25" in aws_connected
+    assert ">not connected</p>" in aws_off and "connect AWS in Settings" in aws_off
+    assert "<img" not in plain and "with-icon" not in plain and "tint-lavender" in plain
 
 
 # --- The saving card and the in-place AWS refetch ----------------------------------
