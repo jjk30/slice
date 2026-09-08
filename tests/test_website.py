@@ -134,14 +134,14 @@ def test_site_header_links_to_how_to():
 
 
 def test_every_get_started_link_goes_to_the_install_section(how_to):
-    """Get started means install the CLI first; the dashboard is reached from the how-to
-    page's own Open the dashboard button at the bottom. Both pages are checked, and the
-    anchor is a real section id on the how-to page."""
+    """Get started means the how-to page; the dashboard is reached from that page's own
+    Open the dashboard button at the bottom. Both pages are checked, and the page's own
+    section nav still has its install anchor."""
     index = INDEX.read_text(encoding="utf-8")
     assert 'id="install"' in how_to
     links = re.findall(r'<a[^>]*href="([^"]*)"[^>]*>\s*(?:<svg[^>]*>.*?</svg>)?\s*Get started\s*</a>', index + how_to, re.S)
     assert len(links) == 3, links
-    assert set(links) == {"https://sliceapp.dev/how-to#install"}
+    assert set(links) == {"https://sliceapp.dev/how-to"}
     assert 'href="https://sliceapp.dev/dashboard">' in how_to and "Open the dashboard" in how_to
 
 
@@ -208,7 +208,7 @@ def test_no_link_points_at_the_html_address(how_to):
     for page in (index, how_to):
         assert 'href="how-to.html' not in page and "how-to.html" not in re.findall(r'href="([^"]+)"', page).__str__()
         assert 'href="https://sliceapp.dev/how-to' in page
-    assert 'href="https://sliceapp.dev/how-to#install"' in index and 'href="https://sliceapp.dev/how-to#install"' in how_to
+    assert 'href="https://sliceapp.dev/how-to"' in index and 'href="https://sliceapp.dev/how-to"' in how_to
 
 
 def test_install_section_lists_the_versions_under_the_pipx_paragraph(how_to):

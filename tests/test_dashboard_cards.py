@@ -21,7 +21,7 @@ COMPONENTS = DASHBOARD / "src" / "components"
 APP = DASHBOARD / "src" / "App.vue"
 AUTH = DASHBOARD / "src" / "auth.js"
 
-HOW_TO_INSTALL = "https://sliceapp.dev/how-to#install"
+HOW_TO_URL = "https://sliceapp.dev/how-to"
 
 # Runs from the dashboard directory. Each case is {component, props, storage?}; the
 # rendered HTML leaves as a JSON list in the same order. LoginScreen reads
@@ -79,7 +79,7 @@ def _render(cases: list[dict]) -> list[str]:
 def test_login_screen_source_carries_the_new_here_line():
     source = (COMPONENTS / "LoginScreen.vue").read_text(encoding="utf-8")
     assert "New here? Install the CLI first, about three minutes." in source
-    assert f'href="{HOW_TO_INSTALL}"' in source
+    assert f'href="{HOW_TO_URL}"' in source
     # Under the GitHub button and above the terminal note.
     assert source.index("Sign in with GitHub") < source.index("New here?") < source.index("The terminal uses")
 
@@ -186,7 +186,7 @@ def test_cards_render():
     # LoginScreen: the New here line with its link, still under the button.
     assert "New here? Install the CLI first, about three minutes." in login
     # Scoped styles stamp a data-v attribute on every element, so match around it.
-    assert re.search(rf'<a href="{re.escape(HOW_TO_INSTALL)}"[^>]*>Set up slice</a>', login)
+    assert re.search(rf'<a href="{re.escape(HOW_TO_URL)}"[^>]*>Set up slice</a>', login)
     assert login.index("Sign in with GitHub") < login.index("New here?") < login.index("The terminal uses")
 
     # First-request card: rendered at zero with its lines and link, nothing at three.
@@ -195,7 +195,7 @@ def test_cards_render():
     assert "export ANTHROPIC_BASE_URL=https://api.sliceapp.dev" in first_zero
     assert re.search(r'<span class="ph"[^>]*>\(your own Anthropic key\)</span>', first_zero)
     assert re.search(r'<span class="ph"[^>]*>\(your slice key\)</span>', first_zero)
-    assert f'href="{HOW_TO_INSTALL}"' in first_zero and "Full setup, step by step" in first_zero
+    assert f'href="{HOW_TO_URL}"' in first_zero and "Full setup, step by step" in first_zero
     assert "slice use claude-code" in first_zero
     assert ">Copy</button>" in first_zero
     assert "Send your first request" not in first_three
@@ -457,7 +457,7 @@ def test_dashboard_links_use_the_clean_how_to_url():
     login = (COMPONENTS / "LoginScreen.vue").read_text(encoding="utf-8")
     card = (COMPONENTS / "FirstRequestCard.vue").read_text(encoding="utf-8")
     assert 'href="https://sliceapp.dev/how-to" target="_blank" rel="noopener">How to</a>' in app
-    assert 'href="https://sliceapp.dev/how-to#install">Set up slice</a>' in login
-    assert 'href="https://sliceapp.dev/how-to#install" target="_blank" rel="noopener">Full setup, step by step</a>' in card
+    assert 'href="https://sliceapp.dev/how-to">Set up slice</a>' in login
+    assert 'href="https://sliceapp.dev/how-to" target="_blank" rel="noopener">Full setup, step by step</a>' in card
     for source in (app, login, card):
         assert "how-to.html" not in source
