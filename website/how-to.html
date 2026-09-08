@@ -72,6 +72,7 @@
   .fill b{color:var(--ink);font-weight:500}
   .fill[hidden]{display:none}
   .fill code{font-family:var(--mono);font-size:12px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
+  .fill a{color:var(--green);border-bottom:1px solid rgba(15,110,86,.35)}
 
   /* terminal blocks */
   .term{background:var(--ink);border-radius:12px;overflow:hidden;box-shadow:0 20px 40px -30px rgba(28,24,21,.6)}
@@ -264,6 +265,27 @@ Logged in as <span class="dim">jjk30</span> <span class="dim">(account 14)</span
     <p>slice reads each request only to route it and count it. It keeps the token counts and the cost. It does not keep your prompts or your code.</p>
 
     <h3>Claude Code</h3>
+    <p><b>Before you start.</b> You need two things first: Claude Code on this machine, and an Anthropic API key. If you already have both, skip to the three lines below.</p>
+    <p><b>1. Install Claude Code.</b></p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre data-os="mac linux"><span class="dim">$</span> curl -fsSL https://claude.ai/install.sh | bash
+<span class="dim">$</span> claude --version</pre>
+<pre data-os="win" hidden><span class="dim">&gt;</span> irm https://claude.ai/install.ps1 | iex
+<span class="dim">&gt;</span> claude --version</pre>
+    </div>
+    <div class="fill">
+      <b>Needs macOS 13, Windows 10 (1809) or Ubuntu 20.04 and newer.</b>
+      <span>The last line prints a version number followed by (Claude Code).</span>
+      <span>Full guide with Homebrew, WinGet and WSL options: <a href="https://code.claude.com/docs/en/quickstart" target="_blank" rel="noopener">code.claude.com/docs/en/quickstart</a></span>
+    </div>
+    <p><b>2. Get an Anthropic API key.</b> Open <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a>, sign in, click API keys, then Create key. Copy it once; it starts with sk-ant-. This is the key that pays Anthropic for your requests. Signing in to Claude Code with a claude.ai subscription does not give you a key and does not work through slice; you need the console key.</p>
     <p>Set three variables in the shell where you run Claude Code. <code>slice use claude-code</code> prints the same lines with your key filled in.</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>

@@ -222,3 +222,33 @@ def test_install_section_lists_the_versions_under_the_pipx_paragraph(how_to):
         assert needle in text, needle
     assert install.index("<ul>", pipx) < install.index('<div class="term">', pipx)
     assert "This applies to" not in install
+
+
+def test_claude_code_step_starts_with_before_you_start(how_to):
+    """Section 03's Claude Code part opens with the two prerequisites on the page's own tab
+    component: the install line per OS plus the version check, the quickstart link, the
+    console link, and then the three export lines as before."""
+    tools = _section(how_to, "tools")
+    start = tools.index("<h3>Claude Code</h3>")
+    part = tools[start:tools.index("Set three variables", start)]
+    assert "You need two things first: Claude Code on this machine, and an Anthropic API key." in part
+    tabs = re.search(r'<div class="tabs"[^>]*>(.*?)</div>', part)
+    assert tabs and re.findall(r'data-os="(\w+)"', tabs.group(1)) == ["mac", "linux", "win"]
+    assert re.findall(r'src="([^"]+)"', tabs.group(1)) == ["apple.png", "tux.png", "windows.svg"]
+    pres = re.findall(r'<pre data-os="([^"]+)"[^>]*>(.*?)</pre>', part, re.S)
+    expected = {
+        "mac": "curl -fsSL https://claude.ai/install.sh | bash",
+        "linux": "curl -fsSL https://claude.ai/install.sh | bash",
+        "win": "irm https://claude.ai/install.ps1 | iex",
+    }
+    for os_name, line in expected.items():
+        body = next(body for names, body in pres if os_name in names.split())
+        assert line in body and "claude --version" in body, os_name
+    assert 'href="https://code.claude.com/docs/en/quickstart" target="_blank" rel="noopener"' in part
+    assert 'href="https://console.anthropic.com" target="_blank" rel="noopener"' in part
+    assert "Needs macOS 13, Windows 10 (1809) or Ubuntu 20.04 and newer." in part
+    assert "you need the console key" in part
+    # The three export lines still follow, after this part.
+    after = tools[tools.index("Set three variables", start):]
+    for name in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        assert f"export</span> {name}=" in after, name
