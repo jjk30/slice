@@ -281,7 +281,9 @@ STEP_02_SCREENSHOTS = [
     "02-dashboard-signin.png",
     "02-dashboard.png",
 ]
-SCREENSHOTS = ["01-install.png", *STEP_02_SCREENSHOTS]
+# Step 03: the three export lines, the curl run twice, and the Recent calls panel.
+STEP_03_SCREENSHOTS = ["03-slice-use.png", "03-curl-twice.png", "03-recent-calls.png"]
+SCREENSHOTS = ["01-install.png", *STEP_02_SCREENSHOTS, *STEP_03_SCREENSHOTS]
 
 STEP_02_LABELS = [
     "Terminal after slice login",
@@ -323,6 +325,18 @@ def test_how_to_page_shows_the_screenshots(how_to):
     caption = "Screenshots from a Mac. The GitHub pages look the same on every system."
     assert how_to.count(caption) == 1
     assert positions[0] < how_to.index(caption) < positions[1]
+    # The one keys caption sits under the first picture of step 03, outside the OS tab panes.
+    keys_caption = "Screenshots from a Mac. Keys are shortened in the picture; yours print in full."
+    assert how_to.count(keys_caption) == 1
+    first_03, second_03 = (how_to.index(f'src="img/{n}"') for n in STEP_03_SCREENSHOTS[:2])
+    assert first_03 < how_to.index(keys_caption) < second_03
+    tools = _section(how_to, "tools")
+    assert re.findall(r'src="img/([^"]+)"', tools) == STEP_03_SCREENSHOTS
+    for name in STEP_03_SCREENSHOTS:
+        at = tools.index(f'src="img/{name}"')
+        # Outside every OS tab pane: the last <pre> opened before the picture is closed.
+        assert tools.rfind("<pre", 0, at) < tools.rfind("</pre>", 0, at), name
+        assert tools[tools.rfind("<figure", 0, at):at].startswith('<figure class="shot">'), name
     assert "shot-row" not in how_to and "shot-gallery" not in how_to
 
 

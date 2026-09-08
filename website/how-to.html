@@ -372,6 +372,11 @@ Logged in as <span class="dim">jjk30</span> <span class="dim">(account 14)</span
       <span>Delete the brackets when you paste.</span>
       <span>Paste the three lines only into your terminal, they hold your key.</span>
     </div>
+    <figure class="shot">
+      <div class="lab">Terminal after slice use claude-code</div>
+      <img src="img/03-slice-use.png" width="1344" height="212" loading="lazy" alt="Terminal after slice use claude-code, showing the three export lines with the keys shortened">
+      <figcaption>Screenshots from a Mac. Keys are shortened in the picture; yours print in full.</figcaption>
+    </figure>
     <p><code>ANTHROPIC_AUTH_TOKEN</code> goes out as <code>Authorization: Bearer</code>, which is where slice reads its key. <code>ANTHROPIC_API_KEY</code> stays your own Anthropic key in <code>x-api-key</code>. Claude Code prints a notice that env auth takes precedence over your claude.ai login while these are set. That is expected. Unset the three variables to go back to normal.</p>
 
     <h3>Anthropic Python SDK</h3>
@@ -418,8 +423,16 @@ message = client.messages.create(
   -d <span class="st">'{"model":"claude-sonnet-5","max_tokens":64,'</span> \
      <span class="st">'"messages":[{"role":"user","content":"hi"}]}'</span></pre>
     </div>
+    <figure class="shot">
+      <div class="lab">Terminal: the same curl run twice</div>
+      <img src="img/03-curl-twice.png" width="2529" height="276" loading="lazy" alt="The same curl run twice, first 200 in about 5 seconds, then 200 in under a tenth of a second from cache">
+    </figure>
     <p><b>Run it twice.</b> The first call is billed. The second call, with the same body, is served from cache at $0. slice keeps an answer for one hour.</p>
     <p>The answer may come from a cheaper model than the one you asked for, and the <code>model</code> field in the answer says which: that is slice saving you money.</p>
+    <figure class="shot">
+      <div class="lab">Dashboard: Recent calls</div>
+      <img src="img/03-recent-calls.png" width="1702" height="434" loading="lazy" alt="Dashboard Recent calls panel showing a routed call with a cost and the repeat marked cached at $0.00">
+    </figure>
   </section>
 
   <!-- 04 WATCH SPEND -->
