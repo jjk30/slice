@@ -298,6 +298,23 @@ def test_how_to_page_shows_the_six_screenshots(how_to):
         for attr in ("width", "height"):
             value = re.search(rf'\b{attr}="(\d+)"', tag)
             assert value and int(value.group(1)) > 0, f"{name}: missing {attr}"
-    # The order on the page follows the steps.
+    # The order on the page follows the steps, one picture under the other, each with a
+    # short label above it; the one Mac caption sits under the first picture of step 01.
     positions = [how_to.index(f'src="img/{n}"') for n in SCREENSHOTS]
     assert positions == sorted(positions)
+    labels = re.findall(r'<div class="lab">([^<]+)</div>', how_to)
+    assert labels == [
+        "Terminal after install",
+        "Terminal after slice login",
+        "GitHub: Device Activation",
+        "GitHub: Authorize slice",
+        "GitHub: done",
+        "Terminal: logged in",
+    ]
+    caption = "Screenshots from a Mac. The GitHub pages look the same on every system."
+    assert how_to.count(caption) == 1
+    assert positions[0] < how_to.index(caption) < positions[1]
+    assert "shot-row" not in how_to and "shot-gallery" not in how_to
+    # The username note comes after the last picture, not between them.
+    note = how_to.index("You will see your own GitHub username and account number here.")
+    assert note > positions[-1]
