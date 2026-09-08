@@ -15,6 +15,7 @@ import SliceKeyCard from './components/SliceKeyCard.vue'
 import LoginScreen from './components/LoginScreen.vue'
 import SetupScreen from './components/SetupScreen.vue'
 import SigningOut from './components/SigningOut.vue'
+import Saving from './components/Saving.vue'
 import FirstRequestCard from './components/FirstRequestCard.vue'
 
 // Phase 21: the dashboard is locked behind a GitHub session (an httpOnly cookie). On
@@ -37,8 +38,12 @@ const signedOut = ref(false)
 // to read; `logoutFailed` flips the card's wording when the gateway could not be reached.
 const signingOut = ref(false)
 const logoutFailed = ref(false)
+// True from Settings' Save until the dashboard has been refetched and the saving card
+// has been up long enough to read.
+const savingSettings = ref(false)
 const view = computed(() => {
   if (signingOut.value) return 'signing-out'
+  if (savingSettings.value) return 'saving'
   if (!session.value) return 'login'
   if (!profileConfirmed.value) return 'setup'
   if (settingsOpen.value) return 'settings'
@@ -72,11 +77,39 @@ function onSetupDone() {
   startDashboard()
 }
 
-// Settings' one Save returns to the already-running dashboard once it has written the
-// email and the cap. The user stays confirmed and the live stream keeps flowing, so we
-// do not touch profileConfirmed or restart anything here.
-function onSettingsClose() {
+// How long the saving card stays up at least, from when it appeared, so it never flashes.
+const SAVE_MIN_MS = 1500
+
+// Settings' one Save has written the email and the cap. Show the saving card, refetch
+// everything the dashboard shows in one go (summary, models, teams, AWS cost, AWS
+// connection status, findings, recent calls), hold the card to its floor, then show
+// the dashboard. A save that failed never gets here: Settings stays up with the error
+// under its field. A refetch that fails lands in the existing error line (loadAll
+// marks it), and the dashboard shows after the hold all the same. The user stays
+// confirmed and the live stream keeps flowing, so nothing is restarted.
+async function onSettingsDone() {
+  if (savingSettings.value) return
+  const shownAt = Date.now()
+  savingSettings.value = true
   settingsOpen.value = false
+  await loadAll()
+  await wait(Math.max(0, SAVE_MIN_MS - (Date.now() - shownAt)))
+  savingSettings.value = false
+}
+
+// Settings connected, reconnected or disconnected AWS. Refetch the three things that
+// depend on it (the bill tile, the connection status that gates the findings panel, and
+// the findings) so the dashboard is right the moment the user returns, no reload. A
+// failed refetch keeps what was shown; the next live refresh retries.
+async function refreshAws() {
+  try {
+    const [a, conn, f] = await Promise.all([getAwsCost(), getScannerConnect(), getFindings()])
+    awsCost.value = a
+    awsConn.value = conn
+    findings.value = f
+  } catch (e) {
+    if (e instanceof AuthError) session.value = null
+  }
 }
 
 // Phase 25: the cap was saved on the Settings screen. Patch the Account budget payload
@@ -411,13 +444,15 @@ const firstRequest = computed(() => requestCount.value === 0)
 <template>
   <template v-if="!booted" />
   <SigningOut v-else-if="view === 'signing-out'" :failed="logoutFailed" />
+  <Saving v-else-if="view === 'saving'" />
   <LoginScreen v-else-if="view === 'login'" :signed-out="signedOut" />
   <SetupScreen v-else-if="view === 'setup'" mode="onboarding" @done="onSetupDone" />
   <SetupScreen
     v-else-if="view === 'settings'"
     mode="settings"
-    @done="onSettingsClose"
+    @done="onSettingsDone"
     @budget-saved="onBudgetSaved"
+    @aws-changed="refreshAws"
   />
   <div v-else class="page">
     <header class="header">

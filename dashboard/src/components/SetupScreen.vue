@@ -34,7 +34,9 @@ const props = defineProps({
 })
 // Phase 25: 'budget-saved' carries the PUT /account/budget reply so the dashboard's
 // Account budget panel can update its cap, used, left and bar without a reload.
-const emit = defineEmits(['done', 'budget-saved'])
+// 'aws-changed' fires after a connect, reconnect or disconnect went through, so the
+// dashboard can refetch its AWS tile, status and findings in place.
+const emit = defineEmits(['done', 'budget-saved', 'aws-changed'])
 
 const isSettings = computed(() => props.mode === 'settings')
 
@@ -166,6 +168,7 @@ async function awsCall(method, body) {
     throw new Error((reply && reply.error && reply.error.message) || 'Could not update the AWS connection.')
   }
   await loadConnect()
+  emit('aws-changed')
   return true
 }
 
@@ -262,6 +265,7 @@ async function connectAws() {
     // Re-read the status from the backend rather than assuming success, so the
     // status line reflects what the scanner actually sees after the assume-role.
     await loadConnect()
+    emit('aws-changed')
   } catch (e) {
     connectError.value = 'Could not reach the gateway. Try again.'
   } finally {

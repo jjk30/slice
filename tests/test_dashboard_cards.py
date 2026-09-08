@@ -118,11 +118,14 @@ def test_login_screen_reads_the_name_only_from_storage():
 
 
 def test_signing_out_source_matches_the_login_card():
-    source = (COMPONENTS / "SigningOut.vue").read_text(encoding="utf-8")
-    assert 'class="login"' in source and 'class="login-card card"' in source
-    assert 'src="/favicon.png"' in source and 'width="28" height="28"' in source
-    assert "prefers-reduced-motion" in source
-    assert "failed:" in source
+    # The shell lives in StatusCard; SigningOut and Saving only supply the words.
+    shell = (COMPONENTS / "StatusCard.vue").read_text(encoding="utf-8")
+    assert 'class="login"' in shell and 'class="login-card card"' in shell
+    assert 'src="/favicon.png"' in shell and 'width="28" height="28"' in shell
+    assert "prefers-reduced-motion" in shell
+    for name in ("SigningOut.vue", "Saving.vue"):
+        source = (COMPONENTS / name).read_text(encoding="utf-8")
+        assert "<StatusCard" in source and "failed:" in source and ':failed="failed"' in source
 
 
 def test_app_drives_the_sign_out_card_from_the_real_logout_call():
@@ -303,7 +306,7 @@ def test_setup_screen_has_one_save_and_the_mark_is_one_size():
     assert ".aws-mark {\n  height: 22px;" in source
     # App.vue no longer listens for a close; the one Save's done brings the dashboard back.
     app = APP.read_text(encoding="utf-8")
-    assert '@close="onSettingsClose"' not in app and '@done="onSettingsClose"' in app
+    assert '@close=' not in app and '@done="onSettingsDone"' in app
 
 
 def test_setup_screen_onboarding_mode_is_unchanged():
@@ -325,3 +328,66 @@ def test_aws_bill_tile_points_at_settings():
     ])
     assert ">not connected</p>" in html
     assert re.search(r'<p class="kpi-sub"[^>]*>connect AWS in Settings</p>', html)
+
+
+# --- The saving card and the in-place AWS refetch ----------------------------------
+
+
+def test_saving_card_renders_both_sentences():
+    saving, saving_failed = _render([
+        {"component": "Saving.vue", "props": {}},
+        {"component": "Saving.vue", "props": {"failed": True}},
+    ])
+    assert "Saving your settings" in saving
+    assert "Bringing your dashboard up to date so it shows what you just changed." in saving
+    assert 'class="login-card card"' in saving and 'src="/favicon.png"' in saving
+    assert re.search(r'<span class="spinner"[^>]*>', saving) and "still" not in saving
+
+    assert "Saving your settings" in saving_failed
+    assert "Couldn&#39;t save. Your changes are still on the form, try again." in saving_failed
+    assert "Bringing your dashboard" not in saving_failed
+    assert re.search(r'<span class="(spinner still|still spinner)"[^>]*>', saving_failed)
+
+
+def test_app_shows_the_saving_card_and_refetches_before_hiding_it():
+    app = APP.read_text(encoding="utf-8")
+    assert "import Saving from './components/Saving.vue'" in app
+    assert "if (savingSettings.value) return 'saving'" in app
+    assert "<Saving v-else-if=\"view === 'saving'\" />" in app
+    assert "SAVE_MIN_MS = 1500" in app
+    body = app[app.index("async function onSettingsDone"):app.index("async function refreshAws")]
+    # Card up, then the one refetch of everything, then the hold, then the card down.
+    assert body.index("savingSettings.value = true") < body.index("await loadAll()")
+    assert body.index("await loadAll()") < body.index("SAVE_MIN_MS - (Date.now() - shownAt)")
+    assert body.index("SAVE_MIN_MS") < body.index("savingSettings.value = false")
+    # loadAll is the whole dashboard: aggregates (summary, models, teams, AWS cost, AWS
+    # connection, findings) plus recent calls, in one go.
+    load_all = app[app.index("async function loadAll"):app.index("// The slice-key card")]
+    assert "Promise.all([loadAggregates(), loadRecent()])" in load_all
+    aggregates = app[app.index("async function loadAggregates"):app.index("function normalizeRecent")]
+    for call in ("/dashboard/summary", "/dashboard/models", "/dashboard/teams", "getAwsCost()", "getScannerConnect()", "getFindings()"):
+        assert call in aggregates, call
+    # A failed save never reaches this: Settings emits done only after its writes went through.
+    setup = (COMPONENTS / "SetupScreen.vue").read_text(encoding="utf-8")
+    save = setup[setup.index("async function saveAndContinue"):setup.index("async function connectAws")]
+    assert save.index("if (!res.ok)") < save.index("emit('done')")
+    assert "if (isSettings.value && !(await saveBudgetIfChanged())) return" in save
+
+
+def test_aws_changes_refetch_in_place():
+    setup = (COMPONENTS / "SetupScreen.vue").read_text(encoding="utf-8")
+    assert "defineEmits(['done', 'budget-saved', 'aws-changed'])" in setup
+    # After the shared connect/disconnect call and after a role connect, once the
+    # screen has re-read its own status.
+    aws_call = setup[setup.index("async function awsCall"):setup.index("async function reconnectOperator")]
+    assert aws_call.index("await loadConnect()") < aws_call.index("emit('aws-changed')")
+    connect = setup[setup.index("async function connectAws"):]
+    assert connect.index("await loadConnect()") < connect.index("emit('aws-changed')")
+    assert setup.count("emit('aws-changed')") == 2
+
+    app = APP.read_text(encoding="utf-8")
+    assert '@aws-changed="refreshAws"' in app
+    refresh = app[app.index("async function refreshAws"):app.index("// Phase 25: the cap was saved")]
+    assert "Promise.all([getAwsCost(), getScannerConnect(), getFindings()])" in refresh
+    for line in ("awsCost.value = a", "awsConn.value = conn", "findings.value = f"):
+        assert line in refresh, line
