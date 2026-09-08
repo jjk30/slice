@@ -72,9 +72,9 @@ function onSetupDone() {
   startDashboard()
 }
 
-// Closing settings just returns to the already-running dashboard. The user stays
-// confirmed and the live stream keeps flowing, so we do not touch profileConfirmed
-// or restart anything here.
+// Settings' one Save returns to the already-running dashboard once it has written the
+// email and the cap. The user stays confirmed and the live stream keeps flowing, so we
+// do not touch profileConfirmed or restart anything here.
 function onSettingsClose() {
   settingsOpen.value = false
 }
@@ -382,7 +382,7 @@ const awsBill = computed(() => {
 })
 const awsBillSub = computed(() => {
   if (!awsCost.value) return ''
-  if (!awsConnected.value) return 'connect AWS in the scanner'
+  if (!awsConnected.value) return 'connect AWS in Settings'
   const y = usd(awsCost.value.yesterday)
   return y === null ? '' : `yesterday ${y}`
 })
@@ -417,7 +417,6 @@ const firstRequest = computed(() => requestCount.value === 0)
     v-else-if="view === 'settings'"
     mode="settings"
     @done="onSettingsClose"
-    @close="onSettingsClose"
     @budget-saved="onBudgetSaved"
   />
   <div v-else class="page">

@@ -12,8 +12,9 @@ import awsMark from '../assets/aws-mark.svg'
 // AWS role so the scanner can scan the user's account. No WhatsApp field: the API still
 // accepts whatsapp_number, this screen just does not ask.
 // Phase 23: the same screen serves first-time onboarding and later editing. In
-// 'settings' mode the copy changes and a "Back to dashboard" link emits 'close';
-// the fields, validation, and save/connect calls stay identical.
+// 'settings' mode the copy changes and the one Save writes the email and the budget
+// cap together, then emits 'done' so the dashboard comes back on its own; the fields,
+// validation, and connect calls stay identical.
 // Phase 29: the AWS block shows for every account. A connected account (the operator
 // scanning slice's own account included) sees the status, what is being scanned, and a
 // Disconnect button behind a one-line confirm. A not-connected account sees the connect
@@ -33,7 +34,7 @@ const props = defineProps({
 })
 // Phase 25: 'budget-saved' carries the PUT /account/budget reply so the dashboard's
 // Account budget panel can update its cap, used, left and bar without a reload.
-const emit = defineEmits(['done', 'close', 'budget-saved'])
+const emit = defineEmits(['done', 'budget-saved'])
 
 const isSettings = computed(() => props.mode === 'settings')
 
@@ -78,13 +79,13 @@ function applyConnect(info) {
 if (props.connectInfo) applyConnect(props.connectInfo)
 
 // Phase 25: the monthly budget cap, Settings only. The field holds the current cap
-// (the config default until the user sets one); Save PUTs it and shows the reply.
+// (the config default until the user sets one). The screen's one Save PUTs it along
+// with the email when it has changed; `capLoadedValue` is what the field held on load.
 const capInput = ref('')
 const capIsDefault = ref(false)
 const capLoaded = ref(false)
-const capSaving = ref(false)
+const capLoadedValue = ref('')
 const capError = ref('')
-const capNotice = ref('')
 
 const capNumber = computed(() => {
   const raw = String(capInput.value).trim()
@@ -97,11 +98,16 @@ const capValid = computed(() => {
   if (!Number.isFinite(n) || n < 1 || n > 10000) return false
   return Math.round(n * 100) === n * 100
 })
+// The cap only takes part in Save once it has loaded; until then (or if the read
+// failed) Save writes the email alone rather than blocking on a field it cannot check.
+const capChanged = computed(() => capLoaded.value && String(capInput.value).trim() !== capLoadedValue.value)
+const canSave = computed(() => emailValid.value && !saving.value && !(capChanged.value && !capValid.value))
 
 async function loadBudget() {
   try {
     const b = await getBudget()
     capInput.value = typeof b.cap_usd === 'number' ? b.cap_usd.toFixed(2) : ''
+    capLoadedValue.value = String(capInput.value).trim()
     capIsDefault.value = Boolean(b.is_default)
     capLoaded.value = true
   } catch (e) {
@@ -110,22 +116,22 @@ async function loadBudget() {
   }
 }
 
-async function saveBudget() {
-  if (!capValid.value || capSaving.value) return
-  capSaving.value = true
+// PUT the cap when it changed. True when there was nothing to do or it saved; false
+// (with the error shown) when the write failed, so Save stays on this screen.
+async function saveBudgetIfChanged() {
+  if (!capChanged.value) return true
   capError.value = ''
-  capNotice.value = ''
   try {
     const reply = await putBudget(Number(capNumber.value.toFixed(2)))
     capInput.value = typeof reply.cap_usd === 'number' ? reply.cap_usd.toFixed(2) : capInput.value
+    capLoadedValue.value = String(capInput.value).trim()
     capIsDefault.value = Boolean(reply.is_default)
-    capNotice.value = reply.message || 'Saved.'
     emit('budget-saved', reply)
+    return true
   } catch (e) {
-    if (e instanceof AuthError) return
+    if (e instanceof AuthError) return false
     capError.value = e && e.message ? e.message : 'Could not save the cap. Try again.'
-  } finally {
-    capSaving.value = false
+    return false
   }
 }
 
@@ -202,8 +208,11 @@ onMounted(async () => {
   if (isSettings.value) await loadBudget()
 })
 
+// The one Save: the email (which is what confirms the profile on first-time setup),
+// then in Settings the cap when it changed, then 'done' so the caller moves on. A
+// failed cap write leaves the screen up with the error under the cap field.
 async function saveAndContinue() {
-  if (!emailValid.value || saving.value) return
+  if (!canSave.value) return
   saving.value = true
   saveError.value = ''
   try {
@@ -221,6 +230,7 @@ async function saveAndContinue() {
       saveError.value = (body && body.error && body.error.message) || 'Could not save. Try again.'
       return
     }
+    if (isSettings.value && !(await saveBudgetIfChanged())) return
     emit('done')
   } catch (e) {
     saveError.value = 'Could not reach the gateway. Try again.'
@@ -286,9 +296,7 @@ async function connectAws() {
       </label>
 
       <section v-if="showAws" class="aws">
-        <span class="label aws-label">
-          <img class="aws-mark" :src="awsMark" alt="AWS" />{{ isOperator ? '' : 'Connect AWS (optional)' }}
-        </span>
+        <span class="label aws-label"><img class="aws-mark" :src="awsMark" alt="AWS" /></span>
         <p class="aws-status">
           Status:
           <span :class="connected ? 'aws-ok' : 'aws-muted'">{{ connected ? 'connected' : 'not connected' }}</span>
@@ -318,9 +326,9 @@ async function connectAws() {
         <!-- Everyone else, not connected: the role flow as before. -->
         <template v-else>
           <p class="aws-lede">
-            Link a read-only role and slice shows your cloud bill next to your AI spend. It
-            only reads your account name and costs. It never sees your keys, your data, or
-            anything that could change your bill.
+            Optional. Link a read-only role and slice shows your cloud bill next to your AI
+            spend. It only reads your account name and costs. It never sees your keys, your
+            data, or anything that could change your bill.
           </p>
           <p class="aws-lede">
             Create a read-only role in your AWS account so slice can scan it. Nothing is
@@ -365,22 +373,18 @@ async function connectAws() {
               placeholder="25.00"
               aria-label="Monthly budget cap in dollars"
             />
-            <button type="button" class="connect" :disabled="!capValid || capSaving" @click="saveBudget">
-              {{ capSaving ? 'Saving' : 'Save' }}
-            </button>
           </div>
         </label>
         <p class="aws-lede">slice blocks your requests when spend reaches this. It warns you by email at 80%.</p>
-        <p v-if="capNotice" class="cap-ok" role="status">{{ capNotice }}</p>
+        <p v-if="capChanged && !capValid" class="aws-err" role="alert">Enter a whole dollar or cent amount from 1.00 to 10000.00.</p>
         <p v-if="capError" class="aws-err" role="alert">{{ capError }}</p>
       </section>
 
       <p v-if="saveError" class="aws-err" role="alert">{{ saveError }}</p>
-      <button type="button" class="submit" :disabled="!emailValid || saving" @click="saveAndContinue">
+      <button type="button" class="submit" :disabled="!canSave" @click="saveAndContinue">
         {{ saving ? 'Saving…' : (isSettings ? 'Save' : 'Save and continue') }}
       </button>
       <a v-if="showAws && !connected && !isOperator && !isSettings" class="later" href="#" @click.prevent="saveAndContinue">Connect later</a>
-      <a v-if="isSettings" class="later" href="#" @click.prevent="emit('close')">Back to dashboard</a>
     </div>
   </div>
 </template>
@@ -485,12 +489,6 @@ async function connectAws() {
 
 .cap-default {
   color: var(--muted);
-}
-
-.cap-ok {
-  margin: 0;
-  font-size: 12px;
-  color: var(--teal);
 }
 
 .aws-lede {

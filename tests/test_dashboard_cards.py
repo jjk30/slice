@@ -280,3 +280,48 @@ def test_setup_screen_renders_disconnect_and_reconnect():
     assert ">not connected</span>" in plain
     assert "Create the read-only role in AWS" in plain and 'aria-label="Role ARN"' in plain
     assert ">Disconnect</button>" not in plain and ">Reconnect</button>" not in plain
+
+    # The AWS mark in every state, one size, one alt text, and never the word as a label.
+    for html in (connected, operator_on, operator_off, plain):
+        marks = re.findall(r'<img class="aws-mark"[^>]*>', html)
+        assert len(marks) == 1 and 'alt="AWS"' in marks[0], marks
+        assert "Connect AWS (optional)" not in html
+        # Settings: one Save, the big one, and no way back but Save.
+        assert html.count('class="submit"') == 1
+        assert html.count(">Save</button>") == 1 and "Save and continue" not in html
+        assert "Back to dashboard" not in html
+        assert 'aria-label="Monthly budget cap in dollars"' in html
+
+
+def test_setup_screen_has_one_save_and_the_mark_is_one_size():
+    source = (COMPONENTS / "SetupScreen.vue").read_text(encoding="utf-8")
+    assert source.count('class="submit"') == 1
+    assert "Back to dashboard" not in source and "emit('close')" not in source
+    assert "saveBudgetIfChanged" in source and "capChanged" in source
+    # The mark is styled once, so both states share its size.
+    assert source.count("class=\"aws-mark\"") == 1
+    assert ".aws-mark {\n  height: 22px;" in source
+    # App.vue no longer listens for a close; the one Save's done brings the dashboard back.
+    app = APP.read_text(encoding="utf-8")
+    assert '@close="onSettingsClose"' not in app and '@done="onSettingsClose"' in app
+
+
+def test_setup_screen_onboarding_mode_is_unchanged():
+    html, = _render([
+        {"component": "SetupScreen.vue", "props": {"mode": "onboarding", "connectInfo": _connect_info("connect", "pending")}},
+    ])
+    assert "Two quick things" in html
+    assert ">Save and continue</button>" in html and html.count('class="submit"') == 1
+    assert "Connect later" in html
+    assert "Monthly budget cap" not in html
+    assert re.search(r'<img class="aws-mark"[^>]*alt="AWS"', html)
+
+
+def test_aws_bill_tile_points_at_settings():
+    app = APP.read_text(encoding="utf-8")
+    assert "'connect AWS in Settings'" in app and "in the scanner" not in app
+    html, = _render([
+        {"component": "KpiTile.vue", "props": {"label": "AWS bill this month", "value": "not connected", "sub": "connect AWS in Settings", "tint": "rose"}},
+    ])
+    assert ">not connected</p>" in html
+    assert re.search(r'<p class="kpi-sub"[^>]*>connect AWS in Settings</p>', html)
