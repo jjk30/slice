@@ -322,14 +322,18 @@ def test_how_to_page_shows_the_screenshots(how_to):
         assert 'loading="lazy"' in tag, name
     positions = [how_to.index(f'src="img/{n}"') for n in SCREENSHOTS]
     assert positions == sorted(positions)
-    caption = "Screenshots from a Mac. The GitHub pages look the same on every system."
-    assert how_to.count(caption) == 1
+    # One caption per step: the Mac line under the first terminal picture of steps 01 and
+    # 03, the GitHub line under the first GitHub page picture of step 02.
+    caption = "Taken on my Mac. Your username and a few details will look different; the commands are the same."
+    assert how_to.count(caption) == 2
     assert positions[0] < how_to.index(caption) < positions[1]
-    # The one keys caption sits under the first picture of step 03, outside the OS tab panes.
-    keys_caption = "Screenshots from a Mac. Keys are shortened in the picture; yours print in full."
-    assert how_to.count(keys_caption) == 1
     first_03, second_03 = (how_to.index(f'src="img/{n}"') for n in STEP_03_SCREENSHOTS[:2])
-    assert first_03 < how_to.index(keys_caption) < second_03
+    assert first_03 < how_to.rindex(caption) < second_03
+    github = "The GitHub pages look the same on every system."
+    assert how_to.count(github) == 1
+    assert how_to.index('src="img/02-github-device.png"') < how_to.index(github) < how_to.index('src="img/02-github-code.png"')
+    assert how_to.count("<figcaption>") == 3
+    assert "Screenshots from a Mac" not in how_to
     tools = _section(how_to, "tools")
     assert re.findall(r'src="img/([^"]+)"', tools) == STEP_03_SCREENSHOTS
     for name in STEP_03_SCREENSHOTS:
@@ -367,10 +371,16 @@ def test_login_block_has_the_three_os_tabs_and_ends_with_the_dashboard_line(how_
     assert covered == {"mac", "linux", "win"}
     for names, body in pres:
         text = re.sub(r"<[^>]+>", "", body)
-        assert "slice login" in text, names
-        assert "WXYZ-1234" in text, names
-        assert text.rstrip().endswith("Logged in as jjk30\n\nYour dashboard: https://sliceapp.dev/dashboard"), names
+        # The command alone: the copy button copies only what the reader types.
+        assert text.strip() in ("$ slice login", "&gt; slice login"), names
     assert 'src="img/' not in block  # pictures sit outside the tab panes
+    # The output sits once under the tabs (it is the same on every OS), in the light box,
+    # with the username and the code as placeholders and the dashboard line last.
+    see = _see_blocks(login)[0]
+    assert see[0] is None
+    assert "WXYZ-1234" in see[1] and "jjk30" not in see[1]
+    assert see[1].rstrip().endswith("Logged in as your username\n\nYour dashboard: https://sliceapp.dev/dashboard")
+    assert login.index("$</span> slice login") < login.index("What you should see") < login.index('src="img/02-login-terminal.png"')
 
 
 def test_login_step_says_the_dashboard_is_a_separate_door(how_to):
@@ -383,3 +393,57 @@ def test_login_step_says_the_dashboard_is_a_separate_door(how_to):
     assert 'href="https://sliceapp.dev/dashboard" target="_blank" rel="noopener">sliceapp.dev/dashboard</a>' in door
     # Now open your dashboard comes after the terminal pictures and before Your slice key.
     assert login.index('src="img/02-logged-in.png"') < login.index("<h3>Now open your dashboard</h3>") < login.index("<h3>Your slice key</h3>")
+
+
+# --- Command blocks hold commands; the output sits in a "What you should see" box ------
+
+# A line of output the CLI prints, never something the reader should type or copy.
+OUTPUT_STARTS = ("Logged in as", "Waiting for", "Your dashboard", "To finish", "and enter this code")
+
+
+def _command_blocks(how_to: str) -> list[tuple[str, str]]:
+    """(data-os or "", text) of every <pre> inside a dark .term block, tags stripped."""
+    blocks = []
+    for term in re.findall(r'<div class="term">(.*?)\n    </div>', how_to, re.S):
+        for attrs, body in re.findall(r"<pre([^>]*)>(.*?)</pre>", term, re.S):
+            os_names = re.search(r'data-os="([^"]+)"', attrs)
+            blocks.append((os_names.group(1) if os_names else "", re.sub(r"<[^>]+>", "", body)))
+    return blocks
+
+
+def _see_blocks(html: str) -> list[tuple[str | None, str]]:
+    """(data-os or None, output text) of every "What you should see" box, in page order."""
+    found = []
+    for attrs, body in re.findall(r'<div class="fill see"([^>]*)>\s*<b>What you should see</b>\s*<pre>(.*?)</pre>', html, re.S):
+        os_names = re.search(r'data-os="([^"]+)"', attrs)
+        found.append((os_names.group(1) if os_names else None, body))
+    return found
+
+
+def test_no_command_block_carries_output_lines(how_to):
+    blocks = _command_blocks(how_to)
+    assert len(blocks) >= 12
+    for os_names, text in blocks:
+        for line in text.splitlines():
+            assert not line.strip().startswith(OUTPUT_STARTS), (os_names, line)
+    assert "jjk30" not in "".join(text for _, text in blocks)
+
+
+def test_what_you_should_see_boxes_sit_under_the_split_blocks(how_to):
+    """Two blocks were split: slice login (one box, the output is the same everywhere) and
+    slice init (one box per OS pane, the config path differs). No box has a copy button,
+    and every one uses placeholders for the username and the code."""
+    login = _section(how_to, "login")
+    boxes = _see_blocks(login)
+    assert [os_names for os_names, _ in boxes] == [None, "mac linux", "win"]
+    assert _see_blocks(how_to) == boxes
+    for _, text in boxes:
+        assert "jjk30" not in text and "your username" in text
+    assert "/Users/you/.slice/config.json" in boxes[1][1] and "C:\\Users\\you\\.slice\\config.json" in boxes[2][1]
+    init = login[login.index("$</span> slice init"):]
+    assert init.index("</div>") < init.index("What you should see")
+    assert '<div class="fill see" data-os="win" hidden>' in login
+    for box in re.findall(r'<div class="fill see".*?</div>', how_to, re.S):
+        assert 'class="copy"' not in box
+    assert ".fill.see pre{" in how_to
+
