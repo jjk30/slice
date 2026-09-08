@@ -59,6 +59,17 @@
   .block p a,.block li a{color:var(--green);border-bottom:1px solid rgba(15,110,86,.35)}
   .block code,.block li code{font-family:var(--mono);font-size:12.5px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
   .block .term{margin-top:14px}
+  /* screenshots beside the command blocks; the row may grow to the .wide width and stays centered */
+  .shot-row,.shot-gallery{display:grid;gap:14px;margin-top:14px;width:min(1056px,calc(100vw - 48px));margin-left:calc(50% - min(528px,50vw - 24px))}
+  .shot-row .term{margin-top:0;min-width:0}
+  .shot{margin:0;min-width:0}
+  .shot.solo{margin-top:14px}
+  .shot img{display:block;max-width:100%;height:auto;border:1px solid var(--rule);border-radius:12px}
+  .shot figcaption{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:8px;line-height:1.6}
+  @media(min-width:860px){
+    .shot-row{grid-template-columns:minmax(0,11fr) minmax(0,9fr);align-items:start}
+    .shot-gallery{grid-template-columns:repeat(3,minmax(0,1fr))}
+  }
   .block ol,.block ul{margin:12px 0 0 22px;font-size:14.5px;color:var(--muted);line-height:1.6;max-width:46em}
   .block li{margin:6px 0}
   .block ul.tight li{margin:3px 0}
@@ -166,6 +177,7 @@
       <li><b>Linux:</b> Debian 12 and newer, Ubuntu 23.04 and newer (so 24.04 LTS), Fedora 38 and newer, Arch since 2023. Older releases let plain pip through, pipx still works.</li>
       <li><b>Windows:</b> Windows 10 and 11 with Python 3.11 or newer from python.org. Windows never refuses pip, pipx just keeps the steps the same everywhere.</li>
     </ul>
+    <div class="shot-row">
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
         <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
@@ -186,6 +198,11 @@
 <span class="dim">&gt;</span> py -m pipx ensurepath
 <span class="dim">&gt;</span> pipx install slice-gateway
 <span class="dim">&gt;</span> slice --version</pre>
+    </div>
+    <figure class="shot">
+      <img src="img/01-install.png" width="2058" height="762" loading="lazy" alt="Terminal after pipx install slice-gateway, showing slice-gateway 0.2.1">
+      <figcaption>Screenshots from a Mac. The GitHub pages look the same on every system.</figcaption>
+    </figure>
     </div>
     <div class="fill" data-os="mac">
       <b>No Homebrew?</b>
@@ -209,6 +226,7 @@
   <section class="block" id="login">
     <h2><span class="no">02</span>Log in</h2>
     <p class="say">Sign in with GitHub. slice shows a short code. Open the GitHub page it prints, paste the code, and click Authorize. No password is typed in the terminal.</p>
+    <div class="shot-row">
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
         <button class="copy" type="button" aria-label="Copy command">
@@ -226,7 +244,18 @@
 Waiting for you to authorize in the browser...
 Logged in as <span class="dim">jjk30</span></pre>
     </div>
+    <figure class="shot">
+      <img src="img/02-login-terminal.png" width="703" height="344" loading="lazy" alt="Terminal after slice login, showing the GitHub link and a code">
+      <figcaption>Screenshots from a Mac. The GitHub pages look the same on every system.</figcaption>
+    </figure>
+    </div>
+    <div class="shot-gallery">
+      <figure class="shot"><img src="img/02-github-device.png" width="1488" height="1086" loading="lazy" alt="GitHub device activation page, signed in, with a Continue button"></figure>
+      <figure class="shot"><img src="img/02-github-authorize.png" width="1498" height="1091" loading="lazy" alt="GitHub page asking to authorize slice"></figure>
+      <figure class="shot"><img src="img/02-github-done.png" width="1468" height="1036" loading="lazy" alt="GitHub page saying the device is now connected"></figure>
+    </div>
     <p class="conn-note">You will see your own GitHub username and account number here.</p>
+    <figure class="shot solo"><img src="img/02-logged-in.png" width="712" height="342" loading="lazy" alt="Terminal showing Logged in as jjk30 after authorizing"></figure>
 
     <h3>Your slice key</h3>
     <p>Login mints a slice key. It starts with <code>slk_live_</code>. The CLI saves it to <code>~/.slice/config.json</code>, readable only by you, and does not print it. It is not shown again. The dashboard shows only its last four characters.</p>

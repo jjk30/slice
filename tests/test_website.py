@@ -268,3 +268,36 @@ def test_tools_step_says_what_slice_sees_and_keeps(how_to):
     assert "slice reads each request only to route it" not in how_to
     # It sits before the Claude Code part, in the section's intro.
     assert tools.index("What slice sees") < tools.index("<h3>Claude Code</h3>")
+
+
+SCREENSHOTS = [
+    "01-install.png",
+    "02-login-terminal.png",
+    "02-github-device.png",
+    "02-github-authorize.png",
+    "02-github-done.png",
+    "02-logged-in.png",
+]
+
+
+def test_how_to_page_shows_the_six_screenshots(how_to):
+    """Steps 01 and 02 carry six screenshots under website/img. Each <img> names a file
+    that exists, has a non-empty alt, and declares its width and height so the page does
+    not jump while the pictures load."""
+    imgs = {}
+    for tag in re.findall(r"<img [^>]*>", how_to):
+        src = re.search(r'src="img/([^"]+)"', tag)
+        if src:
+            imgs[src.group(1)] = tag
+    assert set(imgs) == set(SCREENSHOTS), sorted(imgs)
+    for name in SCREENSHOTS:
+        tag = imgs[name]
+        assert (WEBSITE / "img" / name).is_file(), name
+        alt = re.search(r'alt="([^"]*)"', tag)
+        assert alt and alt.group(1).strip(), f"{name}: empty alt"
+        for attr in ("width", "height"):
+            value = re.search(rf'\b{attr}="(\d+)"', tag)
+            assert value and int(value.group(1)) > 0, f"{name}: missing {attr}"
+    # The order on the page follows the steps.
+    positions = [how_to.index(f'src="img/{n}"') for n in SCREENSHOTS]
+    assert positions == sorted(positions)
