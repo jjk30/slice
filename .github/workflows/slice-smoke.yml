@@ -14,10 +14,17 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.SLICE_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          curl -sSf https://api.sliceapp.dev/v1/messages \
+          body='{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
+          echo "sending: $body"
+          status=$(curl -sS -o response.json -w '%{http_code}' https://api.sliceapp.dev/v1/messages \
             -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
-            -d '{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}' \
-            | python3 -c 'import json, sys; r = json.load(sys.stdin); print("model:", r["model"]); print("text:", next(b["text"] for b in r["content"] if b["type"] == "text"))'
+            -d "$body")
+          echo "status: $status"
+          echo "body: $(cat response.json)"
+          if [ "$status" != "200" ]; then
+            exit 1
+          fi
+          python3 -c 'import json, sys; r = json.load(sys.stdin); print("model:", r["model"]); print("text:", next(b["text"] for b in r["content"] if b["type"] == "text"))' < response.json
