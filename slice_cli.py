@@ -12,7 +12,9 @@ Installed as a console entry point via pyproject.toml, so ``pip install -e .`` g
 - ``slice use <tool>``, prints the env lines that point a tool at slice. For tools where
   the caller controls headers (SDK, curl) that is the whole story; for ``claude-code`` it
   prints the three variables (base URL, your Anthropic key in ANTHROPIC_API_KEY, your slice
-  key in ANTHROPIC_AUTH_TOKEN) that run it end to end through slice.
+  key in ANTHROPIC_AUTH_TOKEN) that run it end to end through slice. On Windows
+  (``os.name == "nt"``) the lines are PowerShell (``$env:NAME="value"``) instead of
+  ``export NAME=value``; the curl form is the same everywhere.
 - ``slice --version``, prints ``slice-gateway <version>`` from the installed distribution.
 
 The gateway address is the saved config, then ``SLICE_BASE_URL``, then the hosted
@@ -243,16 +245,17 @@ def use(tool: str = typer.Argument(..., help="Which tool: anthropic | openai | c
         raise typer.Exit(code=1)
 
     name = tool.strip().lower()
+    slice_key_ref = "$env:SLICE_KEY" if _powershell() else "$SLICE_KEY"
     if name in {"anthropic", "sdk", "python"}:
-        typer.echo(f"export ANTHROPIC_BASE_URL={target}")
-        typer.echo(f"export SLICE_KEY={key}")
+        typer.echo(_env_line("ANTHROPIC_BASE_URL", target))
+        typer.echo(_env_line("SLICE_KEY", key))
         typer.echo("# Send the slice key as the Authorization header, your provider key as x-api-key:")
-        typer.echo('#   Authorization: Bearer $SLICE_KEY')
-        typer.echo('#   x-api-key: <your Anthropic key>')
+        typer.echo(f"#   Authorization: Bearer {slice_key_ref}")
+        typer.echo("#   x-api-key: <your Anthropic key>")
     elif name in {"openai", "codex"}:
-        typer.echo(f"export OPENAI_BASE_URL={target}/v1")
-        typer.echo(f"export SLICE_KEY={key}")
-        typer.echo("# Authorization: Bearer $SLICE_KEY, and your provider key in x-api-key.")
+        typer.echo(_env_line("OPENAI_BASE_URL", f"{target}/v1"))
+        typer.echo(_env_line("SLICE_KEY", key))
+        typer.echo(f"# Authorization: Bearer {slice_key_ref}, and your provider key in x-api-key.")
     elif name in {"curl", "http"}:
         typer.echo(f'curl {target}/v1/messages \\')
         typer.echo(f'  -H "Authorization: Bearer {key}" \\')
@@ -260,9 +263,9 @@ def use(tool: str = typer.Argument(..., help="Which tool: anthropic | openai | c
         typer.echo('  -H "content-type: application/json" \\')
         typer.echo('  -d \'{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}\'')
     elif name in {"claude-code", "claudecode", "cc"}:
-        typer.echo(f"export ANTHROPIC_BASE_URL={target}")
-        typer.echo("export ANTHROPIC_API_KEY=sk-ant-api...     # your own Anthropic key")
-        typer.echo(f"export ANTHROPIC_AUTH_TOKEN={key}   # your slice key, from slice login")
+        typer.echo(_env_line("ANTHROPIC_BASE_URL", target))
+        typer.echo(_env_line("ANTHROPIC_API_KEY", "sk-ant-api...") + "     # your own Anthropic key")
+        typer.echo(_env_line("ANTHROPIC_AUTH_TOKEN", key) + "   # your slice key, from slice login")
         typer.echo("# ANTHROPIC_AUTH_TOKEN goes out as Authorization: Bearer, where slice reads its key.")
         typer.echo("# ANTHROPIC_API_KEY stays your own Anthropic key in x-api-key; slice forwards it.")
         typer.echo("# Claude Code notes that env auth takes precedence over your claude.ai login while")
@@ -272,6 +275,18 @@ def use(tool: str = typer.Argument(..., help="Which tool: anthropic | openai | c
 
 
 # --- helpers ----------------------------------------------------------------
+
+
+def _powershell() -> bool:
+    """True on Windows, where ``slice use`` prints PowerShell lines instead of ``export``."""
+    return os.name == "nt"
+
+
+def _env_line(name: str, value: str) -> str:
+    """One line that sets an environment variable in the caller's shell."""
+    if _powershell():
+        return f'$env:{name}="{value}"'
+    return f"export {name}={value}"
 
 
 def _message(response: httpx.Response) -> str:

@@ -68,7 +68,7 @@
   .tile .v{color:var(--muted)}
   .conn-note{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:18px;line-height:1.7}
   .conn-note b{color:var(--ink);font-weight:500}
-  .fill{display:grid;gap:5px;margin-top:10px;padding:12px 14px;background:var(--paper2);border:1px solid var(--edge);border-radius:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted);line-height:1.7;max-width:46em}
+  .fill{display:grid;gap:5px;margin-top:10px;padding:12px 14px;background:var(--paper2);border:1px solid var(--edge);border-radius:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted);line-height:1.7}
   .fill b{color:var(--ink);font-weight:500}
   .fill code{font-family:var(--mono);font-size:12px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
 
@@ -81,6 +81,12 @@
   .term pre{margin:0;padding:18px 18px 20px;font-family:var(--mono);font-size:13px;line-height:1.95;color:var(--paper);overflow-x:auto}
   .term .cm{color:rgba(251,248,241,.42)}.term .kw{color:#7FD3B0}.term .st{color:#EAC58C}
   .term .dim{color:rgba(251,248,241,.45)}
+  .term pre[hidden]{display:none}
+  .term .tabs{margin-left:auto;display:inline-flex;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.12);border-radius:8px}
+  .term .tab{font-family:var(--mono);font-size:11.5px;line-height:1;color:rgba(251,248,241,.55);background:transparent;border:0;border-radius:6px;padding:5px 9px;cursor:pointer;transition:color .14s ease,background .14s ease}
+  .term .tab:hover{color:var(--paper)}
+  .term .tab.on{color:var(--paper);background:rgba(255,255,255,.12)}
+  .term .tabs~.copy{margin-left:0}
   .ph{color:#EAC58C;border-bottom:1px dotted rgba(234,197,140,.55)}
 
   /* copy icon in the terminal bar, shown on hover */
@@ -129,6 +135,7 @@
     <div class="h-mark">how to</div>
     <h1>Set up slice, step by step.</h1>
     <p>Eight short steps, from install to uninstall. Every block below can be copied with the button in its top right corner.</p>
+    <p>Tested on Mac and Linux. The Windows lines are standard PowerShell.</p>
     <ul class="toc">
       <li><a href="#install"><span class="n">01</span>Install</a></li>
       <li><a href="#login"><span class="n">02</span>Log in</a></li>
@@ -155,6 +162,7 @@
 <pre><span class="dim">$</span> pip install slice-gateway</pre>
     </div>
     <p>On Mac, use pip3 if pip is not found.</p>
+    <p>On Windows, if pip is not found, use <code>py -m pip</code>.</p>
     <p>Check that it installed, and see which version you have:</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
@@ -204,15 +212,21 @@ Logged in as <span class="dim">jjk30</span></pre>
     <p>To check the saved login from the terminal:</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac">Mac / Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win">Windows</button></div>
         <button class="copy" type="button" aria-label="Copy command">
           <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre><span class="dim">$</span> slice init
+<pre data-os="mac"><span class="dim">$</span> slice init
 
 Gateway:  https://api.sliceapp.dev
 Config:   <span class="dim">/Users/you/.slice/config.json</span>
+Logged in as <span class="dim">jjk30</span> <span class="dim">(account 14)</span>.</pre>
+<pre data-os="win" hidden><span class="dim">&gt;</span> slice init
+
+Gateway:  https://api.sliceapp.dev
+Config:   <span class="dim">C:\Users\you\.slice\config.json</span>
 Logged in as <span class="dim">jjk30</span> <span class="dim">(account 14)</span>.</pre>
     </div>
   </section>
@@ -221,23 +235,28 @@ Logged in as <span class="dim">jjk30</span> <span class="dim">(account 14)</span
   <section class="block" id="tools">
     <h2><span class="no">03</span>Point your tools at slice</h2>
     <p class="say">slice reads your slice key from the Authorization header. Your own Anthropic key goes in x-api-key, and slice forwards it to Anthropic. Each setup below sends both.</p>
+    <p>slice reads each request only to route it and count it. It keeps the token counts and the cost. It does not keep your prompts or your code.</p>
 
     <h3>Claude Code</h3>
     <p>Set three variables in the shell where you run Claude Code. <code>slice use claude-code</code> prints the same lines with your key filled in.</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac">Mac / Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win">Windows</button></div>
         <button class="copy" type="button" aria-label="Copy command">
           <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
+<pre data-os="mac"><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
 <span class="kw">export</span> ANTHROPIC_API_KEY=<span class="ph">(your own Anthropic key)</span>
 <span class="kw">export</span> ANTHROPIC_AUTH_TOKEN=<span class="ph">(your slice key)</span></pre>
+<pre data-os="win" hidden><span class="kw">$env:</span>ANTHROPIC_BASE_URL=<span class="st">"https://api.sliceapp.dev"</span>
+<span class="kw">$env:</span>ANTHROPIC_API_KEY="<span class="ph">(your own Anthropic key)</span>"
+<span class="kw">$env:</span>ANTHROPIC_AUTH_TOKEN="<span class="ph">(your slice key)</span>"</pre>
     </div>
     <div class="fill">
       <b>Fill in two things:</b>
-      <span><code>(your own Anthropic key)</code>: your Anthropic API key. Get it at console.anthropic.com under API keys. Starts with sk-ant-.</span>
+      <span><code>(your own Anthropic key)</code>: the key you already use for Claude. If you have one, paste it here. If not, get one at console.anthropic.com under API keys. It starts with sk-ant-.</span>
       <span><code>(your slice key)</code>: your slice login key. Starts with slk_live_. Easiest: run <code>slice use claude-code</code> and it prints these three lines with your slice key already in. Or open <code>~/.slice/config.json</code> and copy it from there.</span>
       <span>Delete the brackets when you paste.</span>
     </div>
@@ -284,7 +303,8 @@ message = client.messages.create(
   -H <span class="st">"x-api-key: $ANTHROPIC_API_KEY"</span> \
   -H <span class="st">"anthropic-version: 2023-06-01"</span> \
   -H <span class="st">"content-type: application/json"</span> \
-  -d <span class="st">'{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'</span></pre>
+  -d <span class="st">'{"model":"claude-sonnet-5","max_tokens":64,'</span> \
+     <span class="st">'"messages":[{"role":"user","content":"hi"}]}'</span></pre>
     </div>
     <p><b>Run it twice.</b> The first call is billed. The second call, with the same body, is served from cache at $0. slice keeps an answer for one hour.</p>
   </section>
@@ -413,13 +433,16 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
     <p class="say">Remove the CLI and its saved key, then revoke the key on the server.</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac">Mac / Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win">Windows</button></div>
         <button class="copy" type="button" aria-label="Copy command">
           <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre><span class="dim">$</span> pip uninstall slice-gateway
+<pre data-os="mac"><span class="dim">$</span> pip uninstall slice-gateway
 <span class="dim">$</span> rm -rf ~/.slice</pre>
+<pre data-os="win" hidden><span class="dim">&gt;</span> pip uninstall slice-gateway
+<span class="dim">&gt;</span> Remove-Item -Recurse -Force ~\.slice</pre>
     </div>
     <ol>
       <li><b>Revoke the key.</b> In the dashboard, open <b>Your slice key</b> and click <b>Create new key</b>. That revokes every live key on the account, including the one from your machine. The new key is shown once. Close it without saving it, and nothing can use it.</li>
@@ -472,11 +495,11 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
     var timer;
     btn.addEventListener('click',function(){
       var term=btn.closest('.term');
-      var pre=term&&term.querySelector('pre');
+      var pre=term&&term.querySelector('pre:not([hidden])');
       var text=pre?pre.textContent:'';
-      // Strip the leading "$ " prompt marker from any command line so the copied
+      // Strip the leading "$ " or "> " prompt marker from any command line so the copied
       // text is runnable; other lines (output, exports, comments) are untouched.
-      text=text.split('\n').map(function(l){return l.replace(/^\$ ?/,'');}).join('\n');
+      text=text.split('\n').map(function(l){return l.replace(/^[$>] ?/,'');}).join('\n');
       put(text).then(function(){
         btn.classList.add('done'); btn.setAttribute('aria-label','Copied');
       }).catch(function(){
@@ -486,6 +509,18 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
       timer=setTimeout(function(){ btn.classList.remove('done'); btn.setAttribute('aria-label','Copy command'); },1600);
     });
   });
+  // One OS choice for the whole page: picking a tab on any block switches every block.
+  function pick(os){
+    document.querySelectorAll('.term [data-os]').forEach(function(el){
+      var mine=el.getAttribute('data-os')===os;
+      if(el.classList.contains('tab')){ el.classList.toggle('on',mine); el.setAttribute('aria-selected',mine?'true':'false'); }
+      else{ el.hidden=!mine; }
+    });
+  }
+  document.querySelectorAll('.term .tab').forEach(function(tab){
+    tab.addEventListener('click',function(){ pick(tab.getAttribute('data-os')); });
+  });
+  pick('mac');
 })();
 </script>
 </body>

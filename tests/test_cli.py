@@ -5,7 +5,8 @@ wins, then ``SLICE_BASE_URL``, then the hosted default. 0.2.1 made the hosted ga
 the default so a fresh ``pip install slice-gateway && slice login`` reaches
 api.sliceapp.dev without a flag; a self-hosted box is reached by the flag or the variable.
 The config path is pointed at a temp directory, so nothing here reads or writes the real
-``~/.slice/config.json``. No network: nothing invokes login/init/use against a gateway.
+``~/.slice/config.json``. No network: nothing invokes login/init/use against a gateway;
+the ``slice use`` tests only read the saved key and print lines.
 """
 
 from __future__ import annotations
@@ -100,3 +101,55 @@ def test_version_does_not_break_the_subcommands(config_path):
     result = runner.invoke(slice_cli.app, ["use", "--help"])
     assert result.exit_code == 0
     assert "claude-code" in result.output
+
+
+# --- slice use: shell dialect ---------------------------------------------------
+
+
+@pytest.fixture
+def logged_in(config_path):
+    config_path.write_text(json.dumps({"slice_key": "slk_live_x"}))
+    return config_path
+
+
+@pytest.mark.parametrize("tool", ["claude-code", "anthropic"])
+def test_use_prints_export_lines_by_default(logged_in, monkeypatch, tool):
+    monkeypatch.setattr(slice_cli.os, "name", "posix")
+    result = runner.invoke(slice_cli.app, ["use", tool])
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith("export ")
+    assert "$env:" not in result.output
+
+
+@pytest.mark.parametrize("tool", ["claude-code", "anthropic"])
+def test_use_prints_powershell_lines_on_windows(logged_in, monkeypatch, tool):
+    monkeypatch.setattr(slice_cli.os, "name", "nt")
+    result = runner.invoke(slice_cli.app, ["use", tool])
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith("$env:")
+    assert "export " not in result.output
+
+
+def test_use_powershell_quotes_values_and_keeps_the_comments(logged_in, monkeypatch):
+    monkeypatch.setattr(slice_cli.os, "name", "nt")
+    result = runner.invoke(slice_cli.app, ["use", "claude-code"])
+    lines = result.output.splitlines()
+    assert lines[0] == '$env:ANTHROPIC_BASE_URL="https://api.sliceapp.dev"'
+    assert lines[2].startswith('$env:ANTHROPIC_AUTH_TOKEN="slk_live_x"')
+    assert "# your slice key" in lines[2]
+
+
+def test_use_anthropic_comment_names_the_powershell_variable(logged_in, monkeypatch):
+    monkeypatch.setattr(slice_cli.os, "name", "nt")
+    result = runner.invoke(slice_cli.app, ["use", "anthropic"])
+    assert "#   Authorization: Bearer $env:SLICE_KEY" in result.output
+    assert "$SLICE_KEY\n" not in result.output
+
+
+def test_use_curl_is_the_same_on_windows(logged_in, monkeypatch):
+    monkeypatch.setattr(slice_cli.os, "name", "posix")
+    posix = runner.invoke(slice_cli.app, ["use", "curl"]).output
+    monkeypatch.setattr(slice_cli.os, "name", "nt")
+    windows = runner.invoke(slice_cli.app, ["use", "curl"]).output
+    assert posix == windows
+    assert posix.startswith("curl https://api.sliceapp.dev/v1/messages")
