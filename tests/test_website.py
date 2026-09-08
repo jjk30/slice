@@ -270,10 +270,11 @@ def test_tools_step_says_what_slice_sees_and_keeps(how_to):
     assert tools.index("What slice sees") < tools.index("<h3>Claude Code</h3>")
 
 
-# The screenshots on the page, in page order: one in step 01, then the seven of step 02.
+# The screenshots on the page, in page order: one in step 01, then the eight of step 02.
 STEP_02_SCREENSHOTS = [
     "02-login-terminal.png",
     "02-github-device.png",
+    "02-github-code.png",
     "02-github-authorize.png",
     "02-github-done.png",
     "02-logged-in.png",
@@ -285,6 +286,7 @@ SCREENSHOTS = ["01-install.png", *STEP_02_SCREENSHOTS]
 STEP_02_LABELS = [
     "Terminal after slice login",
     "GitHub: Device Activation, click Continue",
+    "GitHub: enter the code",
     "GitHub: Authorize slice",
     "GitHub: done",
     "Terminal: logged in, with your dashboard link",
@@ -324,8 +326,8 @@ def test_how_to_page_shows_the_screenshots(how_to):
     assert "shot-row" not in how_to and "shot-gallery" not in how_to
 
 
-def test_login_step_has_the_eight_pictures_in_order_with_labels(how_to):
-    """Step 02 for CLI 0.2.2: the seven pictures of the login walk (the eighth picture
+def test_login_step_has_the_nine_pictures_in_order_with_labels(how_to):
+    """Step 02 for CLI 0.2.2: the eight pictures of the login walk (the ninth picture
     on the page counting the install one) come in the order of the steps the user takes,
     each with its label above it, and the username note sits after the terminal ones."""
     login = _section(how_to, "login")
