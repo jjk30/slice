@@ -1,0 +1,23 @@
+# A hand-run smoke test: one request to the hosted slice gateway with the same curl the
+# how-to page shows in step 06. It needs the SLICE_KEY and ANTHROPIC_API_KEY secrets.
+name: slice smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask Claude through slice
+        env:
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.SLICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          curl -sSf https://api.sliceapp.dev/v1/messages \
+            -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d '{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}' \
+            | python3 -c 'import json, sys; r = json.load(sys.stdin); print("model:", r["model"]); print("text:", next(b["text"] for b in r["content"] if b["type"] == "text"))'
