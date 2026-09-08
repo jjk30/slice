@@ -54,6 +54,18 @@ const sourceNote = computed(() =>
   budget.value?.budget_source === 'postgres' ? 'gate counter unavailable, showing recorded spend' : ''
 )
 
+// The gate counter also carries the routing judge's own calls, which never become a
+// request row, so it can sit a little above the recorded spend. Said once, in plain
+// words, only when the meter is on the counter and the two figures differ.
+const judgeNote = computed(() => {
+  const b = budget.value
+  if (!b || b.budget_source !== 'redis') return ''
+  const used = typeof b.budget_used_usd === 'number' ? b.budget_used_usd : NaN
+  const spend = typeof b.spend_usd === 'number' ? b.spend_usd : NaN
+  if (!Number.isFinite(used) || !Number.isFinite(spend) || used === spend) return ''
+  return "Budget also counts the routing judge's own calls, so it can sit a little above real spend."
+})
+
 // Phase 25: one "about N tokens on <family>" line per Anthropic family in the gateway's
 // pricing table, computed server-side from the dollars left at the stated blend. The
 // tooltip names the blend and the list price the line assumes.
@@ -103,6 +115,7 @@ function shareLine(t) {
           <span class="left">{{ money(budget.remaining_usd) }} left</span>
         </span>
       </div>
+      <p v-if="judgeNote" class="mono small muted judge-note">{{ judgeNote }}</p>
       <div
         class="meter"
         :class="{ 'meter--unknown': !meter.known }"
@@ -143,6 +156,10 @@ function shareLine(t) {
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 8px;
+}
+
+.judge-note {
+  margin: -4px 0 8px;
 }
 
 .team-name {
