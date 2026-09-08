@@ -129,6 +129,18 @@ def test_site_header_links_to_how_to():
     assert 'href="how-to.html"' in INDEX.read_text(encoding="utf-8")
 
 
+def test_every_get_started_link_goes_to_the_install_section(how_to):
+    """Get started means install the CLI first; the dashboard is reached from the how-to
+    page's own Open the dashboard button at the bottom. Both pages are checked, and the
+    anchor is a real section id on the how-to page."""
+    index = INDEX.read_text(encoding="utf-8")
+    assert 'id="install"' in how_to
+    links = re.findall(r'<a[^>]*href="([^"]*)"[^>]*>\s*(?:<svg[^>]*>.*?</svg>)?\s*Get started\s*</a>', index + how_to, re.S)
+    assert len(links) == 3, links
+    assert set(links) == {"https://sliceapp.dev/how-to.html#install"}
+    assert 'href="https://api.sliceapp.dev">' in how_to and "Open the dashboard" in how_to
+
+
 def test_dashboard_header_links_to_how_to():
     app = DASHBOARD_APP.read_text(encoding="utf-8")
     assert 'href="https://sliceapp.dev/how-to.html"' in app

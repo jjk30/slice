@@ -14,6 +14,8 @@ import FindingsPanel from './components/FindingsPanel.vue'
 import SliceKeyCard from './components/SliceKeyCard.vue'
 import LoginScreen from './components/LoginScreen.vue'
 import SetupScreen from './components/SetupScreen.vue'
+import SigningOut from './components/SigningOut.vue'
+import FirstRequestCard from './components/FirstRequestCard.vue'
 
 // Phase 21: the dashboard is locked behind a GitHub session (an httpOnly cookie). On
 // mount we ask /auth/me who we are. No session -> the login screen. A session whose
@@ -31,7 +33,12 @@ const profileConfirmed = ref(false)
 const settingsOpen = ref(false)
 // Phase 22a: true right after a Log out, so the login screen shows a "Signed out" note.
 const signedOut = ref(false)
+// True from the moment Log out is pressed until the sign-out card has been up long enough
+// to read; `logoutFailed` flips the card's wording when the gateway could not be reached.
+const signingOut = ref(false)
+const logoutFailed = ref(false)
 const view = computed(() => {
+  if (signingOut.value) return 'signing-out'
   if (!session.value) return 'login'
   if (!profileConfirmed.value) return 'setup'
   if (settingsOpen.value) return 'settings'
@@ -100,20 +107,44 @@ async function refreshTeams() {
   }
 }
 
+// How long the sign-out card stays up: at least this long from when it appeared when the
+// gateway answered, and this long after a failed call so the wording can be read.
+const SIGNOUT_MIN_MS = 700
+const SIGNOUT_FAILED_MS = 1500
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 async function onLogout() {
-  // Close the live stream first, then clear the cookie server-side, so nothing keeps
-  // pulling the old session's data on the way out.
+  if (signingOut.value) return
+  // Show the sign-out card, close the live stream, then clear the cookie server-side, so
+  // nothing keeps pulling the old session's data on the way out. The card is held up by
+  // the real logout call: a floor of SIGNOUT_MIN_MS so it never flashes, or a longer
+  // hold with the "this device only" wording when the gateway could not be reached.
+  const shownAt = Date.now()
+  logoutFailed.value = false
+  signingOut.value = true
   stopLive()
-  await logout()
+  const reached = await logout()
+  if (reached) {
+    await wait(Math.max(0, SIGNOUT_MIN_MS - (Date.now() - shownAt)))
+  } else {
+    logoutFailed.value = true
+    await wait(SIGNOUT_FAILED_MS)
+  }
   profileConfirmed.value = false
   settingsOpen.value = false
   summary.value = models.value = teams.value = awsCost.value = recent.value = null
   awsConn.value = findings.value = null
   recentLoaded = false
   error.value = ''
-  // `session` is now null, so `view` flips to 'login'; this shows the "Signed out" note
-  // there. It is cleared the moment a sign-in starts a fresh session (see startDashboard).
+  // `session` is already null, so once the card is released `view` flips to 'login';
+  // this shows the "Signed out" note there. It is cleared the moment a sign-in starts a
+  // fresh session (see startDashboard).
   signedOut.value = true
+  signingOut.value = false
+  logoutFailed.value = false
 }
 
 const RECENT_LIMIT = 20
@@ -360,10 +391,22 @@ const awsPanelVisible = computed(() => {
 })
 // A loaded summary with no guardrails object renders dashes, not "Loading…".
 const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {} : null))
+// The month's request count once the summary has loaded; null while loading or after a
+// failed fetch, so the first-request card never shows on an unknown count. A count of
+// zero puts that card above the tiles, holds the tiles back, and hides the two panels
+// that would only be empty. It leaves on its own when a refresh or the live stream
+// brings the count above zero.
+const requestCount = computed(() => {
+  if (!summary.value || failed.value) return null
+  const n = summary.value.requests
+  return typeof n === 'number' ? n : null
+})
+const firstRequest = computed(() => requestCount.value === 0)
 </script>
 
 <template>
   <template v-if="!booted" />
+  <SigningOut v-else-if="view === 'signing-out'" :failed="logoutFailed" />
   <LoginScreen v-else-if="view === 'login'" :signed-out="signedOut" />
   <SetupScreen v-else-if="view === 'setup'" mode="onboarding" @done="onSetupDone" />
   <SetupScreen
@@ -395,7 +438,8 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
     </div>
 
     <main class="grid">
-      <div class="kpis">
+      <FirstRequestCard class="span-4" :requests="requestCount" />
+      <div class="kpis" :class="{ dimmed: firstRequest }">
         <KpiTile label="spend this month" :value="spend" :sub="spendSub" :failed="failed" tone="cherry" tint="lavender" />
         <KpiTile label="AWS bill this month" :value="awsBill" :sub="awsBillSub" :failed="failed" tint="rose" />
         <KpiTile label="saved this month" :value="saved" :failed="failed" tone="teal" tint="green" />
@@ -404,11 +448,11 @@ const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {
       </div>
 
       <TeamBudgets class="span-2" :data="teams" :failed="failed" />
-      <ModelsChart class="span-2" :data="models" :failed="failed" />
+      <ModelsChart v-if="!firstRequest" class="span-2" :data="models" :failed="failed" />
 
       <FindingsPanel v-if="awsPanelVisible" class="span-4" :data="findings" :failed="failed" />
 
-      <RecentCalls class="span-4" :rows="recent" :failed="failed" />
+      <RecentCalls v-if="!firstRequest" class="span-4" :rows="recent" :failed="failed" />
 
       <GuardrailsTile :guardrails="guardrails" :failed="failed" />
       <SliceKeyCard class="span-2" @auth-error="onKeyAuthError" />

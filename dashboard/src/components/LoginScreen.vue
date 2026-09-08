@@ -38,6 +38,10 @@ function signIn() {
       <button type="button" class="submit" @click="signIn">
         <img class="gh-mark" :src="githubMark" alt="" />Sign in with GitHub
       </button>
+      <p class="new-here">
+        New here? Install the CLI first, about three minutes.
+        <a href="https://sliceapp.dev/how-to.html#install">Set up slice</a>
+      </p>
       <p class="hint">
         The terminal uses <code class="mono">slice login</code> instead, which hands out a
         slice key for the CLI. This dashboard signs you in through GitHub.
@@ -163,6 +167,19 @@ function signIn() {
 .submit:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.new-here {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.new-here a {
+  color: var(--teal-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .hint {

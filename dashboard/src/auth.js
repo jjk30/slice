@@ -26,12 +26,18 @@ export async function loadSession() {
   return session.value
 }
 
-// Clear the session cookie on the gateway, then drop the local session.
+// Clear the session cookie on the gateway, then drop the local session. Returns true
+// when the gateway answered the call, false when it could not be reached: the local
+// session is dropped either way, and the caller can say which one happened.
 export async function logout() {
+  let reached = false
   try {
-    await fetch(apiBase() + '/auth/logout', { method: 'POST' })
+    const res = await fetch(apiBase() + '/auth/logout', { method: 'POST' })
+    reached = res.ok
   } catch (e) {
-    // A failed logout call still signs out locally; ignore.
+    // A failed logout call still signs out locally.
+    reached = false
   }
   session.value = null
+  return reached
 }

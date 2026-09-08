@@ -271,6 +271,11 @@ a {
   align-self: stretch;
 }
 
+/* Under the first-request card the tiles are still there, just held back. */
+.kpis.dimmed {
+  opacity: .45;
+}
+
 .span-2 {
   grid-column: span 2;
 }
