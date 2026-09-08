@@ -21,7 +21,7 @@ COMPONENTS = DASHBOARD / "src" / "components"
 APP = DASHBOARD / "src" / "App.vue"
 AUTH = DASHBOARD / "src" / "auth.js"
 
-HOW_TO_INSTALL = "https://sliceapp.dev/how-to.html#install"
+HOW_TO_INSTALL = "https://sliceapp.dev/how-to#install"
 
 # Runs from the dashboard directory. Each case is {component, props, storage?}; the
 # rendered HTML leaves as a JSON list in the same order. LoginScreen reads
@@ -447,3 +447,17 @@ def test_app_reads_and_writes_the_two_page_paths():
     assert '@click="openSettings"' in app
     # The other views never touch the path: no push in the sign-out or saving card paths.
     assert app.count("pushPath(") == 3  # the helper's own definition plus its two callers
+
+
+
+def test_dashboard_links_use_the_clean_how_to_url():
+    """Phase 31: the How to button, the Set up slice link and the Full setup link all
+    point at /how-to (with #install where they did), never how-to.html."""
+    app = APP.read_text(encoding="utf-8")
+    login = (COMPONENTS / "LoginScreen.vue").read_text(encoding="utf-8")
+    card = (COMPONENTS / "FirstRequestCard.vue").read_text(encoding="utf-8")
+    assert 'href="https://sliceapp.dev/how-to" target="_blank" rel="noopener">How to</a>' in app
+    assert 'href="https://sliceapp.dev/how-to#install">Set up slice</a>' in login
+    assert 'href="https://sliceapp.dev/how-to#install" target="_blank" rel="noopener">Full setup, step by step</a>' in card
+    for source in (app, login, card):
+        assert "how-to.html" not in source

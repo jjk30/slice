@@ -47,7 +47,7 @@ export ANTHROPIC_API_KEY=<span class="ph">(your own Anthropic key)</span>
 export ANTHROPIC_AUTH_TOKEN=<span class="ph">(your slice key)</span></pre>
     </div>
     <p class="say">
-      <a class="setup-link" href="https://sliceapp.dev/how-to.html#install" target="_blank" rel="noopener">Full setup, step by step</a>
+      <a class="setup-link" href="https://sliceapp.dev/how-to#install" target="_blank" rel="noopener">Full setup, step by step</a>
     </p>
     <p class="say">
       Or run <code class="mono">slice use claude-code</code> and it fills your key in for you.

@@ -42,9 +42,15 @@ sliceapp.dev {
         flush_interval -1
     }
 
+    # Phase 31: clean URLs for the static pages. /how-to serves how-to.html (try_files
+    # looks for the path, then the path with .html), and the old .html address moves
+    # there for good.
+    redir /how-to.html /how-to permanent
+
     @app path /dashboard /settings /dashboard/* /assets/* /auth/* /scanner/* /admin/* /account/*
     reverse_proxy @app gateway:8080
 
+    try_files {path} {path}.html
     file_server
     encode zstd gzip
 }

@@ -503,7 +503,7 @@ const firstRequest = computed(() => requestCount.value === 0)
         <span class="meta">this month · {{ month ?? '\u2014' }}</span>
         <span v-if="accountLogin" class="meta account">{{ accountLogin }}</span>
         <LivePill :status="liveStatus" />
-        <a class="settings howto" href="https://sliceapp.dev/how-to.html" target="_blank" rel="noopener">How to</a>
+        <a class="settings howto" href="https://sliceapp.dev/how-to" target="_blank" rel="noopener">How to</a>
         <button class="settings" type="button" @click="openSettings">Settings</button>
         <button class="signout" type="button" @click="onLogout">Log out</button>
       </div>

@@ -131,8 +131,8 @@
       <b>slice</b>
     </a>
     <div class="navr">
-      <a href="how-to.html" class="navlink here">How to</a>
-      <a href="https://sliceapp.dev/how-to.html#install" class="go">Get started</a>
+      <a href="https://sliceapp.dev/how-to" class="navlink here">How to</a>
+      <a href="https://sliceapp.dev/how-to#install" class="go">Get started</a>
     </div>
   </nav>
 </div>
@@ -160,6 +160,11 @@
     <h2><span class="no">01</span>Install</h2>
     <p class="say">The slice CLI is a small package on PyPI. It needs Python 3.11 or newer.</p>
     <p>Use pipx. It installs command line apps in their own space and puts slice on your PATH. On a new Mac, plain pip install is refused with the words externally managed environment. pipx is the fix, not a workaround.</p>
+    <ul>
+      <li><b>Mac:</b> macOS 13 Ventura and newer with Python from Homebrew, which is any Homebrew Python 3.11 or newer. The Python that ships with macOS is 3.9 and cannot run slice at all, so a Mac ends up on Homebrew and hits the refusal.</li>
+      <li><b>Linux:</b> Debian 12 and newer, Ubuntu 23.04 and newer (so 24.04 LTS), Fedora 38 and newer, Arch since 2023. Older releases let plain pip through, pipx still works.</li>
+      <li><b>Windows:</b> Windows 10 and 11 with Python 3.11 or newer from python.org. Windows never refuses pip, pipx just keeps the steps the same everywhere.</li>
+    </ul>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
         <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>

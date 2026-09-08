@@ -46,6 +46,18 @@ def test_apex_proxies_the_app_paths_before_the_static_site():
     assert "root * /srv/slice-site" in apex and "file_server" in apex
 
 
+def test_apex_serves_clean_urls_for_the_static_pages():
+    """Phase 31: /how-to serves how-to.html through try_files, placed right before
+    file_server, and the old .html address is a permanent redirect placed before the
+    app path matcher."""
+    apex = _block(CADDYFILE.read_text(encoding="utf-8"), "sliceapp.dev")
+    assert "try_files {path} {path}.html" in apex
+    assert "redir /how-to.html /how-to permanent" in apex
+    assert apex.index("redir /how-to.html") < apex.index("@app path")
+    directive = "\n    try_files {path} {path}.html\n"
+    assert apex.index("reverse_proxy @app") < apex.index(directive) < apex.index("\n    file_server\n")
+
+
 def test_api_host_sends_the_pages_to_the_apex_and_keeps_metrics_hidden():
     api = _block(CADDYFILE.read_text(encoding="utf-8"), "{$API_DOMAIN}")
     assert "@app path / /dashboard /settings" in api

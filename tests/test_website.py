@@ -130,7 +130,7 @@ def test_how_to_page_shows_the_current_cli_commands(how_to):
 
 
 def test_site_header_links_to_how_to():
-    assert 'href="how-to.html"' in INDEX.read_text(encoding="utf-8")
+    assert 'href="https://sliceapp.dev/how-to"' in INDEX.read_text(encoding="utf-8")
 
 
 def test_every_get_started_link_goes_to_the_install_section(how_to):
@@ -141,7 +141,7 @@ def test_every_get_started_link_goes_to_the_install_section(how_to):
     assert 'id="install"' in how_to
     links = re.findall(r'<a[^>]*href="([^"]*)"[^>]*>\s*(?:<svg[^>]*>.*?</svg>)?\s*Get started\s*</a>', index + how_to, re.S)
     assert len(links) == 3, links
-    assert set(links) == {"https://sliceapp.dev/how-to.html#install"}
+    assert set(links) == {"https://sliceapp.dev/how-to#install"}
     assert 'href="https://sliceapp.dev/dashboard">' in how_to and "Open the dashboard" in how_to
 
 
@@ -160,7 +160,7 @@ def test_dashboard_links_point_at_the_apex_dashboard(how_to):
 
 def test_dashboard_header_links_to_how_to():
     app = DASHBOARD_APP.read_text(encoding="utf-8")
-    assert 'href="https://sliceapp.dev/how-to.html"' in app
+    assert 'href="https://sliceapp.dev/how-to"' in app
     assert 'target="_blank"' in app
 
 
@@ -198,3 +198,27 @@ def test_install_section_is_pipx_on_three_tabs(how_to):
     # The three icons are still what the tabs use, on every tabbed block.
     for icon in ("apple.png", "tux.png", "windows.svg"):
         assert how_to.count(f'src="{icon}"') >= 4, icon
+
+
+
+def test_no_link_points_at_the_html_address(how_to):
+    """Phase 31: the how-to page is /how-to; every link on both pages uses the clean URL
+    (with its #section where it has one), never how-to.html."""
+    index = INDEX.read_text(encoding="utf-8")
+    for page in (index, how_to):
+        assert 'href="how-to.html' not in page and "how-to.html" not in re.findall(r'href="([^"]+)"', page).__str__()
+        assert 'href="https://sliceapp.dev/how-to' in page
+    assert 'href="https://sliceapp.dev/how-to#install"' in index and 'href="https://sliceapp.dev/how-to#install"' in how_to
+
+
+def test_install_section_lists_the_versions_under_the_pipx_paragraph(how_to):
+    install = how_to[how_to.index('id="install"'):how_to.index('id="login"')]
+    pipx = install.index("Use pipx.")
+    items = re.findall(r"<li><b>(\w+):</b>(.*?)</li>", install[pipx:], re.S)
+    assert [name for name, _ in items][:3] == ["Mac", "Linux", "Windows"]
+    text = " ".join(body for _, body in items[:3])
+    for needle in ("macOS 13 Ventura", "Homebrew Python 3.11", "is 3.9", "Debian 12", "Ubuntu 23.04", "24.04 LTS",
+                   "Fedora 38", "Arch since 2023", "Windows 10 and 11", "python.org", "never refuses pip"):
+        assert needle in text, needle
+    assert install.index("<ul>", pipx) < install.index('<div class="term">', pipx)
+    assert "This applies to" not in install

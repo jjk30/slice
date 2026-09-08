@@ -56,7 +56,7 @@ function signIn() {
       </button>
       <p class="new-here">
         New here? Install the CLI first, about three minutes.
-        <a href="https://sliceapp.dev/how-to.html#install">Set up slice</a>
+        <a href="https://sliceapp.dev/how-to#install">Set up slice</a>
       </p>
       <p class="hint">
         The terminal uses <code class="mono">slice login</code> instead, which hands out a
