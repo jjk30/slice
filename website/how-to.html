@@ -99,10 +99,10 @@
   .term .tab:hover{color:var(--paper)}
   .term .tab.on{color:var(--paper);background:rgba(255,255,255,.12)}
   .term .tabs~.copy{margin-left:0}
-  /* "What you should see": the output of the command block above, in the same dark block,
-     with only the label on the bar (no dots, no tabs, no copy button) */
-  .block .term.see{margin-top:10px}
-  .term.see .bar span{margin-left:0}
+  /* "What you should see": the output of the command block above, in the same dark block
+     with no bar (no dots, no tabs, no copy button), under a small heading in the page font */
+  .block h4.see-head{font-family:var(--display);font-weight:600;font-size:17px;letter-spacing:-.012em;margin:18px 0 8px}
+  .block .term.see{margin-top:0}
   .ph{color:#EAC58C;border-bottom:1px dotted rgba(234,197,140,.55)}
 
   /* copy icon in the terminal bar, shown on hover */
@@ -234,8 +234,8 @@
 <pre data-os="mac linux"><span class="dim">$</span> slice login</pre>
 <pre data-os="win" hidden><span class="dim">&gt;</span> slice login</pre>
     </div>
+    <h4 class="see-head">What you should see</h4>
     <div class="term see">
-      <div class="bar"><span>What you should see</span></div>
 <pre>  To finish signing in, open:
     https://github.com/login/device
   and enter this code:
@@ -304,14 +304,13 @@ Your dashboard: https://sliceapp.dev/dashboard</pre>
 <pre data-os="mac linux"><span class="dim">$</span> slice init</pre>
 <pre data-os="win" hidden><span class="dim">&gt;</span> slice init</pre>
     </div>
+    <h4 class="see-head">What you should see</h4>
     <div class="term see" data-os="mac linux">
-      <div class="bar"><span>What you should see</span></div>
 <pre>Gateway:  https://api.sliceapp.dev
 Config:   /Users/you/.slice/config.json
 Logged in as your username (account 1).</pre>
     </div>
     <div class="term see" data-os="win" hidden>
-      <div class="bar"><span>What you should see</span></div>
 <pre>Gateway:  https://api.sliceapp.dev
 Config:   C:\Users\you\.slice\config.json
 Logged in as your username (account 1).</pre>

@@ -414,7 +414,7 @@ def _command_blocks(how_to: str) -> list[tuple[str, str]]:
 def _see_blocks(html: str) -> list[tuple[str | None, str]]:
     """(data-os or None, output text) of every "What you should see" box, in page order."""
     found = []
-    pattern = r'<div class="term see"([^>]*)>\s*<div class="bar"><span>What you should see</span></div>\s*<pre>(.*?)</pre>'
+    pattern = r'<div class="term see"([^>]*)>\s*<pre>(.*?)</pre>'
     for attrs, body in re.findall(pattern, html, re.S):
         os_names = re.search(r'data-os="([^"]+)"', attrs)
         found.append((os_names.group(1) if os_names else None, body))
@@ -433,7 +433,8 @@ def test_no_command_block_carries_output_lines(how_to):
 def test_what_you_should_see_boxes_sit_under_the_split_blocks(how_to):
     """Two blocks were split: slice login (one box, the output is the same everywhere) and
     slice init (one box per OS pane, the config path differs). Each box is a dark terminal
-    block with only the label on its bar: no dots, no tabs, no copy button. Every one uses
+    block with no bar at all (no dots, no tabs, no copy button), under one small heading in
+    the page font: one above the login box, one above the init pair. Every box uses
     placeholders for the username, the code, and the account number."""
     login = _section(how_to, "login")
     boxes = _see_blocks(login)
@@ -444,12 +445,21 @@ def test_what_you_should_see_boxes_sit_under_the_split_blocks(how_to):
     assert "/Users/you/.slice/config.json" in boxes[1][1] and "C:\\Users\\you\\.slice\\config.json" in boxes[2][1]
     init = login[login.index("$</span> slice init"):]
     assert init.index("</div>") < init.index("What you should see")
+    # One heading per split block, directly above its box (or the pair), none inside a box.
+    heading = '<h4 class="see-head">What you should see</h4>'
+    assert how_to.count(heading) == 2
+    assert how_to.count(">What you should see<") == 2  # the two headings, no label anywhere else
+    for opener in ('<div class="term see">', '<div class="term see" data-os="mac linux">'):
+        before = how_to[:how_to.index(opener)].rstrip()
+        assert before.endswith(heading), opener
+    assert ".block h4.see-head{" in how_to
     assert '<div class="term see" data-os="win" hidden>' in login
     assert "account 1)" in boxes[1][1] and "account 1)" in boxes[2][1]
     assert "account 14" not in how_to
     boxes_html = re.findall(r'<div class="term see"[^>]*>.*?</pre>\s*</div>', how_to, re.S)
     assert len(boxes_html) == 3
     for box in boxes_html:
+        assert 'class="bar"' not in box and "What you should see" not in box
         assert 'class="copy"' not in box and 'class="tabs"' not in box
         assert '<i class="r"></i>' not in box
     assert ".fill.see" not in how_to
