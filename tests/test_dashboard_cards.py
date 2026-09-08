@@ -92,7 +92,7 @@ def test_app_drives_the_sign_out_card_from_the_real_logout_call():
     # The card goes up before the stream stops, and is released only after logout() resolves.
     assert body.index("signingOut.value = true") < body.index("stopLive()") < body.index("await logout()")
     assert body.index("await logout()") < body.index("signingOut.value = false")
-    assert "SIGNOUT_MIN_MS = 700" in app and "SIGNOUT_FAILED_MS = 1500" in app
+    assert "SIGNOUT_MIN_MS = 4000" in app and "SIGNOUT_FAILED_MS = 1500" in app
 
 
 def test_app_shows_the_first_request_card_only_for_a_loaded_zero():

@@ -109,7 +109,7 @@ async function refreshTeams() {
 
 // How long the sign-out card stays up: at least this long from when it appeared when the
 // gateway answered, and this long after a failed call so the wording can be read.
-const SIGNOUT_MIN_MS = 700
+const SIGNOUT_MIN_MS = 4000
 const SIGNOUT_FAILED_MS = 1500
 
 function wait(ms) {
