@@ -1,6 +1,7 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { apiBase } from '../api.js'
+import { lastLogin, forgetLogin } from '../auth.js'
 import githubMark from '../assets/github-mark.png'
 
 // Phase 21: GitHub sign-in for the dashboard. The button is a full-page redirect to the
@@ -9,9 +10,21 @@ import githubMark from '../assets/github-mark.png'
 // carries ?login=denied or ?login=failed and we show one plain line about it.
 // Phase 22a: `signedOut` is set by App.vue right after a Log out, so this screen shows a
 // one-line "Signed out" note instead of looking like a fresh, never-signed-in visit.
+// Returning mode: when a previous sign-in left its GitHub username in localStorage (see
+// rememberLogin in auth.js, written only from the gateway's own session), the card says
+// "Welcome back." and the button reads "Log in as {name}". It is the same GitHub
+// sign-in either way; the name is only wording. "Use a different GitHub account" forgets
+// the name and drops the card back to the plain mode without a reload.
 const props = defineProps({
   signedOut: { type: Boolean, default: false },
 })
+
+const remembered = ref(lastLogin())
+
+function useDifferentAccount() {
+  forgetLogin()
+  remembered.value = null
+}
 
 const loginError = computed(() => {
   const reason = new URLSearchParams(window.location.search).get('login')
@@ -32,11 +45,14 @@ function signIn() {
         <img class="brand-logo" src="/favicon.png" alt="" width="28" height="28" />
         <h1 class="brand-name">slice</h1>
       </div>
-      <p class="lede">Sign in to your dashboard.</p>
-      <p v-if="signedOut && !loginError" class="signed-out" role="status">Signed out</p>
+      <p class="lede">{{ remembered ? 'Welcome back.' : 'Sign in to your dashboard.' }}</p>
+      <p v-if="signedOut && !loginError && !remembered" class="signed-out" role="status">Signed out</p>
       <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
       <button type="button" class="submit" @click="signIn">
-        <img class="gh-mark" :src="githubMark" alt="" />Sign in with GitHub
+        <img class="gh-mark" :src="githubMark" alt="" />{{ remembered ? `Log in as ${remembered}` : 'Sign in with GitHub' }}
+      </button>
+      <button v-if="remembered" type="button" class="switch-account" @click="useDifferentAccount">
+        Use a different GitHub account
       </button>
       <p class="new-here">
         New here? Install the CLI first, about three minutes.
@@ -167,6 +183,26 @@ function signIn() {
 .submit:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* A link in the muted body style; a button underneath so it is keyboard-reachable. */
+.switch-account {
+  align-self: flex-start;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--body);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.switch-account:hover {
+  color: var(--ink);
 }
 
 .new-here {

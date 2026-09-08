@@ -23,22 +23,33 @@ AUTH = DASHBOARD / "src" / "auth.js"
 
 HOW_TO_INSTALL = "https://sliceapp.dev/how-to.html#install"
 
-# Runs from the dashboard directory. Each case is {component, props}; the rendered HTML
-# leaves as a JSON list in the same order. LoginScreen reads window.location at render
-# time, so a bare window is provided for the server renderer.
+# Runs from the dashboard directory. Each case is {component, props, storage?}; the
+# rendered HTML leaves as a JSON list in the same order. LoginScreen reads
+# window.location at render time, so a bare window is provided for the server renderer,
+# and `storage` (a plain object) stands in for localStorage for that one case, so the
+# remembered-login mode can be rendered; without it there is no localStorage at all.
 RENDER = """
 import { createServer } from 'vite'
 import { createSSRApp } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 globalThis.window ??= { location: { search: '', href: '' } }
 const cases = JSON.parse(process.env.CARD_CASES)
+function fakeStorage(store) {
+  return {
+    getItem: (k) => (Object.hasOwn(store, k) ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v) },
+    removeItem: (k) => { delete store[k] },
+  }
+}
 const server = await createServer({
   configFile: 'vite.config.js', appType: 'custom', logLevel: 'silent',
   server: { middlewareMode: true, watch: null },
 })
 try {
   const out = []
-  for (const { component, props } of cases) {
+  for (const { component, props, storage } of cases) {
+    if (storage) globalThis.localStorage = fakeStorage({ ...storage })
+    else delete globalThis.localStorage
     const mod = await server.ssrLoadModule('/src/components/' + component)
     out.push(await renderToString(createSSRApp(mod.default, props)))
   }
@@ -71,6 +82,39 @@ def test_login_screen_source_carries_the_new_here_line():
     assert f'href="{HOW_TO_INSTALL}"' in source
     # Under the GitHub button and above the terminal note.
     assert source.index("Sign in with GitHub") < source.index("New here?") < source.index("The terminal uses")
+
+
+def test_auth_remembers_the_last_login_under_one_key():
+    auth = AUTH.read_text(encoding="utf-8")
+    assert "export const LAST_LOGIN_KEY = 'slice:last_login'" in auth
+    assert "export function rememberLogin(username)" in auth
+    assert "localStorage.setItem(LAST_LOGIN_KEY, username)" in auth
+    assert "export function lastLogin()" in auth
+    assert "localStorage.getItem(LAST_LOGIN_KEY)" in auth
+    assert "export function forgetLogin()" in auth
+    assert "localStorage.removeItem(LAST_LOGIN_KEY)" in auth
+    # Logout leaves the remembered name alone.
+    start = auth.index("export async function logout")
+    logout = auth[start:auth.index("\n}\n", start)]
+    assert "LAST_LOGIN_KEY" not in logout and "forgetLogin" not in logout
+
+
+def test_app_remembers_the_login_when_a_session_loads():
+    app = APP.read_text(encoding="utf-8")
+    assert "rememberLogin" in app[app.index("import { session"):app.index("\n", app.index("import { session"))]
+    start = app.index("onMounted(async () => {")
+    mount = app[start:app.index("onBeforeUnmount(", start)]
+    assert "rememberLogin(session.value.login)" in mount
+    assert mount.index("await loadSession()") < mount.index("rememberLogin(session.value.login)")
+
+
+def test_login_screen_reads_the_name_only_from_storage():
+    source = (COMPONENTS / "LoginScreen.vue").read_text(encoding="utf-8")
+    assert "const remembered = ref(lastLogin())" in source
+    assert "forgetLogin()" in source
+    # The name never comes from the URL or an input; the only URL read is the login error.
+    assert source.count("window.location.search") == 1
+    assert "<input" not in source
 
 
 def test_signing_out_source_matches_the_login_card():
@@ -153,3 +197,32 @@ def test_cards_render():
     assert ">Copy</button>" in first_zero
     assert "Send your first request" not in first_three
     assert first_three.strip() == "<!---->"
+
+
+def test_login_screen_returning_mode_renders():
+    returning, plain = _render([
+        {"component": "LoginScreen.vue", "props": {"signedOut": True}, "storage": {"slice:last_login": "jjk30"}},
+        {"component": "LoginScreen.vue", "props": {"signedOut": True}},
+    ])
+
+    # A remembered name: Welcome back, the named button, the switch link, no Signed out.
+    assert "Welcome back." in returning
+    assert "Log in as jjk30" in returning
+    assert "Use a different GitHub account" in returning
+    assert "Signed out" not in returning
+    assert "Sign in with GitHub" not in returning
+    assert "Sign in to your dashboard." not in returning
+
+    # No remembered name: exactly today's card.
+    assert "Sign in to your dashboard." in plain
+    assert "Signed out" in plain
+    assert "Sign in with GitHub" in plain
+    assert "Log in as" not in plain
+    assert "Use a different GitHub account" not in plain
+    assert "Welcome back." not in plain
+
+    # Both modes keep the New here line and the terminal note under the button.
+    for html in (returning, plain):
+        assert "New here? Install the CLI first, about three minutes." in html
+        assert "The terminal uses" in html
+        assert html.index("gh-mark") < html.index("New here?") < html.index("The terminal uses")

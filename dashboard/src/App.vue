@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { getJson, getAwsCost, getScannerConnect, getFindings, AuthError } from './api.js'
 import { useLiveEvents } from './live.js'
-import { session, loadSession, logout } from './auth.js'
+import { session, loadSession, logout, rememberLogin } from './auth.js'
 import { money, dollars, percent, integer } from './format.js'
 import KpiTile from './components/KpiTile.vue'
 import LivePill from './components/LivePill.vue'
@@ -322,6 +322,9 @@ onMounted(async () => {
   // or setup screen shows and takes it from there.
   await loadSession()
   if (session.value) {
+    // A session is here (a fresh sign-in lands back on this page, so this covers that
+    // too): remember its GitHub username for the sign-in card's "Log in as" button.
+    rememberLogin(session.value.login)
     await loadProfileConfirmed()
     if (profileConfirmed.value) startDashboard()
     else initialLoadDone = true

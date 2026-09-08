@@ -41,3 +41,36 @@ export async function logout() {
   session.value = null
   return reached
 }
+
+// The last GitHub username that signed in here, kept in localStorage so the sign-in card
+// can offer "Log in as {name}" next time. Written only from the session the gateway
+// returned (never from a query string or anything typed), and left alone by logout:
+// forgetLogin() is the one way to clear it. Every call tolerates a browser that blocks
+// storage (private mode, disabled site data) by doing nothing.
+export const LAST_LOGIN_KEY = 'slice:last_login'
+
+export function rememberLogin(username) {
+  if (typeof username !== 'string' || !username) return
+  try {
+    localStorage.setItem(LAST_LOGIN_KEY, username)
+  } catch (e) {
+    // Storage unavailable: the card just shows the plain sign-in next time.
+  }
+}
+
+export function lastLogin() {
+  try {
+    const name = localStorage.getItem(LAST_LOGIN_KEY)
+    return typeof name === 'string' && name ? name : null
+  } catch (e) {
+    return null
+  }
+}
+
+export function forgetLogin() {
+  try {
+    localStorage.removeItem(LAST_LOGIN_KEY)
+  } catch (e) {
+    // Nothing to forget if storage is unavailable.
+  }
+}
