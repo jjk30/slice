@@ -47,6 +47,7 @@ from app.auth.routes import DASHBOARD_KEY_NAME
 from app.dashboard import stats
 from app.dashboard.broadcaster import EVENT_NAME, get_broadcaster
 from app.db import GUARDRAIL_SOURCE_EMAIL, GUARDRAIL_SOURCE_GATEWAY, guardrail_source, summarize_eval_rows, summarize_guardrail_rows
+from app.scanner import service as scanner_service
 from app.scanner.routes import _cost_summary, _storage_scope
 
 logger = logging.getLogger("slice.gateway")
@@ -281,6 +282,11 @@ async def aws_cost(request: Request):
         return _unauthenticated()
     db = _db(request)
     if db is None:
+        return dict(AWS_COST_EMPTY)
+    # Phase 29: an account that is not connected (the operator with AWS switched off
+    # included) reads "not connected" at once, rather than the rows pulled before that.
+    target = await scanner_service.resolve_target(db, account.id)
+    if target.mode == "not_connected":
         return dict(AWS_COST_EMPTY)
     scope = _storage_scope(account.id)
     since = datetime.now(timezone.utc).date().replace(day=1)

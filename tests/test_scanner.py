@@ -1125,7 +1125,9 @@ async def test_connect_get_operator_needs_no_connection(client, monkeypatch, set
     set_db(FakeScannerDB())
     r = await client.get("/scanner/connect")
     body = r.json()
-    assert body["status"] == "operator" and body["external_id"] is None
+    # Phase 29: no row means scanning slice's own account is on, reported as connected.
+    assert body["mode"] == "operator" and body["status"] == "connected"
+    assert body["external_id"] is None and body["role_arn"] is None and body["quick_create_url"] is None
 
 
 async def test_connect_post_good_assume(client, monkeypatch, set_db):
@@ -1702,3 +1704,185 @@ def test_importing_scanner_does_not_import_boto3():
     )
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip().splitlines()[-1] == "ok"
+
+
+# --- Phase 29: the operator's own AWS switch -----------------------------------
+
+
+def _operator(monkeypatch):
+    monkeypatch.setattr(config, "SLICE_OPERATOR_ACCOUNT_ID", 1)
+    monkeypatch.setattr(config, "SCANNER_ENABLED", True)
+
+
+async def test_operator_disconnected_resolves_to_not_connected(monkeypatch):
+    _operator(monkeypatch)
+    db = FakeScannerDB()
+    # No row, or a row saying own: today's behaviour.
+    assert (await service.resolve_target(db, 1)).mode == "own"
+    await service.set_operator_status(db, 1, service.OPERATOR_STATUS_OWN)
+    assert (await service.resolve_target(db, 1)).mode == "own"
+    # Switched off: exactly like any other unconnected account, own storage scope kept.
+    await service.set_operator_status(db, 1, service.OPERATOR_STATUS_DISCONNECTED)
+    target = await service.resolve_target(db, 1)
+    assert target.mode == "not_connected" and target.storage_account_id is None
+    assert target.status == "disconnected"
+    # The switch is one row, and it never lands in the connected-accounts list.
+    assert len(db.connections) == 1 and await db.connected_accounts() == []
+    # No database at all: the operator is own, as it always was.
+    assert (await service.resolve_target(None, 1)).mode == "own"
+
+
+async def test_operator_disconnected_scan_returns_not_connected_and_scans_nothing(monkeypatch):
+    _operator(monkeypatch)
+    called = []
+    monkeypatch.setattr(service, "run_scan_graph", lambda s: called.append(s) or _async_return([])(s))
+    db = FakeScannerDB()
+    await service.set_operator_status(db, 1, service.OPERATOR_STATUS_DISCONNECTED)
+    result = await service.run_scan_for_account(db, None, 1, run_id="r1")
+    assert result.status == "not_connected" and result.findings == []
+    assert db.runs == {} and called == []
+
+
+async def test_daily_skips_the_disconnected_operator(monkeypatch, scan_alerts_on):
+    """The scheduled daily run skips the operator once it has switched AWS off: no scan,
+    no cost pull, no email. A connected account in the same run still scans."""
+    import fakeredis.aioredis
+
+    _operator(monkeypatch)
+    redis = fakeredis.aioredis.FakeRedis()
+    scanned, cost_pulls = [], []
+    monkeypatch.setattr(service, "make_session", lambda role_arn=None, external_id=None: ("session", role_arn))
+
+    async def graph_spy(session):
+        scanned.append(session)
+        return [Finding(check=CHECK_S3_PUBLIC, resource_id="bucket-open", severity=SEVERITY_HIGH, summary="open")]
+
+    def cost_spy(session, now=None):
+        cost_pulls.append(session)
+        return cost.CostReport()
+
+    monkeypatch.setattr(service, "run_scan_graph", graph_spy)
+    monkeypatch.setattr(service, "fetch_costs", cost_spy)
+
+    db = FakeScannerDB()
+    await service.set_operator_status(db, 1, service.OPERATOR_STATUS_DISCONNECTED)
+    db.connect(2, "arn:aws:iam::222222222222:role/slice-scanner/good", external_id="e2")
+
+    await service.run_daily_once(db, redis)
+    await alerts_engine.drain()
+
+    assert scanned == [("session", "arn:aws:iam::222222222222:role/slice-scanner/good")]
+    assert cost_pulls == scanned
+    # Nothing stored under the own scope, and the one email is account 2's, not the operator's.
+    assert all(acct == 2 for acct, _ in db.runs.values())
+    assert [a.team for a in scan_alerts_on.sent] == ["aws:2"]
+
+    # Switched back on: the next day's run scans slice's own account again.
+    await service.set_operator_status(db, 1, service.OPERATOR_STATUS_OWN)
+    await service.run_daily_once(db, redis, now=datetime.now(timezone.utc) + timedelta(days=1))
+    assert ("session", None) in scanned
+
+
+async def test_not_connected_accounts_never_get_a_finding_email(monkeypatch, scan_alerts_on):
+    """A scan that would raise a new HIGH still emails nobody when the account is not
+    connected, operator with AWS switched off included: the scan never runs."""
+    _operator(monkeypatch)
+
+    async def graph_high(session):
+        return [Finding(check=CHECK_S3_PUBLIC, resource_id="bucket-open", severity=SEVERITY_HIGH, summary="open")]
+
+    monkeypatch.setattr(service, "run_scan_graph", graph_high)
+    monkeypatch.setattr(service, "make_session", lambda role_arn=None, external_id=None: ("session", role_arn))
+    db = FakeScannerDB()
+    await service.set_operator_status(db, 1, service.OPERATOR_STATUS_DISCONNECTED)
+    db.connections[7] = {"id": 9, "account_id": 7, "role_arn": None, "external_id": "e7", "status": "pending",
+                         "last_error": None, "connected_at": None, "created_at": None}
+
+    for account_id in (1, 7, 8):
+        result = await service.run_scan_for_account(db, None, account_id, run_id=f"r{account_id}")
+        assert result.status == "not_connected"
+    await alerts_engine.drain()
+    assert scan_alerts_on.sent == [] and db.runs == {}
+
+    # The same scan for a connected account does email, so the guard above is real.
+    db.connect(2, "arn:aws:iam::222222222222:role/slice-scanner/good", external_id="e2")
+    assert (await service.run_scan_for_account(db, None, 2, run_id="r2")).status == "ok"
+    await alerts_engine.drain()
+    assert [a.team for a in scan_alerts_on.sent] == ["aws:2"]
+
+
+async def test_connect_get_operator_reports_its_switch_both_ways(client, monkeypatch, set_db):
+    _operator(monkeypatch)
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    db = set_db(FakeScannerDB())
+
+    on = (await client.get("/scanner/connect")).json()
+    assert on["mode"] == "operator" and on["status"] == "connected"
+    await service.set_operator_status(db, 1, service.OPERATOR_STATUS_DISCONNECTED)
+    off = (await client.get("/scanner/connect")).json()
+    assert off["mode"] == "operator" and off["status"] == "not_connected"
+    # The same shape everyone gets, with the operator's blanks.
+    for body in (on, off):
+        assert set(body) >= {"mode", "status", "slice_aws_account_id", "external_id", "role_arn", "last_error",
+                             "quick_create_url", "template_url", "template_path", "message"}
+        assert body["external_id"] is None and body["role_arn"] is None and body["quick_create_url"] is None
+
+
+async def test_connect_delete_and_post_flip_the_operator_row(client, monkeypatch, set_db):
+    _operator(monkeypatch)
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    db = set_db(FakeScannerDB())
+
+    r = await client.delete("/scanner/connect")
+    assert r.status_code == 200 and r.json() == {"status": "disconnected"}
+    assert db.connections[1]["status"] == "disconnected" and db.connections[1]["role_arn"] is None
+    assert (await service.resolve_target(db, 1)).mode == "not_connected"
+
+    # An empty body reconnects, no role needed.
+    r = await client.post("/scanner/connect")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "connected" and r.json()["role_arn"] is None
+    assert db.connections[1]["status"] == "own"
+    assert (await service.resolve_target(db, 1)).mode == "own"
+
+    # So does {}. A JSON body that is not an object is refused; a stray role_arn is ignored.
+    await client.delete("/scanner/connect")
+    r = await client.post("/scanner/connect", json={})
+    assert r.status_code == 200 and db.connections[1]["status"] == "own"
+    r = await client.post("/scanner/connect", content=b"[1]", headers={"content-type": "application/json"})
+    assert r.status_code == 400
+    r = await client.post("/scanner/connect", content=b"not json", headers={"content-type": "application/json"})
+    assert r.status_code == 400
+    # Only one row for the operator through all of that.
+    assert len(db.connections) == 1
+
+
+async def test_connect_operator_switch_needs_a_database(client, monkeypatch, set_db):
+    _operator(monkeypatch)
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    set_db(None)
+    assert (await client.delete("/scanner/connect")).status_code == 503
+    assert (await client.post("/scanner/connect")).status_code == 503
+    # Reading is fine without one: no row means on.
+    assert (await client.get("/scanner/connect")).json()["status"] == "connected"
+
+
+async def test_run_refuses_the_disconnected_operator(client, monkeypatch, set_db):
+    _operator(monkeypatch)
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=1, login="operator")))
+    db = set_db(FakeScannerDB())
+    await service.set_operator_status(db, 1, service.OPERATOR_STATUS_DISCONNECTED)
+    r = await client.post("/scanner/run")
+    assert r.status_code == 409 and r.json()["status"] == "not_connected"
+
+
+async def test_everyone_else_keeps_todays_connect_rules(client, monkeypatch, set_db):
+    """A normal account still needs a role ARN on POST, and DELETE still goes to pending."""
+    _operator(monkeypatch)
+    monkeypatch.setattr(routes, "read_account", _as_account(Account(id=5, login="u")))
+    db = set_db(FakeScannerDB())
+    assert (await client.post("/scanner/connect")).status_code == 400
+    assert (await client.post("/scanner/connect", json={})).status_code == 400
+    db.connect(5, "arn:aws:iam::555555555555:role/slice-scanner/r")
+    assert (await client.delete("/scanner/connect")).json() == {"status": "disconnected"}
+    assert db.connections[5]["status"] == "pending"

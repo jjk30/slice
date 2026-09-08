@@ -31,6 +31,10 @@ RECENT_CALLS = 5
 TOP_MODELS = 3
 MAX_FINDINGS = 10
 
+# The AWS lines of the context when no AWS account is connected (phase 29).
+AWS_NOT_CONNECTED_CONTEXT_SCAN = "Latest AWS scan: no AWS account is connected to slice"
+AWS_NOT_CONNECTED_CONTEXT_COST = "AWS cost: no AWS account is connected to slice"
+
 
 def _usd(value) -> str:
     """``$12.34``; a positive amount under one cent is ``less than a cent`` (phase 26), never
@@ -169,14 +173,17 @@ async def aws_connected(db, account_id: int) -> bool:
     """True when the scanner has an AWS account to scan for ``account_id``.
 
     The operator (``scanner_service.is_operator``, the same check ``resolve_target`` makes)
-    has no ``aws_connections`` row: the scanner scans slice's own AWS account for it in own
-    mode and stores the findings and cost rows under the own scope, so it counts as
-    connected exactly while own-mode scanning is on (``SCANNER_ENABLED``). Every other
-    account needs a ``connected`` row with a role ARN, the same read the scanner makes
+    scans slice's own AWS account in own mode and stores the findings and cost rows under
+    the own scope, so it counts as connected while own-mode scanning is on
+    (``SCANNER_ENABLED``) and it has not switched AWS off (phase 29: a row with status
+    ``disconnected``, the same read ``resolve_target`` makes). Every other account needs a
+    ``connected`` row with a role ARN, the same read the scanner makes
     (``db.get_connection``); a failed read counts as not connected, never as an error.
     """
     if scanner_service.is_operator(account_id):
-        return bool(config.SCANNER_ENABLED)
+        if not config.SCANNER_ENABLED:
+            return False
+        return not await scanner_service.operator_disconnected(db, account_id)
     try:
         conn = await db.get_connection(account_id)
     except Exception as exc:  # noqa: BLE001
@@ -214,6 +221,11 @@ async def build_context(db, redis, account: dict, *, now: datetime | None = None
     lines = [f"Account: {label}"]
     lines += await _spend_lines(db, redis, account_id, scope, now)
     lines += await _recent_lines(db, account_id)
-    lines += await _findings_lines(db, storage_scope)
-    lines += await _cost_lines(db, account_id, storage_scope, now)
+    # Phase 29: with no AWS account connected (or switched off) the AWS lines say so,
+    # rather than surfacing findings or costs from before the disconnect.
+    if await aws_connected(db, account_id):
+        lines += await _findings_lines(db, storage_scope)
+        lines += await _cost_lines(db, account_id, storage_scope, now)
+    else:
+        lines += [AWS_NOT_CONNECTED_CONTEXT_SCAN, AWS_NOT_CONNECTED_CONTEXT_COST]
     return "\n".join(lines)

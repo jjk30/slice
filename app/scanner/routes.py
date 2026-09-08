@@ -18,6 +18,12 @@ Connect flow:
 - ``POST /scanner/connect``   {role_arn}: live-verify (assume + one read) and mark connected.
 - ``DELETE /scanner/connect`` disconnect (the External ID stays reserved for the account).
 
+The operator (phase 29) uses the same three calls as its own on/off switch: GET reports
+mode ``operator`` with status ``connected`` (scanning slice's own account) or
+``not_connected``; DELETE switches scanning off; POST with an empty body (or ``{}``)
+switches it back on, no role needed. Nothing here touches AI spend, models, tokens,
+requests, budgets or keys.
+
 Scan/read:
 
 - ``POST /scanner/run``       kick a scan on the caller's account (background); 202 + run_id.
@@ -101,9 +107,10 @@ async def connect_info(request: Request):
         return _error(401, "Missing slice key. Send it as 'Authorization: Bearer slk_...'.")
 
     if service.is_operator(account.id):
+        off = await service.operator_disconnected(_get_db(request), account.id)
         return {
             "mode": "operator",
-            "status": "operator",
+            "status": "not_connected" if off else "connected",
             "slice_aws_account_id": config.SLICE_AWS_ACCOUNT_ID,
             "external_id": None,
             "role_arn": None,
@@ -111,7 +118,11 @@ async def connect_info(request: Request):
             "quick_create_url": None,
             "template_url": config.SCANNER_TEMPLATE_URL,
             "template_path": TEMPLATE_PATH,
-            "message": "This account scans slice's own infrastructure; no connection is needed.",
+            "message": (
+                "AWS scanning is off for slice's own account. POST /scanner/connect with an empty body to turn it back on."
+                if off
+                else "This account scans slice's own infrastructure; no role is needed."
+            ),
         }
 
     db = _get_db(request)
@@ -149,7 +160,7 @@ async def connect(request: Request):
     if account is None:
         return _error(401, "Missing slice key. Send it as 'Authorization: Bearer slk_...'.")
     if service.is_operator(account.id):
-        return _error(400, "This account scans slice's own infrastructure; no connection is needed.")
+        return await _operator_switch(request, account.id, service.OPERATOR_STATUS_OWN)
 
     try:
         body = await request.json()
@@ -177,7 +188,7 @@ async def disconnect(request: Request):
     if account is None:
         return _error(401, "Missing slice key. Send it as 'Authorization: Bearer slk_...'.")
     if service.is_operator(account.id):
-        return _error(400, "The operator account has no connection to remove.")
+        return await _operator_switch(request, account.id, service.OPERATOR_STATUS_DISCONNECTED)
 
     db = _get_db(request)
     if not _db_ready(db):
@@ -186,6 +197,36 @@ async def disconnect(request: Request):
         await db.disconnect(account.id)
     except Exception:  # noqa: BLE001
         return _error(503, "Could not disconnect.")
+    return {"status": "disconnected"}
+
+
+async def _operator_switch(request: Request, account_id, status: str):
+    """The operator's on/off switch (phase 29): upsert its row with ``own`` or ``disconnected``.
+
+    POST accepts an empty body or ``{}`` (a role is never needed); anything that is JSON
+    but not an object is refused so a stray role_arn payload is not silently accepted.
+    """
+    if status == service.OPERATOR_STATUS_OWN:
+        raw = await request.body()
+        if raw.strip():
+            try:
+                body = json.loads(raw)
+            except ValueError:
+                return _error(400, "Request body is not valid JSON.")
+            if not isinstance(body, dict):
+                return _error(400, "Request body must be empty or a JSON object.")
+    if account_id is None:
+        return _error(503, "Connection storage is unavailable (no account to store it under).")
+    db = _get_db(request)
+    if not _db_ready(db):
+        return _error(503, "Connection storage is unavailable (database not connected).")
+    try:
+        await service.set_operator_status(db, account_id, status)
+    except Exception as exc:  # noqa: BLE001  # a user action: say it failed, never pretend.
+        logger.warning(json.dumps({"event": "scanner_conn_write_error", "error": str(exc)}))
+        return _error(503, "Could not store the connection.")
+    if status == service.OPERATOR_STATUS_OWN:
+        return {"status": "connected", "role_arn": None, "aws_account_id": config.SLICE_AWS_ACCOUNT_ID}
     return {"status": "disconnected"}
 
 

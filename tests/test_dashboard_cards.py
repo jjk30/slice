@@ -226,3 +226,57 @@ def test_login_screen_returning_mode_renders():
         assert "New here? Install the CLI first, about three minutes." in html
         assert "The terminal uses" in html
         assert html.index("gh-mark") < html.index("New here?") < html.index("The terminal uses")
+
+
+# --- Phase 29: the AWS block on the settings screen --------------------------------
+
+
+def _connect_info(mode, status, role_arn=None):
+    return {"mode": mode, "status": status, "role_arn": role_arn, "quick_create_url": None if mode == "operator" else "https://console.aws.amazon.com/x"}
+
+
+def test_setup_screen_source_shows_the_aws_block_for_every_account():
+    source = (COMPONENTS / "SetupScreen.vue").read_text(encoding="utf-8")
+    assert "const showAws = computed(() => awsMode.value !== null)" in source
+    assert "Update the email slice uses and your AWS connection." in source
+    assert "Stop scanning AWS? Your AI spend data stays." in source
+    assert "slice scans its own AWS account. No role needed." in source
+    assert "await awsCall('DELETE')" in source and "await awsCall('POST', {})" in source
+
+
+def test_app_hides_the_findings_panel_unless_connected():
+    app = APP.read_text(encoding="utf-8")
+    assert "return Boolean(c && c.status === 'connected')" in app
+    assert "c.mode === 'operator' ||" not in app
+
+
+def test_setup_screen_renders_disconnect_and_reconnect():
+    connected, operator_on, operator_off, plain = _render([
+        {"component": "SetupScreen.vue", "props": {"mode": "settings", "connectInfo": _connect_info("connect", "connected", "arn:aws:iam::123456789012:role/slice-scanner")}},
+        {"component": "SetupScreen.vue", "props": {"mode": "settings", "connectInfo": _connect_info("operator", "connected")}},
+        {"component": "SetupScreen.vue", "props": {"mode": "settings", "connectInfo": _connect_info("operator", "not_connected")}},
+        {"component": "SetupScreen.vue", "props": {"mode": "settings", "connectInfo": _connect_info("connect", "pending")}},
+    ])
+
+    # A connected account: the status, what is scanned, and Disconnect (no role form).
+    assert ">connected</span>" in connected
+    assert "Scanning arn:aws:iam::123456789012:role/slice-scanner once a day." in connected
+    assert ">Disconnect</button>" in connected
+    assert "Create the read-only role in AWS" not in connected and ">Reconnect</button>" not in connected
+    assert "Update the email slice uses and your AWS connection." in connected
+
+    # The operator scanning its own account: the same card, its own scanning line.
+    assert ">connected</span>" in operator_on
+    assert "Scanning slice&#39;s own AWS account once a day." in operator_on
+    assert ">Disconnect</button>" in operator_on and ">Reconnect</button>" not in operator_on
+
+    # The operator switched off: Reconnect and the no-role line, nothing else.
+    assert ">not connected</span>" in operator_off
+    assert "slice scans its own AWS account. No role needed." in operator_off
+    assert ">Reconnect</button>" in operator_off
+    assert ">Disconnect</button>" not in operator_off and "Role ARN" not in operator_off
+
+    # Everyone else, not connected: the role flow as today.
+    assert ">not connected</span>" in plain
+    assert "Create the read-only role in AWS" in plain and 'aria-label="Role ARN"' in plain
+    assert ">Disconnect</button>" not in plain and ">Reconnect</button>" not in plain

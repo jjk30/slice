@@ -13,10 +13,21 @@ import awsLogo from '../assets/aws-logo.png'
 // Phase 23: the same screen serves first-time onboarding and later editing. In
 // 'settings' mode the copy changes and a "Back to dashboard" link emits 'close';
 // the fields, validation, and save/connect calls stay identical.
+// Phase 29: the AWS block shows for every account. A connected account (the operator
+// scanning slice's own account included) sees the status, what is being scanned, and a
+// Disconnect button behind a one-line confirm. A not-connected account sees the connect
+// flow; for the operator that is a single Reconnect button, no role needed.
+// `connectInfo` is an optional GET /scanner/connect payload applied before the mount
+// fetch (the server renderer never mounts), so the block can be rendered from a known
+// state; the fetch on mount still refreshes it.
 const props = defineProps({
   mode: {
     type: String,
     default: 'onboarding',
+  },
+  connectInfo: {
+    type: Object,
+    default: null,
   },
 })
 // Phase 25: 'budget-saved' carries the PUT /account/budget reply so the dashboard's
@@ -32,17 +43,38 @@ const email = ref('')
 const saving = ref(false)
 const saveError = ref('')
 
-// AWS connect state. `mode` is 'connect' for a normal account, 'operator' for the one that
-// scans slice's own infrastructure (then the whole AWS block is hidden).
+// AWS connect state. `awsMode` is 'connect' for a normal account, 'operator' for the one
+// that scans slice's own infrastructure, null until GET /scanner/connect has answered
+// (or when it could not be read, in which case the block stays hidden).
 const awsMode = ref(null)
 const quickCreateUrl = ref('')
 const roleArn = ref('')
 const connecting = ref(false)
 const connectError = ref('')
 const connected = ref(false)
+// Phase 29: the Disconnect flow. The confirm is one inline line, then the DELETE.
+const confirmDisconnect = ref(false)
+const disconnecting = ref(false)
 
 const emailValid = computed(() => EMAIL_RE.test(email.value.trim()))
-const showAws = computed(() => awsMode.value === 'connect')
+const showAws = computed(() => awsMode.value !== null)
+const isOperator = computed(() => awsMode.value === 'operator')
+// What a connected account is scanning: slice's own account, or the user's role.
+const scanningLine = computed(() =>
+  isOperator.value
+    ? "Scanning slice's own AWS account once a day."
+    : `Scanning ${roleArn.value || 'your AWS account'} once a day.`,
+)
+
+function applyConnect(info) {
+  awsMode.value = info.mode === 'operator' ? 'operator' : 'connect'
+  quickCreateUrl.value = info.quick_create_url || ''
+  if (info.role_arn) roleArn.value = info.role_arn
+  connected.value = info.status === 'connected'
+  confirmDisconnect.value = false
+}
+
+if (props.connectInfo) applyConnect(props.connectInfo)
 
 // Phase 25: the monthly budget cap, Settings only. The field holds the current cap
 // (the config default until the user sets one); Save PUTs it and shows the reply.
@@ -100,14 +132,60 @@ async function saveBudget() {
 // again right after a successful connect so the status shows what the backend now sees.
 async function loadConnect() {
   try {
-    const info = await getJson('/scanner/connect')
-    awsMode.value = info.mode === 'operator' ? 'operator' : 'connect'
-    quickCreateUrl.value = info.quick_create_url || ''
-    if (info.role_arn) roleArn.value = info.role_arn
-    connected.value = info.status === 'connected'
+    applyConnect(await getJson('/scanner/connect'))
   } catch (e) {
     // Treat an unreadable scanner as "no AWS block" rather than blocking setup.
-    awsMode.value = 'operator'
+    if (e instanceof AuthError) session.value = null
+    awsMode.value = null
+  }
+}
+
+// One call shape for the three AWS actions: connect a role (POST {role_arn}), the
+// operator's reconnect (POST with an empty body), and disconnect (DELETE). Every one
+// re-reads GET /scanner/connect afterwards rather than assuming, so the block shows what
+// the scanner now sees.
+async function awsCall(method, body) {
+  const res = await fetch(apiBase() + '/scanner/connect', {
+    method,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (res.status === 401) {
+    session.value = null
+    return false
+  }
+  if (!res.ok) {
+    const reply = await res.json().catch(() => null)
+    throw new Error((reply && reply.error && reply.error.message) || 'Could not update the AWS connection.')
+  }
+  await loadConnect()
+  return true
+}
+
+async function reconnectOperator() {
+  if (connecting.value) return
+  connecting.value = true
+  connectError.value = ''
+  try {
+    await awsCall('POST', {})
+  } catch (e) {
+    connectError.value = e && e.message ? e.message : 'Could not reach the gateway. Try again.'
+  } finally {
+    connecting.value = false
+  }
+}
+
+async function disconnectAws() {
+  if (disconnecting.value) return
+  disconnecting.value = true
+  connectError.value = ''
+  try {
+    await awsCall('DELETE')
+  } catch (e) {
+    connectError.value = e && e.message ? e.message : 'Could not reach the gateway. Try again.'
+  } finally {
+    disconnecting.value = false
+    confirmDisconnect.value = false
   }
 }
 
@@ -190,7 +268,7 @@ async function connectAws() {
       </div>
       <h2 class="title">{{ isSettings ? 'Settings' : 'Two quick things' }}</h2>
       <p class="sub">
-        {{ isSettings ? 'Update the email and AWS role slice uses.' : 'So slice can reach you when it matters.' }}
+        {{ isSettings ? 'Update the email slice uses and your AWS connection.' : 'So slice can reach you when it matters.' }}
       </p>
 
       <label class="field">
@@ -207,39 +285,64 @@ async function connectAws() {
       </label>
 
       <section v-if="showAws" class="aws">
-        <span class="label">Connect AWS (optional)</span>
+        <span class="label">{{ isOperator ? 'AWS' : 'Connect AWS (optional)' }}</span>
         <p class="aws-status">
           Status:
           <span :class="connected ? 'aws-ok' : 'aws-muted'">{{ connected ? 'connected' : 'not connected' }}</span>
         </p>
-        <p class="aws-lede">
-          Link a read-only role and slice shows your cloud bill next to your AI spend. It
-          only reads your account name and costs. It never sees your keys, your data, or
-          anything that could change your bill.
-        </p>
-        <p class="aws-lede">
-          Create a read-only role in your AWS account so slice can scan it. Nothing is
-          changed in your account, the role only lets slice read.
-        </p>
-        <a
-          v-if="quickCreateUrl"
-          class="aws-create"
-          :href="quickCreateUrl"
-          target="_blank"
-          rel="noopener"
-        ><img class="aws-create-logo" :src="awsLogo" alt="AWS" />Create the read-only role in AWS</a>
-        <div class="key-row">
-          <input
-            v-model="roleArn"
-            class="input mono"
-            placeholder="arn:aws:iam::123456789012:role/slice-scanner"
-            spellcheck="false"
-            aria-label="Role ARN"
-          />
-          <button type="button" class="connect" :disabled="!roleArn.trim() || connecting" @click="connectAws">
-            {{ connecting ? 'Connecting…' : 'Connect' }}
+
+        <!-- Connected: what is being scanned, and Disconnect behind a one-line confirm. -->
+        <template v-if="connected">
+          <p class="aws-lede aws-scanning">{{ scanningLine }}</p>
+          <div v-if="confirmDisconnect" class="key-row aws-confirm" role="group" aria-label="Confirm disconnect">
+            <span class="aws-lede">Stop scanning AWS? Your AI spend data stays.</span>
+            <button type="button" class="connect aws-danger" :disabled="disconnecting" @click="disconnectAws">
+              {{ disconnecting ? 'Disconnecting' : 'Yes, disconnect' }}
+            </button>
+            <button type="button" class="connect" :disabled="disconnecting" @click="confirmDisconnect = false">Keep</button>
+          </div>
+          <button v-else type="button" class="connect aws-disconnect" @click="confirmDisconnect = true">Disconnect</button>
+        </template>
+
+        <!-- The operator, switched off: one Reconnect, no role needed. -->
+        <template v-else-if="isOperator">
+          <p class="aws-lede">slice scans its own AWS account. No role needed.</p>
+          <button type="button" class="connect aws-reconnect" :disabled="connecting" @click="reconnectOperator">
+            {{ connecting ? 'Reconnecting' : 'Reconnect' }}
           </button>
-        </div>
+        </template>
+
+        <!-- Everyone else, not connected: the role flow as before. -->
+        <template v-else>
+          <p class="aws-lede">
+            Link a read-only role and slice shows your cloud bill next to your AI spend. It
+            only reads your account name and costs. It never sees your keys, your data, or
+            anything that could change your bill.
+          </p>
+          <p class="aws-lede">
+            Create a read-only role in your AWS account so slice can scan it. Nothing is
+            changed in your account, the role only lets slice read.
+          </p>
+          <a
+            v-if="quickCreateUrl"
+            class="aws-create"
+            :href="quickCreateUrl"
+            target="_blank"
+            rel="noopener"
+          ><img class="aws-create-logo" :src="awsLogo" alt="AWS" />Create the read-only role in AWS</a>
+          <div class="key-row">
+            <input
+              v-model="roleArn"
+              class="input mono"
+              placeholder="arn:aws:iam::123456789012:role/slice-scanner"
+              spellcheck="false"
+              aria-label="Role ARN"
+            />
+            <button type="button" class="connect" :disabled="!roleArn.trim() || connecting" @click="connectAws">
+              {{ connecting ? 'Connecting…' : 'Connect' }}
+            </button>
+          </div>
+        </template>
         <p v-if="connectError" class="aws-err" role="alert">{{ connectError }}</p>
       </section>
 
@@ -273,7 +376,7 @@ async function connectAws() {
       <button type="button" class="submit" :disabled="!emailValid || saving" @click="saveAndContinue">
         {{ saving ? 'Saving…' : (isSettings ? 'Save' : 'Save and continue') }}
       </button>
-      <a v-if="showAws && !isSettings" class="later" href="#" @click.prevent="saveAndContinue">Connect later</a>
+      <a v-if="showAws && !connected && !isOperator && !isSettings" class="later" href="#" @click.prevent="saveAndContinue">Connect later</a>
       <a v-if="isSettings" class="later" href="#" @click.prevent="emit('close')">Back to dashboard</a>
     </div>
   </div>
@@ -428,6 +531,30 @@ async function connectAws() {
 .connect:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Phase 29: the AWS actions sit on their own line; the confirm wraps on a narrow card. */
+.aws-disconnect,
+.aws-reconnect {
+  align-self: flex-start;
+  padding: 8px 12px;
+}
+
+.aws-confirm {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.aws-confirm .connect {
+  padding: 6px 12px;
+}
+
+.aws-danger {
+  color: var(--cherry-text);
+}
+
+.aws-scanning {
+  color: var(--ink);
 }
 
 .aws-status {

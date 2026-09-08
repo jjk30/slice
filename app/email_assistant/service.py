@@ -88,7 +88,7 @@ import httpx
 
 from app import config
 from app.alerts.channels import FOOTER_AI_SETUP, FOOTER_GENERAL, DeliveryResult, ResendEmailChannel, format_clock
-from app.email_assistant.context import build_context, build_general_context
+from app.email_assistant.context import aws_connected, build_context, build_general_context
 from app.guardrails import (
     EMAIL_GENERAL_MODE,
     EMAIL_MODE,
@@ -122,6 +122,16 @@ GENERAL_TAILORED_OPENER = "Based on what slice sees in your AWS account,"
 GENERAL_TAILORED_FALLBACK = GENERAL_TAILORED_OPENER + " here is the short answer."
 # Phase 27: the line right before the footer when no AWS account is connected.
 GENERAL_CONNECT_LINE = "Connect AWS in Settings and slice can tailor this to your account."
+# Phase 29: the whole reply to a question about AWS from an account with no AWS account
+# connected (or the operator with AWS switched off). Built in code, no model call, and
+# remembered in the thread like any answer. Exactly this line, then the bucket's footer.
+AWS_NOT_CONNECTED_LINE = "You are not connected to your AWS account. Connect it in Settings and ask again."
+# The words that make a question one about AWS, matched as whole words, case-insensitive.
+AWS_WORDS = (
+    "aws", "s3", "bucket", "ec2", "iam", "security group", "cost explorer",
+    "finding", "findings", "cloud bill", "aws bill",
+)
+_AWS_WORD_RE = re.compile(r"\b(?:" + "|".join(re.escape(w) for w in AWS_WORDS) + r")\b", re.IGNORECASE)
 # Phase 27: the heading the user prompt uses for the AWS context. The thread memory's
 # heading (THREAD_HEADING) is the guardrails package's, shared with the topic rail.
 GENERAL_CONTEXT_HEADING = "What slice sees in this user's AWS account:"
@@ -132,6 +142,8 @@ VERDICT_BLOCKED_INPUT = "blocked_input"
 VERDICT_BLOCKED_OUTPUT = "blocked_output"
 VERDICT_ANSWERED_OWN = "answered_own"
 VERDICT_ANSWERED_GENERAL = "answered_general"
+# Phase 29: the fixed "not connected to AWS" reply, sent without a model call.
+VERDICT_ANSWERED_NOT_CONNECTED = "answered_not_connected"
 # The daily limit (phase 26): the one mail that got the limit line, then the silent ones.
 VERDICT_LIMIT_REACHED = "limit_reached"
 VERDICT_LIMIT_SILENCED = "limit_silenced"
@@ -482,6 +494,18 @@ def reply_subject(subject: str) -> str:
     if subject.lower().startswith("re:"):
         return subject
     return f"Re: {subject}"
+
+
+def is_aws_question(question: str) -> bool:
+    """Whether the question mentions AWS (one of ``AWS_WORDS`` as a whole word)."""
+    return bool(_AWS_WORD_RE.search(question or ""))
+
+
+def not_connected_reply(bucket: str) -> str:
+    """The fixed reply for an AWS question with no AWS account connected (phase 29): the one
+    line, then the normal footer for the bucket the topic rail put the question in."""
+    footer = FOOTER_GENERAL if bucket == LABEL_GENERAL else FOOTER_AI_SETUP
+    return f"{AWS_NOT_CONNECTED_LINE}\n\n{footer}"
 
 
 def tidy_answer(answer: str, footer: str = FOOTER_AI_SETUP) -> str:
@@ -983,6 +1007,18 @@ class EmailAssistant:
         if bucket not in (LABEL_OWN_DATA, LABEL_GENERAL):
             await self._send(event, account_id, FIXED_LINE, VERDICT_BLOCKED_INPUT)
             raise _Stop(VERDICT_BLOCKED_INPUT)
+
+        # i2. Phase 29: a question about AWS from an account with no AWS account connected
+        # (or the operator with AWS switched off) gets one fixed line, built here with no
+        # model call, remembered in the thread like any answer. AI spend questions from
+        # the same account go on to the model as before.
+        if is_aws_question(question) and not await aws_connected(self.db, account_id):
+            reply = not_connected_reply(bucket)
+            self._log("aws_not_connected", event, account_id, VERDICT_ANSWERED_NOT_CONNECTED, bucket=bucket)
+            await self._send(event, account_id, reply, VERDICT_ANSWERED_NOT_CONNECTED)
+            stored = await remember_turn(self.redis, account_id, key, question, memory_answer(reply), aliases=candidates)
+            self._log("thread_save", event, account_id, None, turns=stored, saved=stored is not None)
+            return VERDICT_ANSWERED_NOT_CONNECTED
 
         # j. The prompt for the bucket: own data gets the read-only context and the
         # context model; a general question gets the general model and (phase 27) only

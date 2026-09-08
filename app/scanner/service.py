@@ -9,8 +9,14 @@ always with their External ID. Which one is decided by ``resolve_target``:
   mode). Scans slice's own infrastructure; findings/costs stored under the NULL/own scope.
 - **connected**: any other account with a verified connection. Scans *their* account via
   assume-role; findings/costs stored under their account id.
-- **not_connected**: any other account without a live connection. Nothing is scanned; the
-  caller gets a clear "not connected", never a scan of slice's own infra.
+- **not_connected**: any other account without a live connection, and the operator once it
+  has switched AWS off. Nothing is scanned; the caller gets a clear "not connected", never
+  a scan of slice's own infra.
+
+The operator's switch (phase 29) is its own ``aws_connections`` row: no row or status
+``own`` means slice scans its own account, status ``disconnected`` means AWS is off for
+it too. Disconnecting only ever stops the scan, the scan emails and the cost pull; AI
+spend, models, tokens, requests, budgets and keys are untouched.
 
 Security invariants: an assume-role failure marks the connection errored and records a
 visible error finding for *that* account: it never falls back to the own account. Every
@@ -83,6 +89,12 @@ def _latch_id(account_id) -> str:
     return "own" if is_operator(account_id) else str(account_id)
 
 
+# The operator's own switch, kept in its aws_connections row (phase 29). Any other status
+# (or no row at all) means scanning slice's own account is on, today's behaviour.
+OPERATOR_STATUS_OWN = "own"
+OPERATOR_STATUS_DISCONNECTED = "disconnected"
+
+
 def _scan_team(storage_account_id) -> str:
     """The per-account cooldown key / alert-row label. Own account is 'aws:own'."""
     return "aws:own" if storage_account_id is None else f"aws:{storage_account_id}"
@@ -95,18 +107,47 @@ def _db_ready(db) -> bool:
 # --- Connection resolution --------------------------------------------------
 
 
+async def _read_connection(db, account_id) -> dict | None:
+    """The account's connection row, or None: no database, no row, or a read that failed
+    (logged, and treated as not connected)."""
+    if account_id is None or not _db_ready(db):
+        return None
+    try:
+        return await db.get_connection(account_id)
+    except Exception as exc:  # noqa: BLE001  # a read failure means "treat as not connected".
+        logger.warning(json.dumps({"event": "scanner_conn_read_error", "error": str(exc)}))
+        return None
+
+
+async def operator_disconnected(db, account_id) -> bool:
+    """True when the operator has switched AWS off (its row says 'disconnected'). Never raises."""
+    conn = await _read_connection(db, account_id)
+    return bool(conn) and conn.get("status") == OPERATOR_STATUS_DISCONNECTED
+
+
+async def set_operator_status(db, account_id: int, status: str) -> dict | None:
+    """Upsert the operator's row with ``own`` or ``disconnected``. Raises when storage fails.
+
+    The row is created on first use (it needs an external id like every row, never used
+    for the operator) and then updated, so the switch is one row either way.
+    """
+    await db.create_connection(account_id, secrets.token_hex(16))
+    return await db.set_connection_status(account_id, status)
+
+
 async def resolve_target(db, account_id) -> Target:
-    """Decide how (and whether) to scan ``account_id``. Reads the connection when needed."""
+    """Decide how (and whether) to scan ``account_id``. Reads the connection when needed.
+
+    The operator resolves to ``own`` unless its row says ``disconnected``, in which case it
+    is ``not_connected`` exactly like any other unconnected account: the daily task skips
+    it, ``run_scan_for_account`` scans nothing, and nothing is emailed.
+    """
     if is_operator(account_id):
+        if await operator_disconnected(db, account_id):
+            return Target(mode="not_connected", storage_account_id=None, status=OPERATOR_STATUS_DISCONNECTED)
         return Target(mode="own", storage_account_id=None)
 
-    conn = None
-    if _db_ready(db):
-        try:
-            conn = await db.get_connection(account_id)
-        except Exception as exc:  # noqa: BLE001  # a read failure means "treat as not connected".
-            logger.warning(json.dumps({"event": "scanner_conn_read_error", "error": str(exc)}))
-            conn = None
+    conn = await _read_connection(db, account_id)
 
     if not conn or conn.get("status") != "connected" or not conn.get("role_arn"):
         return Target(
@@ -439,7 +480,11 @@ async def run_account_daily(db, redis, account_id, *, now: datetime | None = Non
 
 
 async def run_daily_once(db, redis, *, now: datetime | None = None) -> None:
-    """The operator's own account plus every connected account, each independently latched."""
+    """The operator's own account plus every connected account, each independently latched.
+
+    Every account goes through ``run_account_daily``, which resolves its target first and
+    returns at once for ``not_connected``, the operator with AWS switched off included.
+    """
     await run_account_daily(db, redis, config.SLICE_OPERATOR_ACCOUNT_ID, now=now)
 
     if not _db_ready(db):

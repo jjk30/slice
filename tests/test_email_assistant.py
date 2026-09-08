@@ -24,6 +24,7 @@ from app.alerts.channels import FOOTER_AI_SETUP, FOOTER_GENERAL, FOOTER_NOTE, De
 from app.email_assistant import service
 from app.email_assistant.context import _usd
 from app.email_assistant.service import (
+    AWS_NOT_CONNECTED_LINE,
     FIXED_LINE,
     GENERAL_CONNECT_LINE,
     GENERAL_CONTEXT_HEADING,
@@ -44,8 +45,10 @@ from app.email_assistant.service import (
     bracketed_id,
     limit_line,
     load_thread,
+    is_aws_question,
     memory_answer,
     new_text,
+    not_connected_reply,
     normalise_id,
     remember_turn,
     reply_subject,
@@ -1666,3 +1669,102 @@ async def test_resend_send_email_payload_is_threaded_from_alert_from():
     assert channel.configured is False
     unsent = await ResendEmailChannel(api_key="", sender=OWN_ADDRESS, to=None).send_email(to=USER_ADDRESS, subject="s", text="t")
     assert unsent.ok is False
+
+
+# --- Phase 29: AWS questions with no AWS account connected ---------------------------
+
+
+def test_aws_question_word_list():
+    for text in ("What is my AWS bill?", "is the s3 bucket open", "Any new findings?", "cost explorer says what",
+                 "my Security Group", "cloud bill this month", "iam keys", "EC2 idle"):
+        assert is_aws_question(text), text
+    for text in ("What is my spend this month?", "which model is cheapest", "awsome day", "buckets of tokens"):
+        assert not is_aws_question(text), text
+    assert not_connected_reply(LABEL_OWN_DATA) == AWS_NOT_CONNECTED_LINE + "\n\n" + FOOTER_AI_SETUP
+    assert not_connected_reply(LABEL_GENERAL) == AWS_NOT_CONNECTED_LINE + "\n\n" + FOOTER_GENERAL
+    assert AWS_NOT_CONNECTED_LINE == "You are not connected to your AWS account. Connect it in Settings and ask again."
+
+
+async def test_aws_question_when_not_connected_gets_the_fixed_line_without_a_model_call(client, env):
+    """No connection row: an AWS question gets exactly the fixed line plus the footer, no
+    model call and no output rail; a spend question from the same account is answered as
+    today."""
+    env.db.connection = None
+    env.db.rows = [{"team": "core", "model": "m", "status": 200, "cached": False, "routed_from": None,
+                    "n": 1, "input_tokens": 10, "output_tokens": 1, "cost_usd": Decimal("0.5")}]
+
+    env.fakes.received["text"] = "Is my S3 bucket still open to the internet?"
+    await post(client, received_event(email_id="em_aws"))
+    assert env.db.replies["em_aws"]["verdict"] == "answered_not_connected"
+    assert env.fakes.answer_calls == []
+    assert env.engine.output_calls == []
+    sent = env.fakes.sent[-1]
+    assert sent["text"] == AWS_NOT_CONNECTED_LINE + "\n\n" + FOOTER_AI_SETUP
+    assert sent["to"] == USER_ADDRESS and sent["headers"]["In-Reply-To"] == MESSAGE_ID
+
+    env.fakes.received["text"] = "What is my spend this month?"
+    await post(client, received_event(email_id="em_spend"))
+    assert env.db.replies["em_spend"]["verdict"] == "answered_own"
+    assert len(env.fakes.answer_calls) == 1
+    _, user, _ = env.fakes.answer_calls[0]
+    assert "AI spend this month (recorded requests): $0.50" in user
+    # The context says AWS is not connected rather than surfacing old findings.
+    assert "Latest AWS scan: no AWS account is connected to slice" in user
+    assert env.fakes.sent[-1]["text"].startswith("You spent $1.50 this month.")
+
+
+async def test_aws_question_when_connected_still_goes_to_the_model(client, env):
+    _connect(env)
+    env.fakes.received["text"] = "Is my S3 bucket still open to the internet?"
+    await post(client, received_event(email_id="em_aws_ok"))
+    assert env.db.replies["em_aws_ok"]["verdict"] == "answered_own"
+    assert len(env.fakes.answer_calls) == 1
+    assert AWS_NOT_CONNECTED_LINE not in env.fakes.sent[-1]["text"]
+
+
+async def test_disconnected_operator_gets_the_fixed_line_too(client, env, monkeypatch):
+    """The operator with AWS switched off (a row with status disconnected) is not connected
+    for the assistant either; a general AWS question gets the line with the general footer."""
+    monkeypatch.setattr(config, "SLICE_OPERATOR_ACCOUNT_ID", 7)
+    monkeypatch.setattr(config, "SCANNER_ENABLED", True)
+    env.db.connection = {"status": "disconnected", "role_arn": None, "external_id": "ext"}
+    env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
+    env.fakes.received["text"] = "How do findings about security groups work?"
+    await post(client, received_event(email_id="em_op"))
+    assert env.db.replies["em_op"]["verdict"] == "answered_not_connected"
+    assert env.fakes.answer_calls == []
+    assert env.fakes.sent[-1]["text"] == AWS_NOT_CONNECTED_LINE + "\n\n" + FOOTER_GENERAL
+
+    # Switched back on (no row, or a row saying own): the model answers again.
+    for connection in (None, {"status": "own", "role_arn": None, "external_id": "ext"}):
+        env.db.connection = connection
+        env.fakes.canned_answer = GENERAL_TAILORED_OPENER + " nothing to report.\n\n" + FOOTER_GENERAL
+        await post(client, received_event(email_id=f"em_on_{connection is None}"))
+        assert env.db.replies[f"em_on_{connection is None}"]["verdict"] == "answered_general"
+
+
+async def test_fixed_aws_line_is_written_to_thread_memory(client, env):
+    import fakeredis.aioredis
+
+    redis = fakeredis.aioredis.FakeRedis()
+    env.install(redis=redis)
+    env.db.connection = None
+    env.fakes.received["text"] = "What does the latest finding mean?"
+    await post(client, received_event(email_id="em_mem"))
+    assert env.db.replies["em_mem"]["verdict"] == "answered_not_connected"
+    turns = await load_thread(redis, 7, MESSAGE_ID)
+    assert turns == [{"q": "What does the latest finding mean?", "a": AWS_NOT_CONNECTED_LINE}]
+
+
+async def test_aws_connected_operator_disconnected_row(monkeypatch):
+    from app.email_assistant.context import aws_connected, build_general_context
+
+    db = FakeEmailDB()
+    monkeypatch.setattr(config, "SLICE_OPERATOR_ACCOUNT_ID", 1)
+    monkeypatch.setattr(config, "SCANNER_ENABLED", True)
+    assert await aws_connected(db, 1) is True
+    db.connection = {"status": "own", "role_arn": None, "external_id": "ext"}
+    assert await aws_connected(db, 1) is True
+    db.connection = {"status": "disconnected", "role_arn": None, "external_id": "ext"}
+    assert await aws_connected(db, 1) is False
+    assert await build_general_context(db, {"id": 1}) is None

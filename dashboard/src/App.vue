@@ -386,11 +386,12 @@ const awsBillSub = computed(() => {
   const y = usd(awsCost.value.yesterday)
   return y === null ? '' : `yesterday ${y}`
 })
-// Phase 24b: the findings panel shows once AWS is connected, or for the operator account
-// (which scans slice's own infrastructure). Before the status is known it stays hidden.
+// Phase 24b: the findings panel shows once AWS is connected. Phase 29: the operator is
+// no exception, GET /scanner/connect reports its own switch as connected or
+// not_connected like everyone else. Before the status is known it stays hidden.
 const awsPanelVisible = computed(() => {
   const c = awsConn.value
-  return Boolean(c && (c.mode === 'operator' || c.status === 'connected'))
+  return Boolean(c && c.status === 'connected')
 })
 // A loaded summary with no guardrails object renders dashes, not "Loading…".
 const guardrails = computed(() => (summary.value ? summary.value.guardrails ?? {} : null))
