@@ -860,7 +860,7 @@ async def test_github_callback_good_code_sets_cookie_and_upserts(client, web_env
         app.state.github_web = None
 
     assert cb.status_code == 302
-    assert cb.headers["location"] == "/"
+    assert cb.headers["location"] == "/dashboard"
     set_cookie = cb.headers["set-cookie"]
     lower = set_cookie.lower()
     assert "slice_session=" in set_cookie
@@ -897,14 +897,14 @@ async def test_github_callback_unknown_state_fails_and_creates_no_account(client
     finally:
         app.state.github_web = None
     assert r.status_code == 302
-    assert r.headers["location"] == "/?login=failed"
+    assert r.headers["location"] == "/dashboard?login=failed"
     assert store.accounts == {}
 
 
 async def test_github_callback_access_denied_redirects_denied(client, web_env):
     r = await client.get("/auth/github/callback?error=access_denied")
     assert r.status_code == 302
-    assert r.headers["location"] == "/?login=denied"
+    assert r.headers["location"] == "/dashboard?login=denied"
 
 
 async def test_github_callback_state_is_single_use(client, web_env, store):
@@ -913,12 +913,12 @@ async def test_github_callback_state_is_single_use(client, web_env, store):
         login = await client.get("/auth/github/login")
         state = _state_from_login(login)
         first = await client.get(f"/auth/github/callback?code=abc&state={state}")
-        assert first.headers["location"] == "/"
+        assert first.headers["location"] == "/dashboard"
         # Replaying the same state is now unknown -> failed.
         replay = await client.get(f"/auth/github/callback?code=abc&state={state}")
     finally:
         app.state.github_web = None
-    assert replay.headers["location"] == "/?login=failed"
+    assert replay.headers["location"] == "/dashboard?login=failed"
 
 
 # --- the session cookie through the lock ------------------------------------
@@ -1116,3 +1116,36 @@ async def test_sse_via_cookie_delivers_only_this_account(auth_on, wired_auth, st
     finally:
         harness.disconnect.set()
         await asyncio.wait_for(task, timeout=2)
+
+
+
+def test_login_redirects_are_paths_on_the_dashboard_page():
+    """Phase 30: every post-login redirect is a path under the origin the browser is on,
+    never a host, and it lands on /dashboard; the callback's redirect_uri is still
+    PUBLIC_BASE_URL + /auth/github/callback."""
+    from app.auth import routes as auth_routes
+
+    assert auth_routes.LOGIN_OK_REDIRECT == "/dashboard"
+    assert auth_routes.LOGIN_FAILED_REDIRECT == "/dashboard?login=failed"
+    assert auth_routes.LOGIN_DENIED_REDIRECT == "/dashboard?login=denied"
+    from pathlib import Path
+
+    source = Path(auth_routes.__file__).read_text(encoding="utf-8")
+    assert 'RedirectResponse("/' not in source
+    assert 'config.PUBLIC_BASE_URL + "/auth/github/callback"' in source
+    assert "sliceapp.dev" not in source
+
+
+
+def test_page_paths_are_open_but_the_dashboard_api_is_locked():
+    """Phase 30: GET /dashboard and GET /settings are the app's HTML and need no key; every
+    /dashboard/<api> path, and the other locked prefixes, still do."""
+    from app.auth.middleware import is_locked
+
+    assert is_locked("GET", "/dashboard") is False
+    assert is_locked("GET", "/settings") is False
+    for method, path in (
+        ("GET", "/dashboard/"), ("GET", "/dashboard/summary"), ("GET", "/dashboard/events"),
+        ("POST", "/dashboard/key/rotate"), ("GET", "/admin"), ("GET", "/scanner/connect"), ("GET", "/account/profile"),
+    ):
+        assert is_locked(method, path) is True, (method, path)

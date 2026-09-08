@@ -329,9 +329,12 @@ The suite collects 608 tests. CI is defined in [.github/workflows/ci.yml](.githu
 ## Live
 
 - API: [api.sliceapp.dev](https://api.sliceapp.dev)
+- Dashboard: [sliceapp.dev/dashboard](https://sliceapp.dev/dashboard)
 - Dashboards: [grafana.sliceapp.dev](https://grafana.sliceapp.dev)
 - Site: [sliceapp.dev](https://sliceapp.dev)
 - CLI: [slice-gateway on PyPI](https://pypi.org/project/slice-gateway/)
+
+Two hosts, one container. `api.sliceapp.dev` is for tools: the gateway API that Claude Code, the SDKs, curl and the CLI point at. `sliceapp.dev/dashboard` (and `/settings`) is for people: Caddy proxies those paths, the bundle under `/assets`, and the API prefixes the page calls to the same gateway, and serves the static site for everything else. `PUBLIC_BASE_URL` must be the dashboard host, `https://sliceapp.dev`, because the GitHub sign-in callback and the session cookie belong to the origin the browser is on; the api host redirects `/`, `/dashboard` and `/settings` there.
 
 ## Status
 

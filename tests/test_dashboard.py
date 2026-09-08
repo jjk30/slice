@@ -1253,3 +1253,23 @@ async def test_built_dashboard_is_served_when_dist_exists(client, dash_db):
     # No path escapes the build folder.
     r = await client.get("/..%2Fmain.py")
     assert r.status_code == 404
+
+
+async def test_built_dashboard_is_served_at_the_two_page_paths(client, dash_db):
+    """Phase 30: /dashboard and /settings are the app's pages, the same index.html as /,
+    open to a signed-out browser. The bundle's base is absolute so it resolves from
+    either path, and /dashboard/<api> is still the API."""
+    if not DASHBOARD_DIST.is_dir():
+        pytest.skip("dashboard/dist has not been built (npm run build)")
+    root = await client.get("/")
+    for path in ("/dashboard", "/settings"):
+        r = await client.get(path)
+        assert r.status_code == 200, path
+        assert r.headers.get("content-type", "").startswith("text/html")
+        assert r.content == root.content
+    assert b'src="/assets/' in root.content and b"./assets" not in root.content
+    r = await client.get("/dashboard/models")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
+    # A trailing-slash or nested page path is not a page.
+    r = await client.get("/settings/anything")
+    assert r.status_code == 404

@@ -32,6 +32,32 @@ const booted = ref(false)
 const profileConfirmed = ref(false)
 // Phase 23: a confirmed user can reopen the setup screen to edit their email + AWS role.
 const settingsOpen = ref(false)
+
+// Phase 30: the two pages have paths. The dashboard is /dashboard and Settings is
+// /settings, so a link or the back button lands on the right one. Only those two views
+// move the path: login, setup, signing out and saving leave it alone.
+const DASHBOARD_PATH = '/dashboard'
+const SETTINGS_PATH = '/settings'
+
+function currentPath() {
+  return window.location.pathname
+}
+
+function pushPath(path) {
+  if (currentPath() !== path) window.history.pushState({}, '', path)
+}
+
+function openSettings() {
+  settingsOpen.value = true
+  pushPath(SETTINGS_PATH)
+}
+
+// The back and forward buttons: the path decides which of the two pages shows, but only
+// while the dashboard is the thing on screen (never mid sign-out or mid save).
+function onPopState() {
+  if (!session.value || !profileConfirmed.value || signingOut.value || savingSettings.value) return
+  settingsOpen.value = currentPath() === SETTINGS_PATH
+}
 // Phase 22a: true right after a Log out, so the login screen shows a "Signed out" note.
 const signedOut = ref(false)
 // True from the moment Log out is pressed until the sign-out card has been up long enough
@@ -92,6 +118,7 @@ async function onSettingsDone() {
   const shownAt = Date.now()
   savingSettings.value = true
   settingsOpen.value = false
+  pushPath(DASHBOARD_PATH)
   await loadAll()
   await wait(Math.max(0, SAVE_MIN_MS - (Date.now() - shownAt)))
   savingSettings.value = false
@@ -178,6 +205,8 @@ async function onLogout() {
   signedOut.value = true
   signingOut.value = false
   logoutFailed.value = false
+  // The next sign-in lands on the dashboard page, whichever page was open before.
+  if (currentPath() !== DASHBOARD_PATH) window.history.replaceState({}, '', DASHBOARD_PATH)
 }
 
 const RECENT_LIMIT = 20
@@ -359,14 +388,22 @@ onMounted(async () => {
     // too): remember its GitHub username for the sign-in card's "Log in as" button.
     rememberLogin(session.value.login)
     await loadProfileConfirmed()
-    if (profileConfirmed.value) startDashboard()
-    else initialLoadDone = true
+    if (profileConfirmed.value) {
+      // Phase 30: a valid, confirmed session opened at /settings lands on Settings;
+      // any other path is the dashboard.
+      settingsOpen.value = currentPath() === SETTINGS_PATH
+      startDashboard()
+    } else {
+      initialLoadDone = true
+    }
   } else {
     initialLoadDone = true
   }
   booted.value = true
+  window.addEventListener('popstate', onPopState)
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('popstate', onPopState)
   if (refreshTimer) clearTimeout(refreshTimer)
   refreshTimer = null
 })
@@ -466,7 +503,7 @@ const firstRequest = computed(() => requestCount.value === 0)
         <span v-if="accountLogin" class="meta account">{{ accountLogin }}</span>
         <LivePill :status="liveStatus" />
         <a class="settings howto" href="https://sliceapp.dev/how-to.html" target="_blank" rel="noopener">How to</a>
-        <button class="settings" type="button" @click="settingsOpen = true">Settings</button>
+        <button class="settings" type="button" @click="openSettings">Settings</button>
         <button class="signout" type="button" @click="onLogout">Log out</button>
       </div>
     </header>

@@ -138,7 +138,20 @@ def test_every_get_started_link_goes_to_the_install_section(how_to):
     links = re.findall(r'<a[^>]*href="([^"]*)"[^>]*>\s*(?:<svg[^>]*>.*?</svg>)?\s*Get started\s*</a>', index + how_to, re.S)
     assert len(links) == 3, links
     assert set(links) == {"https://sliceapp.dev/how-to.html#install"}
-    assert 'href="https://api.sliceapp.dev">' in how_to and "Open the dashboard" in how_to
+    assert 'href="https://sliceapp.dev/dashboard">' in how_to and "Open the dashboard" in how_to
+
+
+def test_dashboard_links_point_at_the_apex_dashboard(how_to):
+    """Phase 30: the dashboard lives at sliceapp.dev/dashboard. Every link that means the
+    dashboard goes there; api.sliceapp.dev stays the gateway address in the tool blocks,
+    never an href."""
+    index = INDEX.read_text(encoding="utf-8")
+    for page in (how_to, index):
+        assert 'href="https://api.sliceapp.dev' not in page
+    assert how_to.count('href="https://sliceapp.dev/dashboard"') >= 3
+    assert 'href="https://sliceapp.dev/dashboard" target="_blank" rel="noopener">slice dashboard</a>' in index
+    assert "Open the dashboard at <a href=\"https://sliceapp.dev/dashboard\"" in how_to
+    assert "api.sliceapp.dev" in how_to  # still the gateway address for tools
 
 
 def test_dashboard_header_links_to_how_to():

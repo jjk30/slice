@@ -10,6 +10,12 @@
     @metrics path /metrics /metrics/*
     respond @metrics 404
 
+    # Phase 30: people use the dashboard on the apex; this host is for tools. The root
+    # and the two app paths send a browser there for good. Every API path (/v1, /auth,
+    # /dashboard/*, /scanner, /admin, /account) still proxies to the gateway below.
+    @app path / /dashboard /settings
+    redir @app https://sliceapp.dev/dashboard permanent
+
     reverse_proxy gateway:8080
 }
 
@@ -24,6 +30,21 @@
 # environment (unlike the api/grafana hosts, which are reused across deploys).
 sliceapp.dev {
     root * /srv/slice-site
+
+    # Phase 30: the dashboard lives here, at /dashboard and /settings, served by the same
+    # gateway container as the API. The live stream is proxied first on its own so it is
+    # never buffered (flush_interval -1 streams every event as it arrives), then the app
+    # paths: the two pages, the bundle under /assets, and every API prefix the dashboard
+    # calls same-origin (/dashboard/*, /auth/*, /scanner/*, /admin/*, /account/*).
+    # Everything else is the static site.
+    @events path /dashboard/events
+    reverse_proxy @events gateway:8080 {
+        flush_interval -1
+    }
+
+    @app path /dashboard /settings /dashboard/* /assets/* /auth/* /scanner/* /admin/* /account/*
+    reverse_proxy @app gateway:8080
+
     file_server
     encode zstd gzip
 }

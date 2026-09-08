@@ -391,3 +391,29 @@ def test_aws_changes_refetch_in_place():
     assert "Promise.all([getAwsCost(), getScannerConnect(), getFindings()])" in refresh
     for line in ("awsCost.value = a", "awsConn.value = conn", "findings.value = f"):
         assert line in refresh, line
+
+
+
+# --- Phase 30: the dashboard and settings paths ---------------------------------------
+
+
+def test_app_reads_and_writes_the_two_page_paths():
+    app = APP.read_text(encoding="utf-8")
+    assert "const DASHBOARD_PATH = '/dashboard'" in app and "const SETTINGS_PATH = '/settings'" in app
+    assert "return window.location.pathname" in app
+    # Opening Settings pushes /settings; Save's done pushes /dashboard; sign-out ends on /dashboard.
+    opens = app[app.index("function openSettings"):app.index("function onPopState")]
+    assert "settingsOpen.value = true" in opens and "pushPath(SETTINGS_PATH)" in opens
+    done = app[app.index("async function onSettingsDone"):app.index("async function refreshAws")]
+    assert "settingsOpen.value = false" in done and "pushPath(DASHBOARD_PATH)" in done
+    logout = app[app.index("async function onLogout"):app.index("const RECENT_LIMIT")]
+    assert "replaceState({}, '', DASHBOARD_PATH)" in logout
+    assert "window.history.pushState({}, '', path)" in app
+    # On load a confirmed session at /settings opens Settings; the back button follows the path.
+    mount = app[app.index("onMounted(async () => {"):app.index("onBeforeUnmount(", app.index("onMounted(async () => {"))]
+    assert "settingsOpen.value = currentPath() === SETTINGS_PATH" in mount
+    assert "window.addEventListener('popstate', onPopState)" in mount
+    assert "window.removeEventListener('popstate', onPopState)" in app
+    assert '@click="openSettings"' in app
+    # The other views never touch the path: no push in the sign-out or saving card paths.
+    assert app.count("pushPath(") == 3  # the helper's own definition plus its two callers

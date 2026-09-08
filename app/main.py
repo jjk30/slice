@@ -1257,6 +1257,13 @@ async def metrics_endpoint() -> Response:
 # instead and talks to the gateway over CORS. The check happens once, at import: build
 # the dashboard, then (re)start the gateway.
 #
+# Phase 30: the same index.html is also served at GET /dashboard and GET /settings, the
+# two page paths the app owns (App.vue reads the path to open Settings). The bundle's
+# base is absolute (/assets, vite.config.js), so it resolves from either path. The
+# /dashboard/<api> routes are registered earlier and are untouched: only the exact
+# path /dashboard is claimed here, and the auth middleware leaves that one GET open
+# (app/auth/middleware.py) so a signed-out browser gets the page, not a 401.
+#
 # Deliberately NOT a StaticFiles mount at "/": Starlette treats a mount as a full match
 # for every path, which would beat the method-mismatch (partial) match of a real route
 # and turn e.g. GET /v1/messages from a 405 with an Allow header into a 404, and would
@@ -1283,6 +1290,8 @@ if DASHBOARD_DIST.is_dir():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="dashboard-assets")
 
     @app.get("/", include_in_schema=False)
+    @app.get("/dashboard", include_in_schema=False)
+    @app.get("/settings", include_in_schema=False)
     async def dashboard_index():
         index = _dashboard_file("index.html")
         if index is None:

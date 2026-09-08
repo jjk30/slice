@@ -7,9 +7,11 @@ import vue from '@vitejs/plugin-vue'
 const GATEWAY = 'http://localhost:8080'
 
 export default defineConfig({
-  // Relative base so the built index.html and its assets work wherever the build is
-  // served from, including the gateway at /.
-  base: './',
+  // Phase 30: the app is served at /dashboard and /settings as well as /, and the bundle
+  // always lives at /assets on the same origin (app.main mounts it there), so the base
+  // is absolute. A relative base would look for /dashboard/assets from a trailing-slash
+  // URL and miss.
+  base: '/',
   plugins: [vue()],
   server: {
     port: 5173,

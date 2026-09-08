@@ -285,12 +285,18 @@ async def _forget_session(redis, key: str) -> None:
 
 # Phase 21: the dashboard's browser GitHub sign-in (the authorization-code flow). The
 # browser goes to GitHub and back; the session lives in an httpOnly cookie the SSE stream
-# reads too. A failure never 500s; it redirects to "/" with a ?login= reason the login
-# screen shows. Keys stay a terminal thing: no slice key is ever minted here.
+# reads too. A failure never 500s; it redirects to the dashboard page with a ?login=
+# reason the login screen shows. Keys stay a terminal thing: no slice key is ever minted
+# here.
 
-# Where a callback lands the browser on failure/cancel. The dashboard reads ?login=.
-LOGIN_DENIED_REDIRECT = "/?login=denied"
-LOGIN_FAILED_REDIRECT = "/?login=failed"
+# Phase 30: the dashboard page is /dashboard on the host the browser reached slice at
+# (PUBLIC_BASE_URL, the same origin as the callback), so every redirect is a path, never
+# a host. Where a callback lands the browser on success, and on failure/cancel (the
+# dashboard reads ?login=).
+DASHBOARD_PATH = "/dashboard"
+LOGIN_OK_REDIRECT = DASHBOARD_PATH
+LOGIN_DENIED_REDIRECT = DASHBOARD_PATH + "?login=denied"
+LOGIN_FAILED_REDIRECT = DASHBOARD_PATH + "?login=failed"
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -379,7 +385,7 @@ async def github_callback(request: Request):
         return RedirectResponse(LOGIN_FAILED_REDIRECT, status_code=302)
 
     logger.info(json.dumps({"event": "web_login", "account_id": account.id, "login": account.login}))
-    response = RedirectResponse("/", status_code=302)
+    response = RedirectResponse(LOGIN_OK_REDIRECT, status_code=302)
     _set_session_cookie(response, token)
     return response
 

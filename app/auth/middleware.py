@@ -35,6 +35,10 @@ LOCKED_ROUTES = {("POST", "/v1/messages"), ("POST", "/v1/chat/completions")}
 # Phase 18a adds /scanner/*: the AWS scanner endpoints need a valid slice key too.
 # Phase 20 adds /account/*: the account profile read/write is per-account, key-required.
 LOCKED_PREFIXES = ("/admin/", "/dashboard/", "/scanner/", "/account/")
+# Phase 30: the two page paths. A GET on the exact path is the app's own HTML (served by
+# app.main when the dashboard is built), and it must be open so a signed-out browser
+# gets the login screen rather than a 401. Every /dashboard/<api> path stays locked.
+PAGE_PATHS = ("/dashboard", "/settings")
 
 # The single tenant everything runs under when AUTH_ENABLED is off (local dev mode).
 # Its id is None on purpose: the proxy writes every local row with a NULL account_id
@@ -54,6 +58,8 @@ def is_locked(method: str, path: str) -> bool:
     """Whether this request must carry a valid slice key."""
     if (method.upper(), path) in LOCKED_ROUTES:
         return True
+    if method.upper() == "GET" and path in PAGE_PATHS:
+        return False
     return path.startswith(LOCKED_PREFIXES) or path in {p.rstrip("/") for p in LOCKED_PREFIXES}
 
 
