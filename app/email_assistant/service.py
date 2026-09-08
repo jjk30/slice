@@ -207,6 +207,8 @@ SYSTEM_PROMPT = (
     "not use outside knowledge and do not guess.\n"
     "- If the context does not have the number or fact they ask for, say: I don't have "
     "that number.\n"
+    "- When a finding is marked expected by the user, say so plainly and do not push them "
+    "to fix it. If they ask what the risk is, still say what it is.\n"
     + _COMMON_RULES
     + "- End the reply with exactly this line and nothing after it: "
     + FOOTER_AI_SETUP

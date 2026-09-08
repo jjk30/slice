@@ -120,6 +120,21 @@ async def _recent_lines(db, account_id: int) -> list[str]:
     return lines
 
 
+async def _expected_notes(db, storage_scope) -> dict[tuple[str, str], str | None]:
+    """The scope's live expectations as (check, resource_id) -> note; empty on any failure.
+
+    The same read ``app.scanner.routes._expected_keys`` makes (``db.list_expectations``),
+    kept here because the lines also need the note the user left, which that helper drops.
+    Any failure means "no marks", exactly the lines as they were, never an error.
+    """
+    try:
+        rows = await db.list_expectations(storage_scope)
+        return {(e["check"], e["resource_id"]): e.get("note") for e in rows}
+    except Exception as exc:  # noqa: BLE001
+        _warn("expectations", exc)
+        return {}
+
+
 async def _findings_lines(db, storage_scope) -> list[str]:
     try:
         run_id = await db.latest_run_id(storage_scope)
@@ -136,13 +151,29 @@ async def _findings_lines(db, storage_scope) -> list[str]:
         sev = str(row.get("severity") or "unknown")
         by_severity[sev] = by_severity.get(sev, 0) + 1
     counts = ", ".join(f"{n} {sev}" for sev, n in sorted(by_severity.items()))
-    lines = [f"Latest AWS scan: {len(rows)} findings ({counts})"]
+    # Findings the user marked expected (phase 24b), by (check, resource_id): counted on
+    # the first line, flagged on their own line with the note if one was left, and ranked
+    # under the not-expected findings of the same severity. No marks: the lines as before.
+    expected = await _expected_notes(db, storage_scope)
+
+    def _key(row) -> tuple[str, str]:
+        return (str(row.get("check")), str(row.get("resource_id")))
+
+    marked = sum(1 for row in rows if _key(row) in expected)
+    head = f"Latest AWS scan: {len(rows)} findings ({counts})"
+    if marked:
+        head += f", {marked} marked expected by you"
+    lines = [head]
     order = {"high": 0, "med": 1, "low": 2}
-    ranked = sorted(rows, key=lambda r: order.get(str(r.get("severity")), 9))
+    ranked = sorted(rows, key=lambda r: (order.get(str(r.get("severity")), 9), _key(r) in expected))
     for row in ranked[:MAX_FINDINGS]:
-        lines.append(
-            f"  - [{row.get('severity')}] {row.get('check')} on {row.get('resource_id')}: {row.get('summary')}"
-        )
+        line = f"  - [{row.get('severity')}] {row.get('check')} on {row.get('resource_id')}: {row.get('summary')}"
+        if _key(row) in expected:
+            note = expected[_key(row)]
+            line += " (marked expected by you)"
+            if note:
+                line += f": {note}"
+        lines.append(line)
     if len(rows) > MAX_FINDINGS:
         lines.append(f"  - and {len(rows) - MAX_FINDINGS} more")
     return lines

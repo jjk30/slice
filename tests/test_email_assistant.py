@@ -116,6 +116,7 @@ class FakeEmailDB:
         self.recent: list[dict] = []
         self.run_id = None
         self.findings: list[dict] = []
+        self.expectations: list[dict] = []
         self.connection = None
         self.costs: list[dict] = []
         # Phase 28: the guardrail rows a blocked mail writes, the gateway's shape.
@@ -156,6 +157,9 @@ class FakeEmailDB:
 
     async def findings_for_run(self, scope, run_id):
         return list(self.findings)
+
+    async def list_expectations(self, scope):
+        return list(self.expectations)
 
     async def get_connection(self, account_id):
         return dict(self.connection) if self.connection else None
@@ -1768,3 +1772,87 @@ async def test_aws_connected_operator_disconnected_row(monkeypatch):
     db.connection = {"status": "disconnected", "role_arn": None, "external_id": "ext"}
     assert await aws_connected(db, 1) is False
     assert await build_general_context(db, {"id": 1}) is None
+
+
+# --- Findings lines and the expected marks -----------------------------------
+
+
+def _finding(severity, check, resource_id, summary):
+    return {"severity": severity, "check": check, "resource_id": resource_id, "summary": summary}
+
+
+_SCAN_FINDINGS = [
+    _finding("med", "s3_versioning", "bucket-c", "Versioning is off."),
+    _finding("high", "s3_public", "bucket-a", "Bucket is public."),
+    _finding("high", "iam_no_mfa", "root", "Root has no MFA."),
+    _finding("med", "ebs_unattached", "vol-1", "Volume is unattached."),
+]
+
+
+async def test_findings_lines_without_expected_marks_are_unchanged():
+    """No marks (an empty list, or a db without the read at all): exactly today's lines."""
+    from app.email_assistant.context import _findings_lines
+
+    db = FakeEmailDB()
+    db.run_id = "run-1"
+    db.findings = list(_SCAN_FINDINGS)
+    expected_lines = [
+        "Latest AWS scan: 4 findings (2 high, 2 med)",
+        "  - [high] s3_public on bucket-a: Bucket is public.",
+        "  - [high] iam_no_mfa on root: Root has no MFA.",
+        "  - [med] s3_versioning on bucket-c: Versioning is off.",
+        "  - [med] ebs_unattached on vol-1: Volume is unattached.",
+    ]
+    assert await _findings_lines(db, None) == expected_lines
+
+    class _NoExpectations(FakeEmailDB):
+        list_expectations = None  # the attribute is not awaitable: the read fails, the lines do not
+
+    db2 = _NoExpectations()
+    db2.run_id = "run-1"
+    db2.findings = list(_SCAN_FINDINGS)
+    assert await _findings_lines(db2, None) == expected_lines
+
+
+async def test_findings_lines_flag_expected_marks_with_and_without_notes():
+    """Marked findings are counted on the first line, flagged on their own line (with the
+    note when one was left), and ranked under the unmarked ones of the same severity."""
+    from app.email_assistant.context import _findings_lines
+
+    db = FakeEmailDB()
+    db.run_id = "run-1"
+    db.findings = list(_SCAN_FINDINGS)
+    db.expectations = [
+        {"check": "s3_public", "resource_id": "bucket-a", "note": "Static site, meant to be public"},
+        {"check": "s3_versioning", "resource_id": "bucket-c", "note": None},
+        # A mark for a resource not in this run: never counted, never shown.
+        {"check": "s3_public", "resource_id": "bucket-gone", "note": "old"},
+    ]
+    assert await _findings_lines(db, None) == [
+        "Latest AWS scan: 4 findings (2 high, 2 med), 2 marked expected by you",
+        "  - [high] iam_no_mfa on root: Root has no MFA.",
+        "  - [high] s3_public on bucket-a: Bucket is public. (marked expected by you): Static site, meant to be public",
+        "  - [med] ebs_unattached on vol-1: Volume is unattached.",
+        "  - [med] s3_versioning on bucket-c: Versioning is off. (marked expected by you)",
+    ]
+
+
+async def test_findings_lines_fall_back_when_the_expectations_read_raises():
+    """A failing expectations read never becomes an error: the lines are exactly today's."""
+    from app.email_assistant.context import _findings_lines
+
+    class _BrokenExpectations(FakeEmailDB):
+        async def list_expectations(self, scope):
+            raise RuntimeError("db hiccup")
+
+    db = _BrokenExpectations()
+    db.run_id = "run-1"
+    db.findings = list(_SCAN_FINDINGS)
+    plain = FakeEmailDB()
+    plain.run_id = "run-1"
+    plain.findings = list(_SCAN_FINDINGS)
+    lines = await _findings_lines(db, None)
+    assert lines == await _findings_lines(plain, None)
+    assert lines[0] == "Latest AWS scan: 4 findings (2 high, 2 med)"
+    assert not any("expected" in line for line in lines)
+
