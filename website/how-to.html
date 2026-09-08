@@ -83,7 +83,12 @@
   .term .dim{color:rgba(251,248,241,.45)}
   .term pre[hidden]{display:none}
   .term .tabs{margin-left:auto;display:inline-flex;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.12);border-radius:8px}
-  .term .tab{font-family:var(--mono);font-size:11.5px;line-height:1;color:rgba(251,248,241,.55);background:transparent;border:0;border-radius:6px;padding:5px 9px;cursor:pointer;transition:color .14s ease,background .14s ease}
+  .term .tab{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11.5px;line-height:1;color:rgba(251,248,241,.55);background:transparent;border:0;border-radius:6px;padding:4px 9px 4px 7px;cursor:pointer;transition:color .14s ease,background .14s ease}
+  .term .tab .ti{width:16px;height:16px;flex:none;display:block}
+  .term .tab img.ti{object-fit:contain;overflow:hidden;font-size:0;opacity:.7;transition:opacity .14s ease}
+  .term .tab.on img.ti,.term .tab:hover img.ti{opacity:1}
+  /* the Apple mark is black on light; flip it so it reads on the dark bar */
+  .term .tab img.ti.mac{filter:invert(1)}
   .term .tab:hover{color:var(--paper)}
   .term .tab.on{color:var(--paper);background:rgba(255,255,255,.12)}
   .term .tabs~.copy{margin-left:0}
@@ -212,13 +217,13 @@ Logged in as <span class="dim">jjk30</span></pre>
     <p>To check the saved login from the terminal:</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
-        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac">Mac / Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win">Windows</button></div>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
         <button class="copy" type="button" aria-label="Copy command">
           <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre data-os="mac"><span class="dim">$</span> slice init
+<pre data-os="mac linux"><span class="dim">$</span> slice init
 
 Gateway:  https://api.sliceapp.dev
 Config:   <span class="dim">/Users/you/.slice/config.json</span>
@@ -241,13 +246,13 @@ Logged in as <span class="dim">jjk30</span> <span class="dim">(account 14)</span
     <p>Set three variables in the shell where you run Claude Code. <code>slice use claude-code</code> prints the same lines with your key filled in.</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
-        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac">Mac / Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win">Windows</button></div>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
         <button class="copy" type="button" aria-label="Copy command">
           <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre data-os="mac"><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
+<pre data-os="mac linux"><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
 <span class="kw">export</span> ANTHROPIC_API_KEY=<span class="ph">(your own Anthropic key)</span>
 <span class="kw">export</span> ANTHROPIC_AUTH_TOKEN=<span class="ph">(your slice key)</span></pre>
 <pre data-os="win" hidden><span class="kw">$env:</span>ANTHROPIC_BASE_URL=<span class="st">"https://api.sliceapp.dev"</span>
@@ -433,13 +438,13 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
     <p class="say">Remove the CLI and its saved key, then revoke the key on the server.</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
-        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac">Mac / Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win">Windows</button></div>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
         <button class="copy" type="button" aria-label="Copy command">
           <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre data-os="mac"><span class="dim">$</span> pip uninstall slice-gateway
+<pre data-os="mac linux"><span class="dim">$</span> pip uninstall slice-gateway
 <span class="dim">$</span> rm -rf ~/.slice</pre>
 <pre data-os="win" hidden><span class="dim">&gt;</span> pip uninstall slice-gateway
 <span class="dim">&gt;</span> Remove-Item -Recurse -Force ~\.slice</pre>
@@ -512,7 +517,7 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
   // One OS choice for the whole page: picking a tab on any block switches every block.
   function pick(os){
     document.querySelectorAll('.term [data-os]').forEach(function(el){
-      var mine=el.getAttribute('data-os')===os;
+      var mine=el.getAttribute('data-os').split(' ').indexOf(os)>=0;
       if(el.classList.contains('tab')){ el.classList.toggle('on',mine); el.setAttribute('aria-selected',mine?'true':'false'); }
       else{ el.hidden=!mine; }
     });
