@@ -252,3 +252,19 @@ def test_claude_code_step_starts_with_before_you_start(how_to):
     after = tools[tools.index("Set three variables", start):]
     for name in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         assert f"export</span> {name}=" in after, name
+
+
+def test_tools_step_says_what_slice_sees_and_keeps(how_to):
+    tools = _section(how_to, "tools")
+    assert "<p><b>What slice sees, and what it keeps.</b></p>" in tools
+    for line in (
+        "Your files never go to slice.",
+        "What it keeps: which model, how many tokens, what it cost, and when.",
+        "What it does not keep: your prompt, the answer, your code, or your Anthropic key.",
+        "Why you can trust that: the request table has those columns and nothing else,",
+    ):
+        assert line in tools, line
+    assert '<a href="https://github.com/jjk30/slice" target="_blank" rel="noopener">open on GitHub</a>' in tools
+    assert "slice reads each request only to route it" not in how_to
+    # It sits before the Claude Code part, in the section's intro.
+    assert tools.index("What slice sees") < tools.index("<h3>Claude Code</h3>")

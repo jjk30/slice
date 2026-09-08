@@ -262,7 +262,11 @@ Logged in as <span class="dim">jjk30</span> <span class="dim">(account 14)</span
   <section class="block" id="tools">
     <h2><span class="no">03</span>Point your tools at slice</h2>
     <p class="say">slice reads your slice key from the Authorization header. Your own Anthropic key goes in x-api-key, and slice forwards it to Anthropic. Each setup below sends both.</p>
-    <p>slice reads each request only to route it and count it. It keeps the token counts and the cost. It does not keep your prompts or your code.</p>
+    <p><b>What slice sees, and what it keeps.</b></p>
+    <p>Your files never go to slice. Claude Code decides what to send to the model, and only that request passes through slice on its way to Anthropic. slice looks at it just long enough to pick a model and count the tokens, then sends it on.</p>
+    <p>What it keeps: which model, how many tokens, what it cost, and when. That is what the dashboard is built from.</p>
+    <p>What it does not keep: your prompt, the answer, your code, or your Anthropic key. The key rides through to Anthropic and is not saved.</p>
+    <p>Why you can trust that: the request table has those columns and nothing else, and the code is <a href="https://github.com/jjk30/slice" target="_blank" rel="noopener">open on GitHub</a>, so you can read it yourself.</p>
 
     <h3>Claude Code</h3>
     <p><b>Before you start.</b> You need two things first: Claude Code on this machine, and an Anthropic API key. If you already have both, skip to the three lines below.</p>
