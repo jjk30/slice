@@ -4,6 +4,7 @@ import { getJson, getBudget, putBudget, AuthError } from '../api.js'
 import { apiBase } from '../api.js'
 import { session } from '../auth.js'
 import awsLogo from '../assets/aws-logo.png'
+import awsMark from '../assets/aws-mark.svg'
 
 // Phase 21: the first-time setup screen, shown once after sign-in while the account's
 // profile_confirmed is still false. Two things: an email slice can reach the user on
@@ -285,7 +286,9 @@ async function connectAws() {
       </label>
 
       <section v-if="showAws" class="aws">
-        <span class="label">{{ isOperator ? 'AWS' : 'Connect AWS (optional)' }}</span>
+        <span class="label aws-label">
+          <img class="aws-mark" :src="awsMark" alt="AWS" />{{ isOperator ? '' : 'Connect AWS (optional)' }}
+        </span>
         <p class="aws-status">
           Status:
           <span :class="connected ? 'aws-ok' : 'aws-muted'">{{ connected ? 'connected' : 'not connected' }}</span>
@@ -555,6 +558,19 @@ async function connectAws() {
 
 .aws-scanning {
   color: var(--ink);
+}
+
+/* The AWS mark beside the block's label: 22px tall, width from its own aspect ratio. */
+.aws-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.aws-mark {
+  height: 22px;
+  width: auto;
+  display: block;
 }
 
 .aws-status {
