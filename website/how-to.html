@@ -78,7 +78,6 @@
   .fill[hidden]{display:none}
   .fill code{font-family:var(--mono);font-size:12px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
   .fill a{color:var(--green);border-bottom:1px solid rgba(15,110,86,.35)}
-  .fill.see pre{margin:0;padding:0;font:inherit;color:var(--ink);white-space:pre;overflow-x:auto}
 
   /* terminal blocks */
   .term{background:var(--ink);border-radius:12px;overflow:hidden;box-shadow:0 20px 40px -30px rgba(28,24,21,.6)}
@@ -100,6 +99,10 @@
   .term .tab:hover{color:var(--paper)}
   .term .tab.on{color:var(--paper);background:rgba(255,255,255,.12)}
   .term .tabs~.copy{margin-left:0}
+  /* "What you should see": the output of the command block above, in the same dark block,
+     with only the label on the bar (no dots, no tabs, no copy button) */
+  .block .term.see{margin-top:10px}
+  .term.see .bar span{margin-left:0}
   .ph{color:#EAC58C;border-bottom:1px dotted rgba(234,197,140,.55)}
 
   /* copy icon in the terminal bar, shown on hover */
@@ -231,8 +234,8 @@
 <pre data-os="mac linux"><span class="dim">$</span> slice login</pre>
 <pre data-os="win" hidden><span class="dim">&gt;</span> slice login</pre>
     </div>
-    <div class="fill see">
-      <b>What you should see</b>
+    <div class="term see">
+      <div class="bar"><span>What you should see</span></div>
 <pre>  To finish signing in, open:
     https://github.com/login/device
   and enter this code:
@@ -301,17 +304,17 @@ Your dashboard: https://sliceapp.dev/dashboard</pre>
 <pre data-os="mac linux"><span class="dim">$</span> slice init</pre>
 <pre data-os="win" hidden><span class="dim">&gt;</span> slice init</pre>
     </div>
-    <div class="fill see" data-os="mac linux">
-      <b>What you should see</b>
+    <div class="term see" data-os="mac linux">
+      <div class="bar"><span>What you should see</span></div>
 <pre>Gateway:  https://api.sliceapp.dev
 Config:   /Users/you/.slice/config.json
-Logged in as your username (account 14).</pre>
+Logged in as your username (account 1).</pre>
     </div>
-    <div class="fill see" data-os="win" hidden>
-      <b>What you should see</b>
+    <div class="term see" data-os="win" hidden>
+      <div class="bar"><span>What you should see</span></div>
 <pre>Gateway:  https://api.sliceapp.dev
 Config:   C:\Users\you\.slice\config.json
-Logged in as your username (account 14).</pre>
+Logged in as your username (account 1).</pre>
     </div>
   </section>
 
@@ -637,7 +640,7 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
   });
   // One OS choice for the whole page: picking a tab on any block switches every block.
   function pick(os){
-    document.querySelectorAll('.term [data-os], .fill[data-os]').forEach(function(el){
+    document.querySelectorAll('.term [data-os], .fill[data-os], .term.see[data-os]').forEach(function(el){
       var mine=el.getAttribute('data-os').split(' ').indexOf(os)>=0;
       if(el.classList.contains('tab')){ el.classList.toggle('on',mine); el.setAttribute('aria-selected',mine?'true':'false'); }
       else{ el.hidden=!mine; }

@@ -414,7 +414,8 @@ def _command_blocks(how_to: str) -> list[tuple[str, str]]:
 def _see_blocks(html: str) -> list[tuple[str | None, str]]:
     """(data-os or None, output text) of every "What you should see" box, in page order."""
     found = []
-    for attrs, body in re.findall(r'<div class="fill see"([^>]*)>\s*<b>What you should see</b>\s*<pre>(.*?)</pre>', html, re.S):
+    pattern = r'<div class="term see"([^>]*)>\s*<div class="bar"><span>What you should see</span></div>\s*<pre>(.*?)</pre>'
+    for attrs, body in re.findall(pattern, html, re.S):
         os_names = re.search(r'data-os="([^"]+)"', attrs)
         found.append((os_names.group(1) if os_names else None, body))
     return found
@@ -431,8 +432,9 @@ def test_no_command_block_carries_output_lines(how_to):
 
 def test_what_you_should_see_boxes_sit_under_the_split_blocks(how_to):
     """Two blocks were split: slice login (one box, the output is the same everywhere) and
-    slice init (one box per OS pane, the config path differs). No box has a copy button,
-    and every one uses placeholders for the username and the code."""
+    slice init (one box per OS pane, the config path differs). Each box is a dark terminal
+    block with only the label on its bar: no dots, no tabs, no copy button. Every one uses
+    placeholders for the username, the code, and the account number."""
     login = _section(how_to, "login")
     boxes = _see_blocks(login)
     assert [os_names for os_names, _ in boxes] == [None, "mac linux", "win"]
@@ -442,8 +444,14 @@ def test_what_you_should_see_boxes_sit_under_the_split_blocks(how_to):
     assert "/Users/you/.slice/config.json" in boxes[1][1] and "C:\\Users\\you\\.slice\\config.json" in boxes[2][1]
     init = login[login.index("$</span> slice init"):]
     assert init.index("</div>") < init.index("What you should see")
-    assert '<div class="fill see" data-os="win" hidden>' in login
-    for box in re.findall(r'<div class="fill see".*?</div>', how_to, re.S):
-        assert 'class="copy"' not in box
-    assert ".fill.see pre{" in how_to
+    assert '<div class="term see" data-os="win" hidden>' in login
+    assert "account 1)" in boxes[1][1] and "account 1)" in boxes[2][1]
+    assert "account 14" not in how_to
+    boxes_html = re.findall(r'<div class="term see"[^>]*>.*?</pre>\s*</div>', how_to, re.S)
+    assert len(boxes_html) == 3
+    for box in boxes_html:
+        assert 'class="copy"' not in box and 'class="tabs"' not in box
+        assert '<i class="r"></i>' not in box
+    assert ".fill.see" not in how_to
+    assert ".term.see[data-os]" in how_to  # the OS switch flips the per-OS boxes too
 
