@@ -30,6 +30,11 @@ This is only the client. The slice gateway itself, the server that does the rout
 
 Homepage: https://sliceapp.dev
 
+## What's new in 0.2.2
+
+`slice login` now ends by printing your dashboard link and opening it in the browser.
+The how-to page at https://sliceapp.dev/how-to has screenshots of the install and login steps.
+
 ## What's new in 0.2.1
 
 `slice login` talks to the hosted gateway at https://api.sliceapp.dev by default. No flag needed.

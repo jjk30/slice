@@ -75,6 +75,19 @@ def base_url() -> str:
     return (saved or os.getenv("SLICE_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
 
 
+def dashboard_url(target: str) -> str:
+    """The dashboard that goes with a gateway address.
+
+    The hosted gateway at https://api.sliceapp.dev has its dashboard on the main site,
+    https://sliceapp.dev/dashboard. A self-hosted gateway serves its own dashboard at
+    /dashboard on the same address.
+    """
+    target = target.rstrip("/")
+    if target == DEFAULT_BASE_URL:
+        return "https://sliceapp.dev/dashboard"
+    return f"{target}/dashboard"
+
+
 def version_string() -> str:
     """``slice-gateway <version>`` from the installed distribution, or ``unknown``."""
     try:
@@ -174,6 +187,14 @@ def login(
                 _save_login(target, existing, body)
                 account = body.get("account") or {}
                 typer.secho(f"Logged in as {account.get('login')}", fg=typer.colors.GREEN, bold=True)
+                dashboard = dashboard_url(target)
+                typer.echo("")
+                typer.secho(f"Your dashboard: {dashboard}", fg=typer.colors.CYAN)
+                if open_browser:
+                    try:
+                        webbrowser.open(dashboard)
+                    except Exception:  # noqa: BLE001, a headless box just shows the URL above.
+                        pass
                 return
             if status == "slow_down":
                 interval = int(body.get("interval") or interval + 5)

@@ -270,25 +270,42 @@ def test_tools_step_says_what_slice_sees_and_keeps(how_to):
     assert tools.index("What slice sees") < tools.index("<h3>Claude Code</h3>")
 
 
-SCREENSHOTS = [
-    "01-install.png",
+# The screenshots on the page, in page order: one in step 01, then the seven of step 02.
+STEP_02_SCREENSHOTS = [
     "02-login-terminal.png",
     "02-github-device.png",
     "02-github-authorize.png",
     "02-github-done.png",
     "02-logged-in.png",
+    "02-dashboard-signin.png",
+    "02-dashboard.png",
+]
+SCREENSHOTS = ["01-install.png", *STEP_02_SCREENSHOTS]
+
+STEP_02_LABELS = [
+    "Terminal after slice login",
+    "GitHub: Device Activation, click Continue",
+    "GitHub: Authorize slice",
+    "GitHub: done",
+    "Terminal: logged in, with your dashboard link",
+    "Dashboard: click Log in",
+    "Dashboard: signed in",
 ]
 
-
-def test_how_to_page_shows_the_six_screenshots(how_to):
-    """Steps 01 and 02 carry six screenshots under website/img. Each <img> names a file
-    that exists, has a non-empty alt, and declares its width and height so the page does
-    not jump while the pictures load."""
+def _img_tags(how_to: str) -> dict[str, str]:
     imgs = {}
     for tag in re.findall(r"<img [^>]*>", how_to):
         src = re.search(r'src="img/([^"]+)"', tag)
         if src:
             imgs[src.group(1)] = tag
+    return imgs
+
+
+def test_how_to_page_shows_the_screenshots(how_to):
+    """Every <img> under website/img names a file that exists, has a non-empty alt, and
+    declares its width and height so the page does not jump while the pictures load.
+    The one Mac caption sits under the first picture of step 01."""
+    imgs = _img_tags(how_to)
     assert set(imgs) == set(SCREENSHOTS), sorted(imgs)
     for name in SCREENSHOTS:
         tag = imgs[name]
@@ -298,23 +315,55 @@ def test_how_to_page_shows_the_six_screenshots(how_to):
         for attr in ("width", "height"):
             value = re.search(rf'\b{attr}="(\d+)"', tag)
             assert value and int(value.group(1)) > 0, f"{name}: missing {attr}"
-    # The order on the page follows the steps, one picture under the other, each with a
-    # short label above it; the one Mac caption sits under the first picture of step 01.
+        assert 'loading="lazy"' in tag, name
     positions = [how_to.index(f'src="img/{n}"') for n in SCREENSHOTS]
     assert positions == sorted(positions)
-    labels = re.findall(r'<div class="lab">([^<]+)</div>', how_to)
-    assert labels == [
-        "Terminal after install",
-        "Terminal after slice login",
-        "GitHub: Device Activation",
-        "GitHub: Authorize slice",
-        "GitHub: done",
-        "Terminal: logged in",
-    ]
     caption = "Screenshots from a Mac. The GitHub pages look the same on every system."
     assert how_to.count(caption) == 1
     assert positions[0] < how_to.index(caption) < positions[1]
     assert "shot-row" not in how_to and "shot-gallery" not in how_to
-    # The username note comes after the last picture, not between them.
-    note = how_to.index("You will see your own GitHub username and account number here.")
-    assert note > positions[-1]
+
+
+def test_login_step_has_the_eight_pictures_in_order_with_labels(how_to):
+    """Step 02 for CLI 0.2.2: the seven pictures of the login walk (the eighth picture
+    on the page counting the install one) come in the order of the steps the user takes,
+    each with its label above it, and the username note sits after the terminal ones."""
+    login = _section(how_to, "login")
+    names = re.findall(r'src="img/([^"]+)"', login)
+    assert names == STEP_02_SCREENSHOTS
+    assert re.findall(r'<div class="lab">([^<]+)</div>', login) == STEP_02_LABELS
+    for name in STEP_02_SCREENSHOTS:
+        assert (WEBSITE / "img" / name).is_file(), name
+    note = login.index("You will see your own GitHub username here.")
+    assert login.index('src="img/02-logged-in.png"') < note < login.index('src="img/02-dashboard-signin.png"')
+
+
+def test_login_block_has_the_three_os_tabs_and_ends_with_the_dashboard_line(how_to):
+    """The slice login block uses the page's own tab component with the same three icons,
+    and every tab's mock output ends with the dashboard line the 0.2.2 CLI prints."""
+    login = _section(how_to, "login")
+    block = login[login.index('<div class="term">'):login.index("</div>", login.index("</pre>\n    </div>")) + 6]
+    tabs = re.search(r'<div class="tabs"[^>]*>(.*?)</div>', block)
+    assert tabs and re.findall(r'data-os="(\w+)"', tabs.group(1)) == ["mac", "linux", "win"]
+    assert re.findall(r'src="([^"]+)"', tabs.group(1)) == ["apple.png", "tux.png", "windows.svg"]
+    pres = re.findall(r'<pre data-os="([^"]+)"[^>]*>(.*?)</pre>', block, re.S)
+    covered = {os_name for names, _ in pres for os_name in names.split()}
+    assert covered == {"mac", "linux", "win"}
+    for names, body in pres:
+        text = re.sub(r"<[^>]+>", "", body)
+        assert "slice login" in text, names
+        assert "WXYZ-1234" in text, names
+        assert text.rstrip().endswith("Logged in as jjk30\n\nYour dashboard: https://sliceapp.dev/dashboard"), names
+    assert 'src="img/' not in block  # pictures sit outside the tab panes
+
+
+def test_login_step_says_the_dashboard_is_a_separate_door(how_to):
+    login = _section(how_to, "login")
+    assert "<h3>Now open your dashboard</h3>" in login
+    intro = login[:login.index('<div class="term">')]
+    assert "opens the link in your browser" in intro and "Your dashboard" not in intro
+    door = login[login.index("<h3>Now open your dashboard</h3>"):login.index("<h3>Your slice key</h3>")]
+    assert "two separate doors" in door and "one click, no forms" in door
+    assert 'href="https://sliceapp.dev/dashboard" target="_blank" rel="noopener">sliceapp.dev/dashboard</a>' in door
+    # Now open your dashboard comes after the terminal pictures and before Your slice key.
+    assert login.index('src="img/02-logged-in.png"') < login.index("<h3>Now open your dashboard</h3>") < login.index("<h3>Your slice key</h3>")

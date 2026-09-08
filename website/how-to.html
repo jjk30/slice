@@ -212,21 +212,22 @@
       <span>From python.org, with Add to PATH ticked.</span>
       <span>If pipx is not found after ensurepath, close PowerShell and open it again.</span>
     </div>
-    <p>Expected output of the last line: <code>slice-gateway 0.2.1</code> (or newer).</p>
+    <p>Expected output of the last line: <code>slice-gateway 0.2.2</code> (or newer).</p>
   </section>
 
   <!-- 02 LOG IN -->
   <section class="block" id="login">
     <h2><span class="no">02</span>Log in</h2>
-    <p class="say">Sign in with GitHub. slice shows a short code. Open the GitHub page it prints, paste the code, and click Authorize. No password is typed in the terminal.</p>
+    <p class="say">Sign in with GitHub. slice login prints a link and a code, opens the link in your browser, and waits while you click Continue and then Authorize. The terminal then says Logged in as your username, prints your dashboard link, and opens that page too.</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
         <button class="copy" type="button" aria-label="Copy command">
           <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre><span class="dim">$</span> slice login
+<pre data-os="mac linux"><span class="dim">$</span> slice login
 
   To finish signing in, open:
     <span class="st">https://github.com/login/device</span>
@@ -234,29 +235,53 @@
     <span class="st">WXYZ-1234</span>
 
 Waiting for you to authorize in the browser...
-Logged in as <span class="dim">jjk30</span></pre>
+Logged in as <span class="dim">jjk30</span>
+
+Your dashboard: <span class="st">https://sliceapp.dev/dashboard</span></pre>
+<pre data-os="win" hidden><span class="dim">&gt;</span> slice login
+
+  To finish signing in, open:
+    <span class="st">https://github.com/login/device</span>
+  and enter this code:
+    <span class="st">WXYZ-1234</span>
+
+Waiting for you to authorize in the browser...
+Logged in as <span class="dim">jjk30</span>
+
+Your dashboard: <span class="st">https://sliceapp.dev/dashboard</span></pre>
     </div>
     <figure class="shot">
       <div class="lab">Terminal after slice login</div>
-      <img src="img/02-login-terminal.png" width="703" height="344" loading="lazy" alt="Terminal after slice login, showing the GitHub link and a code">
+      <img src="img/02-login-terminal.png" width="710" height="334" loading="lazy" alt="Terminal after slice login, showing the GitHub link and a code">
     </figure>
     <figure class="shot">
-      <div class="lab">GitHub: Device Activation</div>
-      <img src="img/02-github-device.png" width="1488" height="1086" loading="lazy" alt="GitHub device activation page, signed in, with a Continue button">
+      <div class="lab">GitHub: Device Activation, click Continue</div>
+      <img src="img/02-github-device.png" width="2088" height="1378" loading="lazy" alt="GitHub Device Activation page with a Continue button">
     </figure>
     <figure class="shot">
       <div class="lab">GitHub: Authorize slice</div>
-      <img src="img/02-github-authorize.png" width="1498" height="1091" loading="lazy" alt="GitHub page asking to authorize slice">
+      <img src="img/02-github-authorize.png" width="1456" height="1092" loading="lazy" alt="GitHub page asking to authorize slice">
     </figure>
     <figure class="shot">
       <div class="lab">GitHub: done</div>
-      <img src="img/02-github-done.png" width="1468" height="1036" loading="lazy" alt="GitHub page saying the device is now connected">
+      <img src="img/02-github-done.png" width="1328" height="986" loading="lazy" alt="GitHub page saying your device is now connected">
     </figure>
     <figure class="shot">
-      <div class="lab">Terminal: logged in</div>
-      <img src="img/02-logged-in.png" width="712" height="342" loading="lazy" alt="Terminal showing Logged in as jjk30 after authorizing">
+      <div class="lab">Terminal: logged in, with your dashboard link</div>
+      <img src="img/02-logged-in.png" width="1008" height="452" loading="lazy" alt="Terminal showing Logged in as jjk30 and the dashboard link">
     </figure>
-    <p class="conn-note">You will see your own GitHub username and account number here.</p>
+    <p class="conn-note">You will see your own GitHub username here.</p>
+
+    <h3>Now open your dashboard</h3>
+    <p>slice opened <a href="https://sliceapp.dev/dashboard" target="_blank" rel="noopener">sliceapp.dev/dashboard</a> for you, or open it yourself. Click <b>Log in as</b> your username, or <b>Sign in with GitHub</b> in a fresh browser: one click, no forms, because GitHub already trusts slice. The terminal login and the dashboard sign in are two separate doors, both through GitHub.</p>
+    <figure class="shot">
+      <div class="lab">Dashboard: click Log in</div>
+      <img src="img/02-dashboard-signin.png" width="1122" height="994" loading="lazy" alt="Dashboard sign in page with a Log in as jjk30 button">
+    </figure>
+    <figure class="shot">
+      <div class="lab">Dashboard: signed in</div>
+      <img src="img/02-dashboard.png" width="2896" height="1204" loading="lazy" alt="Dashboard after signing in, showing spend tiles and the account budget">
+    </figure>
 
     <h3>Your slice key</h3>
     <p>Login mints a slice key. It starts with <code>slk_live_</code>. The CLI saves it to <code>~/.slice/config.json</code>, readable only by you, and does not print it. It is not shown again. The dashboard shows only its last four characters.</p>

@@ -68,6 +68,102 @@ def test_login_help_names_the_hosted_default(config_path):
     assert "localhost" not in result.output
 
 
+# --- dashboard link after login ---------------------------------------------------
+
+
+def test_dashboard_url_for_the_hosted_gateway_is_on_the_main_site():
+    assert slice_cli.dashboard_url(HOSTED) == "https://sliceapp.dev/dashboard"
+    assert slice_cli.dashboard_url(HOSTED + "/") == "https://sliceapp.dev/dashboard"
+
+
+def test_dashboard_url_for_a_self_hosted_gateway_is_under_the_gateway():
+    assert slice_cli.dashboard_url(LOCAL) == "http://localhost:8080/dashboard"
+    assert slice_cli.dashboard_url("https://gateway.example/") == "https://gateway.example/dashboard"
+
+
+class _Response:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+class _FakeClient:
+    """Stands in for httpx.Client: the device flow starts, then the first poll is
+    authorized. Records every URL that was posted to."""
+
+    posted: list[str] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def post(self, url, json=None):
+        _FakeClient.posted.append(url)
+        if url.endswith("/auth/device/start"):
+            return _Response(200, {
+                "session_id": "sess", "user_code": "WXYZ-1234",
+                "verification_uri": "https://github.com/login/device", "interval": 1,
+            })
+        return _Response(200, {
+            "status": "authorized", "slice_key": "slk_live_new", "jwt": "j",
+            "account": {"login": "jjk30", "id": 14},
+        })
+
+
+@pytest.fixture
+def device_flow(config_path, monkeypatch):
+    _FakeClient.posted = []
+    opened: list[str] = []
+    monkeypatch.setattr(slice_cli.httpx, "Client", _FakeClient)
+    monkeypatch.setattr(slice_cli.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(slice_cli.webbrowser, "open", lambda url: opened.append(url))
+    return opened
+
+
+def test_login_prints_the_dashboard_link_and_opens_it(device_flow, config_path):
+    result = runner.invoke(slice_cli.app, ["login"])
+    assert result.exit_code == 0, result.output
+    assert "Logged in as jjk30" in result.output
+    assert "Your dashboard: https://sliceapp.dev/dashboard" in result.output
+    assert result.output.index("Logged in as jjk30") < result.output.index("Your dashboard:")
+    # The device link first, then the dashboard, and nothing else.
+    assert device_flow == ["https://github.com/login/device", "https://sliceapp.dev/dashboard"]
+    assert _FakeClient.posted[0] == HOSTED + "/auth/device/start"
+    assert json.loads(config_path.read_text())["slice_key"] == "slk_live_new"
+
+
+def test_login_self_hosted_points_at_the_gateway_dashboard(device_flow):
+    result = runner.invoke(slice_cli.app, ["login", "--base-url", LOCAL + "/"])
+    assert result.exit_code == 0, result.output
+    assert "Your dashboard: http://localhost:8080/dashboard" in result.output
+    assert device_flow[-1] == "http://localhost:8080/dashboard"
+
+
+def test_login_no_open_prints_the_dashboard_link_without_opening_it(device_flow):
+    result = runner.invoke(slice_cli.app, ["login", "--no-open"])
+    assert result.exit_code == 0, result.output
+    assert "Your dashboard: https://sliceapp.dev/dashboard" in result.output
+    assert device_flow == []
+
+
+def test_login_dashboard_survives_a_browser_that_cannot_open(device_flow, monkeypatch):
+    def broken(url):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(slice_cli.webbrowser, "open", broken)
+    result = runner.invoke(slice_cli.app, ["login"])
+    assert result.exit_code == 0, result.output
+    assert "Your dashboard: https://sliceapp.dev/dashboard" in result.output
+
+
 # --- --version ---------------------------------------------------------------
 
 
