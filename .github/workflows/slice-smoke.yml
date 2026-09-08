@@ -14,30 +14,17 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.SLICE_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          curl --version | head -n 1
           body='{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
-          ok=0
-          call() {
-            label="$1"; shift
-            rm -f response.json
-            echo "== $label"
-            echo "sending: $body"
-            status=$(curl -sS -o response.json -w '%{http_code}' "$@" https://api.sliceapp.dev/v1/messages \
-              -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
-              -H "x-api-key: $ANTHROPIC_API_KEY" \
-              -H "anthropic-version: 2023-06-01" \
-              -H "content-type: application/json" \
-              -d "$body") || status="curl exit $?"
-            echo "status: $status"
-            echo "body: $(cat response.json 2>/dev/null)"
-            if [ "$status" = "200" ]; then ok=$((ok + 1)); fi
-          }
-          call "(1) as now"
-          call "(2) with --http1.1" --http1.1
-          call "(3) with -v" -v --stderr curl-verbose.txt
-          echo "request headers from (3):"
-          grep '^> ' curl-verbose.txt || true
-          if [ "$ok" -eq 0 ]; then
-            echo "all three calls failed"
+          echo "sending: $body"
+          status=$(curl -sS -o response.json -w '%{http_code}' https://api.sliceapp.dev/v1/messages \
+            -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$body")
+          echo "status: $status"
+          echo "body: $(cat response.json)"
+          if [ "$status" != "200" ]; then
             exit 1
           fi
+          python3 -c 'import json, sys; r = json.load(sys.stdin); print("model:", r["model"]); print("text:", next(b["text"] for b in r["content"] if b["type"] == "text"))' < response.json

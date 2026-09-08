@@ -370,6 +370,7 @@ Logged in as <span class="dim">jjk30</span> <span class="dim">(account 14)</span
       <span><code>(your own Anthropic key)</code>: the key you already use for Claude. If you have one, paste it here. If not, get one at console.anthropic.com under API keys. It starts with sk-ant-.</span>
       <span><code>(your slice key)</code>: your slice login key. Starts with slk_live_. Easiest: run <code>slice use claude-code</code> and it prints these three lines with your slice key already in. Or open <code>~/.slice/config.json</code> and copy it from there.</span>
       <span>Delete the brackets when you paste.</span>
+      <span>Paste the three lines only into your terminal, they hold your key.</span>
     </div>
     <p><code>ANTHROPIC_AUTH_TOKEN</code> goes out as <code>Authorization: Bearer</code>, which is where slice reads its key. <code>ANTHROPIC_API_KEY</code> stays your own Anthropic key in <code>x-api-key</code>. Claude Code prints a notice that env auth takes precedence over your claude.ai login while these are set. That is expected. Unset the three variables to go back to normal.</p>
 
@@ -418,6 +419,7 @@ message = client.messages.create(
      <span class="st">'"messages":[{"role":"user","content":"hi"}]}'</span></pre>
     </div>
     <p><b>Run it twice.</b> The first call is billed. The second call, with the same body, is served from cache at $0. slice keeps an answer for one hour.</p>
+    <p>The answer may come from a cheaper model than the one you asked for, and the <code>model</code> field in the answer says which: that is slice saving you money.</p>
   </section>
 
   <!-- 04 WATCH SPEND -->
@@ -490,6 +492,7 @@ message = client.messages.create(
   <section class="block" id="actions">
     <h2><span class="no">06</span>GitHub Actions</h2>
     <p class="say">There is no slice action. A workflow step can call the gateway with curl. Store two repository secrets: <code>SLICE_KEY</code> and <code>ANTHROPIC_API_KEY</code>.</p>
+    <p><b>Paste the key on its own.</b> When you paste a key into a GitHub secret, make sure nothing comes after it, no Enter and no space. A stray Enter breaks the request and slice answers 400 <b>Request body is not valid JSON</b>. On a Mac you can clean the clipboard first with <code>pbpaste | tr -d '\r\n ' | pbcopy</code>.</p>
     <p><b>A key for CI.</b> Make it in the dashboard: open <b>Your slice key</b> and click <b>Create new key</b>. Copy it once. This revokes every other live key on the account, including your laptop's, so run <code>slice login</code> again afterwards. A CLI login does not revoke a dashboard key.</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>.github/workflows/your-workflow.yml</span>
@@ -534,7 +537,7 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
     <p>Some findings are on purpose, like a bucket that serves a public website. Open the <b>AWS findings</b> panel on the dashboard and turn on the <b>expected</b> switch for that finding. It stays in the list, muted, and leaves the emails until you turn the switch off.</p>
 
     <h3>Reply with a question</h3>
-    <p>Reply to the email with a question about your own account. For example, how much you spent this week, or what a finding means. Send it from the email you saved in Settings. slice answers from your own slice data, in plain words, under 150 words. It never sends commands or scripts to run. If it does not have the number, it says so.</p>
+    <p>Reply to the email with a question about your own account. For example, how much you spent this month, or what a finding means. slice does not break costs down by week. Send it from the email you saved in Settings. slice answers from your own slice data, in plain words, under 150 words. It never sends commands or scripts to run. If it does not have the number, it says so.</p>
     <p>Anything off topic gets one line back: <b>Sorry, I can't help with that here.</b></p>
   </section>
 
