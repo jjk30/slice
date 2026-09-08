@@ -70,6 +70,7 @@
   .conn-note b{color:var(--ink);font-weight:500}
   .fill{display:grid;gap:5px;margin-top:10px;padding:12px 14px;background:var(--paper2);border:1px solid var(--edge);border-radius:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted);line-height:1.7}
   .fill b{color:var(--ink);font-weight:500}
+  .fill[hidden]{display:none}
   .fill code{font-family:var(--mono);font-size:12px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
 
   /* terminal blocks */
@@ -109,6 +110,7 @@
   .final{padding:56px 0 30px;text-align:center;border-top:1px solid var(--rule)}
   .final h2{font-family:var(--display);font-weight:700;font-size:clamp(26px,4.6vw,38px);letter-spacing:-.03em;line-height:1.02;margin-bottom:12px}
   .final p{font-size:16px;color:var(--muted);max-width:28em;margin:0 auto 24px;line-height:1.55}
+  .final p code{font-family:var(--mono);font-size:12.5px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
   .act{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:26px 0 4px;justify-content:center}
   .btn{font-family:var(--body);font-weight:500;font-size:15.5px;border:none;cursor:pointer;border-radius:11px;background:var(--green);color:#fff;padding:13px 26px;display:inline-flex;align-items:center;gap:9px;transition:transform .14s ease,background .14s ease}
   .btn:hover{transform:translateY(-1px);background:var(--green-deep)}
@@ -157,29 +159,44 @@
   <section class="block" id="install">
     <h2><span class="no">01</span>Install</h2>
     <p class="say">The slice CLI is a small package on PyPI. It needs Python 3.11 or newer.</p>
+    <p>Use pipx. It installs command line apps in their own space and puts slice on your PATH. On a new Mac, plain pip install is refused with the words externally managed environment. pipx is the fix, not a workaround.</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
         <button class="copy" type="button" aria-label="Copy command">
           <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre><span class="dim">$</span> pip install slice-gateway</pre>
+<pre data-os="mac"><span class="dim">$</span> brew install pipx
+<span class="dim">$</span> pipx ensurepath
+<span class="dim">$</span> pipx install slice-gateway
+<span class="dim">$</span> slice --version</pre>
+<pre data-os="linux" hidden><span class="dim">$</span> sudo apt install pipx
+<span class="dim">$</span> pipx ensurepath
+<span class="dim">$</span> pipx install slice-gateway
+<span class="dim">$</span> slice --version</pre>
+<pre data-os="win" hidden><span class="dim">&gt;</span> py -m pip install --user pipx
+<span class="dim">&gt;</span> py -m pipx ensurepath
+<span class="dim">&gt;</span> pipx install slice-gateway
+<span class="dim">&gt;</span> slice --version</pre>
     </div>
-    <p>On Mac, use pip3 if pip is not found.</p>
-    <p>On Windows, if pip is not found, use <code>py -m pip</code>.</p>
-    <p>Check that it installed, and see which version you have:</p>
-    <div class="term">
-      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
-        <button class="copy" type="button" aria-label="Copy command">
-          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
-          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-        </button>
-      </div>
-<pre><span class="dim">$</span> slice --version
-
-slice-gateway 0.2.1</pre>
+    <div class="fill" data-os="mac">
+      <b>No Homebrew?</b>
+      <span>Install it first at brew.sh, one command.</span>
+      <span>If <code>slice --version</code> says command not found after this, close the terminal and open a new one, then try again.</span>
     </div>
+    <div class="fill" data-os="linux" hidden>
+      <b>Not on Ubuntu or Debian?</b>
+      <span>On Fedora use <code>sudo dnf install pipx</code>. On any other distro: <code>python3 -m pip install --user pipx</code>.</span>
+      <span>If <code>slice --version</code> says command not found, open a new terminal.</span>
+    </div>
+    <div class="fill" data-os="win" hidden>
+      <b>Needs Python 3.11 or newer</b>
+      <span>From python.org, with Add to PATH ticked.</span>
+      <span>If pipx is not found after ensurepath, close PowerShell and open it again.</span>
+    </div>
+    <p>Expected output of the last line: <code>slice-gateway 0.2.1</code> (or newer).</p>
   </section>
 
   <!-- 02 LOG IN -->
@@ -204,7 +221,6 @@ Waiting for you to authorize in the browser...
 Logged in as <span class="dim">jjk30</span></pre>
     </div>
     <p class="conn-note">You will see your own GitHub username and account number here.</p>
-    <p>Self-hosted? Pass <code>--base-url http://localhost:8080</code> once, or set <code>SLICE_BASE_URL</code>. slice saves the address with your login.</p>
 
     <h3>Your slice key</h3>
     <p>Login mints a slice key. It starts with <code>slk_live_</code>. The CLI saves it to <code>~/.slice/config.json</code>, readable only by you, and does not print it. It is not shown again. The dashboard shows only its last four characters.</p>
@@ -444,9 +460,9 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
           <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
         </button>
       </div>
-<pre data-os="mac linux"><span class="dim">$</span> pip uninstall slice-gateway
+<pre data-os="mac linux"><span class="dim">$</span> pipx uninstall slice-gateway
 <span class="dim">$</span> rm -rf ~/.slice</pre>
-<pre data-os="win" hidden><span class="dim">&gt;</span> pip uninstall slice-gateway
+<pre data-os="win" hidden><span class="dim">&gt;</span> pipx uninstall slice-gateway
 <span class="dim">&gt;</span> Remove-Item -Recurse -Force ~\.slice</pre>
     </div>
     <ol>
@@ -463,6 +479,7 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
   <section class="final">
     <h2>That is the whole setup.</h2>
     <p>Free and open source. Read the code, or run it on your own box.</p>
+    <p>Running your own slice? Point the CLI at your box once with <code>slice login --base-url http://localhost:8080</code>, or set <code>SLICE_BASE_URL</code>. slice remembers it.</p>
     <div class="act" style="margin-bottom:0">
       <a class="btn" href="https://sliceapp.dev/dashboard">
         <svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>Open the dashboard
@@ -516,7 +533,7 @@ Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-
   });
   // One OS choice for the whole page: picking a tab on any block switches every block.
   function pick(os){
-    document.querySelectorAll('.term [data-os]').forEach(function(el){
+    document.querySelectorAll('.term [data-os], .fill[data-os]').forEach(function(el){
       var mine=el.getAttribute('data-os').split(' ').indexOf(os)>=0;
       if(el.classList.contains('tab')){ el.classList.toggle('on',mine); el.setAttribute('aria-selected',mine?'true':'false'); }
       else{ el.hidden=!mine; }

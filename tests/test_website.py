@@ -113,16 +113,20 @@ def test_how_to_page_has_copy_buttons_and_one_script(how_to):
 def test_how_to_page_shows_the_current_cli_commands(how_to):
     """The install and login blocks match the CLI as it ships (0.2.1: hosted default)."""
     version = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]["version"]
-    assert "pip install slice-gateway" in how_to
+    assert "pipx install slice-gateway" in how_to
+    assert "pip install slice-gateway" not in how_to
     assert "slice --version" in how_to
     assert f"slice-gateway {version}" in how_to
     assert "pip show" not in how_to
     # Login is the bare command; the hosted gateway is the default, not a flag.
     assert "slice login" in how_to
     assert "--base-url https://api.sliceapp.dev" not in how_to
-    # Self-hosted users get the one line that points the CLI at their own box.
-    assert "--base-url http://localhost:8080" in how_to
+    # Self-hosted users get the one line that points the CLI at their own box, in the
+    # closing section rather than the login step.
+    assert "slice login --base-url http://localhost:8080" in how_to
     assert "SLICE_BASE_URL" in how_to
+    assert "Self-hosted?" not in how_to
+    assert how_to.index("Running your own slice?") > how_to.index("Read the code, or run it on your own box.")
 
 
 def test_site_header_links_to_how_to():
@@ -158,3 +162,39 @@ def test_dashboard_header_links_to_how_to():
     app = DASHBOARD_APP.read_text(encoding="utf-8")
     assert 'href="https://sliceapp.dev/how-to.html"' in app
     assert 'target="_blank"' in app
+
+
+
+def _section(how_to: str, section_id: str) -> str:
+    start = how_to.index(f'<section class="block" id="{section_id}">')
+    return how_to[start:how_to.index("</section>", start)]
+
+
+def test_install_section_is_pipx_on_three_tabs(how_to):
+    """Section 01 installs through pipx on each of the three OS tabs of the page's own tab
+    component (the same three icons, in the same order); nothing on the page says pip
+    install. Section 08 removes it with pipx uninstall on the same tabs."""
+    install = _section(how_to, "install")
+    tabs = re.search(r'<div class="tabs"[^>]*>(.*?)</div>', install)
+    assert tabs and re.findall(r'data-os="(\w+)"', tabs.group(1)) == ["mac", "linux", "win"]
+    assert re.findall(r'src="([^"]+)"', tabs.group(1)) == ["apple.png", "tux.png", "windows.svg"]
+    pres = dict(re.findall(r'<pre data-os="(\w+)"[^>]*>(.*?)</pre>', install, re.S))
+    assert set(pres) == {"mac", "linux", "win"}
+    for os_name, body in pres.items():
+        assert "pipx install slice-gateway" in body, os_name
+        assert "slice --version" in body, os_name
+        assert "pip install slice-gateway" not in body, os_name
+    assert "brew install pipx" in pres["mac"] and "sudo apt install pipx" in pres["linux"]
+    assert "py -m pip install --user pipx" in pres["win"] and "py -m pipx ensurepath" in pres["win"]
+    # One fill box per tab, flipped by the same switch, and the expected version line.
+    assert re.findall(r'<div class="fill" data-os="(\w+)"', install) == ["mac", "linux", "win"]
+    assert "Expected output of the last line" in install
+    assert "Use pipx." in install and "externally managed environment" in install
+
+    uninstall = _section(how_to, "uninstall")
+    assert uninstall.count("pipx uninstall slice-gateway") == 2
+    assert "pip uninstall" not in uninstall
+    assert 'data-os="mac linux"' in uninstall and 'data-os="win"' in uninstall
+    # The three icons are still what the tabs use, on every tabbed block.
+    for icon in ("apple.png", "tux.png", "windows.svg"):
+        assert how_to.count(f'src="{icon}"') >= 4, icon
