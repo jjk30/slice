@@ -369,6 +369,6 @@ Not yet verified in production:
 
 Coming next: the LoRA judge serving live, GitHub sign-in for the dashboard in the browser, and Slack alerts.
 
-## PS
 
-The name came first. I was craving a slice of cake when the idea landed, and the cake stayed: it is the logo, the favicon, and the thing the knife cuts on the front page. Click it at the top of this file and it takes you to [sliceapp.dev](https://sliceapp.dev).
+
+PS I was craving a slice of cake when I thought about this, hence the logo, the favicon, and the thing the knife cuts on the front page. Click it at the top of this file and it takes you to [sliceapp.dev](https://sliceapp.dev).
