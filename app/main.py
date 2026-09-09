@@ -317,6 +317,37 @@ def openai_error(status_code: int, error_type: str, message: str) -> JSONRespons
     )
 
 
+def _thinking_fields(payload) -> tuple[str, int | None]:
+    """The body's ``thinking.type`` ("none" when absent) and ``thinking.budget_tokens``
+    (None when absent). Reads the field only; the thinking block itself is never logged."""
+    thinking = payload.get("thinking") if isinstance(payload, dict) else None
+    if not isinstance(thinking, dict):
+        return "none", None
+    ttype = thinking.get("type")
+    budget = thinking.get("budget_tokens")
+    return (
+        ttype if isinstance(ttype, str) and ttype else "none",
+        budget if isinstance(budget, int) else None,
+    )
+
+
+def _request_log_meta(payload, headers, requested_model: str | None) -> dict:
+    """The extra /v1/messages log fields: the client's model, its thinking settings,
+    and whether it sent an anthropic-beta header (and its value, which is not a secret).
+
+    Never carries prompt text, a key, or the Authorization header.
+    """
+    thinking_type, thinking_budget = _thinking_fields(payload)
+    beta = headers.get("anthropic-beta")
+    return {
+        "requested_model": requested_model,
+        "thinking_type": thinking_type,
+        "thinking_budget": thinking_budget,
+        "has_beta": beta is not None,
+        "beta": beta,
+    }
+
+
 def log_request(
     method: str,
     path: str,
@@ -326,6 +357,9 @@ def log_request(
     routed_from: str | None = None,
     verdict: str | None = None,
     rag: str | None = None,
+    *,
+    meta: dict | None = None,
+    error_message: str | None = None,
 ) -> None:
     entry = {
         "method": method,
@@ -343,6 +377,18 @@ def log_request(
     # Phase 6: the retrieval outcome, present only when RAG actually ran.
     if rag is not None:
         entry["rag"] = rag
+    # Phase 30: the /v1/messages diagnostic fields, added only when meta is supplied
+    # (the served and provider-error paths), so every other endpoint's line is unchanged.
+    # requested_model and served_model are equal when the request was not routed. No
+    # prompt text, no key, no Authorization is ever placed here.
+    if meta is not None:
+        entry["requested_model"] = meta.get("requested_model")
+        entry["served_model"] = model
+        entry["thinking_type"] = meta.get("thinking_type")
+        entry["thinking_budget"] = meta.get("thinking_budget")
+        entry["has_beta"] = meta.get("has_beta")
+        entry["beta"] = meta.get("beta")
+        entry["error_message"] = error_message
     logger.info(json.dumps(entry))
 
 
@@ -559,6 +605,12 @@ async def messages(request: Request):
     wants_stream = isinstance(payload, dict) and payload.get("stream") is True
     path = request.url.path
 
+    # Phase 30: the diagnostic fields the per-request log line carries on this endpoint,
+    # built once from the client's model, its thinking settings, and its anthropic-beta
+    # header. Threaded into the served and provider-error log calls below (direct, routed,
+    # and agent-loop paths, streaming or not). Never holds prompt text, a key, or auth.
+    req_meta = _request_log_meta(payload, request.headers, model)
+
     # Phase 6: the incoming prompt, logged so the per-team RAG index can be rebuilt
     # offline, but only when RAG_STORE_PROMPTS is on. Off means we never store it.
     # Extraction never raises; a null just means no prompt stored.
@@ -708,13 +760,13 @@ async def messages(request: Request):
                             reason=outcome.reason, account_id=_acct_id(account),
                         )
 
-            return _finalize_anthropic(
+            return await _finalize_anthropic(
                 loop.result, request.method, path, final_model, started, wants_stream, team,
                 cache_key, routed_from=loop_routed_from, verdict=verdict,
                 routed_header=loop_routed_header, rag=rag, prompt_text=prompt_text,
                 agent_header=loop.header, attempts=loop.attempts, cost_override=loop.spend,
                 eval_prompt=eval_prompt, eval_neighbors=eval_neighbors, account=account,
-                judge_header=decision.judge_header,
+                judge_header=decision.judge_header, meta=req_meta,
             )
 
     try:
@@ -722,7 +774,7 @@ async def messages(request: Request):
     except AdapterError as exc:
         return _anthropic_error_response(
             exc, request.method, path, served_model, started, wants_stream, routed_from,
-            verdict, rag, prompt_text, team, account,
+            verdict, rag, prompt_text, team, account, meta=req_meta,
         )
 
     try:
@@ -733,27 +785,27 @@ async def messages(request: Request):
         # Missing server key and the like: never touched the network (rule 9).
         return _anthropic_error_response(
             exc, request.method, path, served_model, started, wants_stream, routed_from,
-            verdict, rag, prompt_text, team, account,
+            verdict, rag, prompt_text, team, account, meta=req_meta,
         )
     except httpx.TimeoutException:
         return _anthropic_upstream_error(
             502, "The request to the AI provider timed out.",
             request, served_model, started, wants_stream, routed_from, verdict, rag,
-            prompt_text, team, account,
+            prompt_text, team, account, meta=req_meta,
         )
     except httpx.RequestError:
         return _anthropic_upstream_error(
             502, "Could not reach the AI provider.",
             request, served_model, started, wants_stream, routed_from, verdict, rag,
-            prompt_text, team, account,
+            prompt_text, team, account, meta=req_meta,
         )
 
-    return _finalize_anthropic(
+    return await _finalize_anthropic(
         result, request.method, path, served_model, started, wants_stream, team, cache_key,
         routed_from=routed_from, verdict=verdict, routed_header=decision.routed_header,
         rag=rag, prompt_text=prompt_text, agent_header=agent_header,
         eval_prompt=eval_prompt, eval_neighbors=eval_neighbors, account=account,
-        judge_header=decision.judge_header,
+        judge_header=decision.judge_header, meta=req_meta,
     )
 
 
@@ -850,9 +902,15 @@ def _anthropic_cache_hit(body, request, model, started, team, prompt_text=None, 
 
 def _anthropic_error_response(
     exc, method, path, model, started, wants_stream, routed_from=None, verdict=None,
-    rag=None, prompt_text=None, team="default", account=None,
+    rag=None, prompt_text=None, team="default", account=None, meta=None,
 ):
-    log_request(method, path, model, exc.status_code, started, routed_from, verdict, rag)
+    # A slice-side failure that never reached the provider (unknown model, missing key):
+    # the error text is what the client got, so it stands in for the provider body here.
+    error_message = (exc.message or "")[:300] or None if exc.status_code >= 400 else None
+    log_request(
+        method, path, model, exc.status_code, started, routed_from, verdict, rag,
+        meta=meta, error_message=error_message,
+    )
     response = anthropic_error(exc.status_code, exc.error_type, exc.message)
     response.background = record_task(
         model, exc.status_code, started, stream=wants_stream, routed_from=routed_from,
@@ -863,10 +921,12 @@ def _anthropic_error_response(
 
 def _anthropic_upstream_error(
     status, message, request, model, started, wants_stream, routed_from=None, verdict=None,
-    rag=None, prompt_text=None, team="default", account=None,
+    rag=None, prompt_text=None, team="default", account=None, meta=None,
 ):
+    error_message = (message or "")[:300] or None if status >= 400 else None
     log_request(
-        request.method, request.url.path, model, status, started, routed_from, verdict, rag
+        request.method, request.url.path, model, status, started, routed_from, verdict, rag,
+        meta=meta, error_message=error_message,
     )
     response = anthropic_error(status, "api_error", message)
     response.background = record_task(
@@ -876,11 +936,33 @@ def _anthropic_upstream_error(
     return response
 
 
-def _finalize_anthropic(
+async def _buffer_error_stream(result: AdapterResult) -> AdapterResult:
+    """Drain an errored upstream stream into a buffered result, closing the connection.
+
+    Used only for a status >= 400, where the body is a short provider error, not a real
+    answer stream. Buffering lets the single log line carry the error body; the same bytes
+    still reach the client.
+    """
+    chunks: list[bytes] = []
+    try:
+        if result.stream is not None:
+            async for chunk in result.stream:
+                chunks.append(chunk)
+    finally:
+        if result.aclose is not None:
+            await result.aclose()
+    return AdapterResult(
+        status_code=result.status_code,
+        headers=dict(result.headers),
+        content=b"".join(chunks),
+    )
+
+
+async def _finalize_anthropic(
     result: AdapterResult, method, path, model, started, wants_stream, team, cache_key,
     *, routed_from=None, verdict=None, routed_header=None, rag=None, prompt_text=None,
     agent_header=None, attempts=1, cost_override=None, eval_prompt=None, eval_neighbors=(),
-    account=None, judge_header=None,
+    account=None, judge_header=None, meta=None,
 ):
     # Phase 8: decide once, off the request's critical section, whether this served
     # answer is sampled for RAGAS scoring. The trigger (routed down, or the agent loop
@@ -905,7 +987,21 @@ def _finalize_anthropic(
     # "off:stream" when a qualifying request was streaming so the loop was skipped.
     if agent_header is not None:
         headers[AGENT_HEADER] = agent_header
-    log_request(method, path, model, result.status_code, started, routed_from, verdict, rag)
+
+    # Phase 30: an errored streaming response is buffered so the one log line can carry
+    # the provider's error body; a 2xx stream is left untouched and relayed as before.
+    if result.is_stream and result.status_code >= 400:
+        result = await _buffer_error_stream(result)
+    # error_message: the first 300 characters of the provider's error body on a 400+,
+    # null on a success. The body is already buffered here for every non-stream and every
+    # errored stream, so there is nothing extra to read.
+    error_message = None
+    if result.status_code >= 400 and not result.is_stream:
+        error_message = (result.content or b"").decode("utf-8", "replace")[:300] or None
+    log_request(
+        method, path, model, result.status_code, started, routed_from, verdict, rag,
+        meta=meta, error_message=error_message,
+    )
 
     if result.is_stream:
         usage = StreamUsage()

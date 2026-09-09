@@ -269,6 +269,94 @@ async def test_missing_database_url_disables_logging(client, monkeypatch, caplog
     assert {"event": "logging_disabled", "reason": "DATABASE_URL is not set"} in warnings
 
 
+def _request_line(caplog) -> dict | None:
+    """The one per-request structured log line for /v1/messages (the one with latency_ms)."""
+    for record in caplog.records:
+        try:
+            entry = json.loads(record.message)
+        except (ValueError, TypeError):
+            continue
+        if entry.get("path") == "/v1/messages" and "latency_ms" in entry:
+            return entry
+    return None
+
+
+@respx.mock
+async def test_log_line_carries_thinking_type_and_beta_when_present(client, caplog):
+    respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=RESPONSE))
+
+    body = {**REQUEST, "thinking": {"type": "enabled", "budget_tokens": 2048}}
+    beta = "interleaved-thinking-2025-05-14"
+    with caplog.at_level(logging.INFO, logger="slice.gateway"):
+        r = await client.post("/v1/messages", json=body, headers={"anthropic-beta": beta})
+
+    assert r.status_code == 200
+    entry = _request_line(caplog)
+    assert entry is not None
+    assert entry["thinking_type"] == "enabled"
+    assert entry["thinking_budget"] == 2048
+    assert entry["has_beta"] is True
+    assert entry["beta"] == beta
+    assert entry["requested_model"] == "claude-sonnet-5"
+    assert entry["served_model"] == "claude-sonnet-5"
+    # A 200 carries no provider error body.
+    assert entry["error_message"] is None
+
+
+@respx.mock
+async def test_log_line_thinking_type_none_and_no_beta_when_absent(client, caplog):
+    respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=RESPONSE))
+
+    with caplog.at_level(logging.INFO, logger="slice.gateway"):
+        r = await client.post("/v1/messages", json=REQUEST)
+
+    assert r.status_code == 200
+    entry = _request_line(caplog)
+    assert entry is not None
+    assert entry["thinking_type"] == "none"
+    assert entry["thinking_budget"] is None
+    assert entry["has_beta"] is False
+    assert entry["beta"] is None
+    assert entry["error_message"] is None
+
+
+@respx.mock
+async def test_log_line_error_message_filled_on_provider_400(client, caplog):
+    error_body = {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "thinking.type.enabled is not supported for this model. Use thinking.type.adaptive",
+        },
+    }
+    respx.post(MESSAGES_URL).mock(return_value=httpx.Response(400, json=error_body))
+
+    with caplog.at_level(logging.INFO, logger="slice.gateway"):
+        r = await client.post("/v1/messages", json=REQUEST)
+
+    assert r.status_code == 400
+    entry = _request_line(caplog)
+    assert entry is not None
+    assert entry["status"] == 400
+    assert entry["error_message"] is not None
+    assert "thinking.type.enabled is not supported" in entry["error_message"]
+    # Capped at the first 300 characters of the provider error body.
+    assert len(entry["error_message"]) <= 300
+
+
+@respx.mock
+async def test_log_line_error_message_null_on_200(client, caplog):
+    respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=RESPONSE))
+
+    with caplog.at_level(logging.INFO, logger="slice.gateway"):
+        r = await client.post("/v1/messages", json=REQUEST)
+
+    assert r.status_code == 200
+    entry = _request_line(caplog)
+    assert entry is not None
+    assert entry["error_message"] is None
+
+
 def test_httpx_logger_is_quiet_after_startup():
     """httpx logs every request URL at INFO, and those include Resend's signed raw-mail
     download links (phase 27). Importing the app sets the httpx logger to WARNING so the
