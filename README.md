@@ -230,7 +230,7 @@ This is a relay, not a council. The four models pass work down a ladder in order
 | Alerts | Resend, Twilio | Email through Resend, WhatsApp through Twilio, both fire and forget. |
 | MCP | mcp (FastMCP) | Stdio server exposing spend, rules, recent requests, and eval over HTTP to the gateway. |
 | Fine-tuning | Hugging Face PEFT on a Colab T4 | Own judge trained on own logs, free GPU, honest benchmark. |
-| Infra | Terraform, Docker, Caddy, ECR, SSM | One EC2 box behind Caddy with TLS; the ECS stack kept in Terraform for demos. |
+| Infra | Terraform, Docker, Caddy, AWS (EC2, ECR, S3, Secrets Manager, Route 53, IAM with OIDC, SSM) | One EC2 box behind Caddy with TLS; the ECS stack kept in Terraform for demos. |
 | Monitoring | Prometheus, Grafana | `slice_*` counters and histograms scraped from `/metrics`. |
 | Orchestration | Kubernetes (kind, kustomize) | Manifests plus HPA, proven locally under load. |
 | Scanner | boto3, CloudFormation | Read-only AWS security and cost-waste checks plus Cost Explorer, through a one-click role. |
@@ -364,13 +364,13 @@ Two hosts, one container. `api.sliceapp.dev` is for tools: the gateway API that 
 
 ## Status
 
-Verified in production: the gateway, routing, caching, budgets, auth, the dashboard, and Prometheus and Grafana monitoring run on a single EC2 box behind Caddy with TLS. The LoRA routing judge is deployed, served locally by llama.cpp as the `judge` compose service and proven on real routed traffic at 259 to 365 ms warm, with Haiku as the fallback. Real Claude Code has been run end to end through api.sliceapp.dev using `ANTHROPIC_AUTH_TOKEN`. The fixed-batch cost demo above is a real paired run against live providers. Users bring their own provider keys by design.
+Verified in production: the gateway, routing, caching, budgets, auth, the dashboard, and Prometheus and Grafana monitoring run on a single EC2 box behind Caddy with TLS. The LoRA routing judge is deployed, served locally by llama.cpp as the `judge` compose service and proven on real routed traffic at 259 to 365 ms warm, with Haiku as the fallback. Real Claude Code has been run end to end through api.sliceapp.dev using `ANTHROPIC_AUTH_TOKEN`. Signing in to the dashboard in the browser goes through GitHub OAuth at sliceapp.dev/dashboard. The fixed-batch cost demo above is a real paired run against live providers. Users bring their own provider keys by design.
 
-Not yet verified in production:
+Set aside:
 
-- WhatsApp alerts are wired through Twilio but not verified in production, because Twilio is still on a trial account.
+- WhatsApp alerts. The code is complete over Twilio, but live delivery needs a paid Twilio account or a Meta-verified sender, so it is parked.
 
-Coming next: GitHub sign-in for the dashboard in the browser, and Slack alerts.
+Coming next: Slack alerts.
 
 
 
