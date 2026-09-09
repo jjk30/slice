@@ -27,6 +27,7 @@ from app.alerts.channels import (
     DeliveryResult,
     ResendEmailChannel,
     build_default_channels,
+    is_billing_lockout,
     is_lockout,
 )
 from app.alerts.engine import (
@@ -59,6 +60,7 @@ __all__ = [
     "drain",
     "fire",
     "get_engine",
+    "is_billing_lockout",
     "is_lockout",
     "send_alert",
     "send_whatsapp_message",

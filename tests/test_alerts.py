@@ -46,6 +46,7 @@ from app.alerts import (
 )
 from app.alerts import channels as alert_channels
 from app.alerts import engine as alerts_engine
+from app.alerts import is_billing_lockout
 from app.alerts.channels import (
     FOOTER_AI_SETUP,
     FOOTER_AWS,
@@ -1553,3 +1554,150 @@ async def test_slice_auth_401_does_not_fire_lockout(client, wired, monkeypatch):
     # The provider was never reached, and nothing fired.
     assert route.call_count == 0
     assert [a for a in channel.sent if a.kind.startswith(KIND_LOCKOUT)] == []
+
+
+# --- Provider lockout: billing bodies, not just 401/402 (phase 31b) --------------
+# Real traffic showed Anthropic signals out-of-credits as a 400 with a plain body, not a
+# 401/402, and OpenAI signals an exhausted quota as a 429/400 with an "insufficient_quota"
+# code. is_billing_lockout catches those off the error body while the 401/402 cases stay.
+
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+ANTHROPIC_BILLING_400_BODY = {
+    "type": "error",
+    "error": {
+        "type": "invalid_request_error",
+        "message": (
+            "Your credit balance is too low to access the Anthropic API. "
+            "Please go to Plans & Billing to upgrade or purchase credits."
+        ),
+    },
+}
+PLAIN_400_BODY = {
+    "type": "error",
+    "error": {"type": "invalid_request_error", "message": "max_tokens: field required"},
+}
+OPENAI_QUOTA_BODY = {
+    "error": {
+        "message": "You exceeded your current quota, please check your plan and billing details.",
+        "type": "insufficient_quota",
+        "code": "insufficient_quota",
+    },
+}
+
+
+def test_is_billing_lockout_matches_the_right_bodies():
+    """The pure helper: 401/402 always, a billing 400/429 by its body, nothing else."""
+    billing = json.dumps(ANTHROPIC_BILLING_400_BODY).encode()
+    plain = json.dumps(PLAIN_400_BODY).encode()
+    quota = json.dumps(OPENAI_QUOTA_BODY).encode()
+
+    # A real 401/402 is a lockout with or without a body (streaming errors carry none here).
+    assert is_billing_lockout(401, None) is True
+    assert is_billing_lockout(402, None) is True
+    # Anthropic's out-of-credits 400, and OpenAI's exhausted quota (429 or 400) by marker.
+    assert is_billing_lockout(400, billing) is True
+    assert is_billing_lockout(429, quota) is True
+    assert is_billing_lockout(400, quota) is True
+    # A plain 400 or an ordinary 429 (no billing text) never fires; nor a bodyless 400/429.
+    assert is_billing_lockout(400, plain) is False
+    assert is_billing_lockout(429, b'{"error":{"message":"rate limit exceeded"}}') is False
+    assert is_billing_lockout(400, None) is False
+    assert is_billing_lockout(429, None) is False
+    # A 200 or a 500 is never a lockout.
+    assert is_billing_lockout(200, billing) is False
+    assert is_billing_lockout(500, billing) is False
+
+
+@respx.mock
+async def test_anthropic_billing_400_fires_provider_lockout(client, wired):
+    """Anthropic's out-of-credits 400 fires provider_lockout once; the client still gets the
+    provider's own 400 body back, unchanged."""
+    channel, db, redis = wired
+    route = respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(400, json=ANTHROPIC_BILLING_400_BODY)
+    )
+    previous_db = getattr(app.state, "db", None)
+    app.state.redis = redis
+    app.state.db = db
+    try:
+        resp = await client.post("/v1/messages", json=REQUEST)
+        await alerts_engine.drain()
+    finally:
+        app.state.db = previous_db
+
+    assert route.call_count == 1
+    assert resp.status_code == 400
+    assert resp.json() == ANTHROPIC_BILLING_400_BODY  # body relayed verbatim
+
+    lockouts = [a for a in channel.sent if a.kind.startswith(KIND_LOCKOUT)]
+    assert len(lockouts) == 1
+    assert lockouts[0].kind == f"{KIND_LOCKOUT}:anthropic"
+    assert lockouts[0].detail == {"provider": "anthropic", "status": 400}
+
+
+@respx.mock
+async def test_plain_forwarded_400_fires_nothing(client, wired):
+    """A 400 with no billing text (an ordinary invalid_request_error) fires no lockout."""
+    channel, db, redis = wired
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(400, json=PLAIN_400_BODY))
+    previous_db = getattr(app.state, "db", None)
+    app.state.redis = redis
+    app.state.db = db
+    try:
+        resp = await client.post("/v1/messages", json=REQUEST)
+        await alerts_engine.drain()
+    finally:
+        app.state.db = previous_db
+
+    assert route.call_count == 1
+    assert resp.status_code == 400 and resp.json() == PLAIN_400_BODY
+    assert [a for a in channel.sent if a.kind.startswith(KIND_LOCKOUT)] == []
+
+
+@respx.mock
+async def test_forwarded_401_still_fires_provider_lockout(client, wired):
+    """The old 401 case is not regressed: a forwarded 401 still fires once, body unchanged."""
+    channel, db, redis = wired
+    body_401 = {"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(401, json=body_401))
+    previous_db = getattr(app.state, "db", None)
+    app.state.redis = redis
+    app.state.db = db
+    try:
+        resp = await client.post("/v1/messages", json=REQUEST)
+        await alerts_engine.drain()
+    finally:
+        app.state.db = previous_db
+
+    assert route.call_count == 1
+    assert resp.status_code == 401 and resp.json() == body_401
+    lockouts = [a for a in channel.sent if a.kind.startswith(KIND_LOCKOUT)]
+    assert [a.kind for a in lockouts] == [f"{KIND_LOCKOUT}:anthropic"]
+    assert lockouts[0].detail == {"provider": "anthropic", "status": 401}
+
+
+@respx.mock
+async def test_openai_insufficient_quota_fires_provider_lockout(client, wired, monkeypatch):
+    """An OpenAI provider quota error (429, insufficient_quota) fires provider_lockout for
+    the openai provider. Auto-route is off so the gpt model is served by the OpenAI adapter."""
+    channel, db, redis = wired
+    monkeypatch.setattr(config, "AUTO_ROUTE_ENABLED", False)  # keep the gpt model as served
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-openai-test")
+    route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(429, json=OPENAI_QUOTA_BODY))
+    previous_db = getattr(app.state, "db", None)
+    app.state.redis = redis
+    app.state.db = db
+    try:
+        resp = await client.post(
+            "/v1/messages", json={**REQUEST, "model": "gpt-5.2"}
+        )
+        await alerts_engine.drain()
+    finally:
+        app.state.db = previous_db
+
+    assert route.call_count == 1
+    assert resp.status_code == 429
+    lockouts = [a for a in channel.sent if a.kind.startswith(KIND_LOCKOUT)]
+    assert [a.kind for a in lockouts] == [f"{KIND_LOCKOUT}:openai"]
+    assert lockouts[0].detail == {"provider": "openai", "status": 429}

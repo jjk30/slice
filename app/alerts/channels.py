@@ -48,6 +48,42 @@ def is_lockout(kind: str) -> bool:
     wire form the fire site uses to make the cooldown key per provider."""
     return isinstance(kind, str) and (kind == KIND_LOCKOUT or kind.startswith(KIND_LOCKOUT + ":"))
 
+
+# Phase 31b: the substrings that mark a provider billing lockout in an error body, matched
+# against the lowercased message. Kept small and explicit on purpose:
+#   - "credit balance is too low": Anthropic's out-of-credits 400 (its real wording).
+#   - "billing": the generic word both Anthropic and OpenAI put in the message ("check your
+#     plan and billing details"), so a reworded billing error still trips.
+#   - "insufficient_quota": OpenAI's own error code for an exhausted quota (a 429, or a 400).
+_BILLING_LOCKOUT_MARKERS = (
+    "credit balance is too low",
+    "billing",
+    "insufficient_quota",
+)
+
+
+def is_billing_lockout(status: int, body_bytes: bytes | None) -> bool:
+    """Whether a forwarded provider response is a billing lockout worth one alert.
+
+    Two ways in:
+      - A 401 or 402 is always a lockout (an invalid or unpaid key), body or not. This is
+        the original detection and it stays.
+      - A 400 (Anthropic's out-of-credits shape) or a 429/400 (OpenAI's exhausted quota)
+        counts ONLY when the error body carries a billing marker. A plain 400 (bad JSON,
+        any other invalid_request_error) or an ordinary rate-limit 429 never fires.
+
+    Match is on the lowercased raw body, so it works before or after the Anthropic-shape
+    translation (the provider's message survives either way). A missing body means no
+    marker, so a bodyless 400/429 (e.g. a streaming error, or slice's own gate) is not a
+    lockout.
+    """
+    if status in (401, 402):
+        return True
+    if status in (400, 429):
+        text = (body_bytes or b"").decode("utf-8", "replace").lower()
+        return any(marker in text for marker in _BILLING_LOCKOUT_MARKERS)
+    return False
+
 RESEND_EMAILS_URL = "https://api.resend.com/emails"
 RESEND_TIMEOUT_SECONDS = 10.0
 

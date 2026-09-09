@@ -431,6 +431,7 @@ def after_response(
     cached: bool = False,
     cache_key: str | None = None,
     cache_body: bytes | None = None,
+    provider_body: bytes | None = None,
     routed_from: str | None = None,
     prompt_text: str | None = None,
     attempts: int = 1,
@@ -470,20 +471,25 @@ def after_response(
     account_id = _acct_id(account)
     scope = _acct_scope(account, team)
     label = _acct_label(account, team)
-    # Phase 31: a forwarded provider call that comes back 401 or 402 means the provider is
-    # turning slice away, and slice cannot read a provider's prepaid balance to know why.
-    # It only sees the rejected call. Fire one alert per provider per cooldown window so a
-    # dead or dry key does not make slice go quietly silent. This is the one place a
-    # finished call knows both its served model (hence provider) and the provider's own
-    # status, and it sits on every build path (streaming and non-streaming, Anthropic and
-    # OpenAI) at once. A slice-auth 401 (a bad slice key) never reaches here: the auth
-    # middleware answers that before the handler runs, and slice's own gates use 429 (rate
-    # and budget) and 400 (guardrail), never 401 or 402, so a status of 401/402 here can
-    # only be a provider's answer to a forwarded call. A cache hit is a 200 that made no
-    # provider call, so cached rows are skipped. fire() never blocks and is a no-op when
-    # ALERTS_ENABLED is off. The wire kind carries the provider so the cooldown key is per
-    # provider (Anthropic dry does not mute an OpenAI alert) with no change to the mechanism.
-    if status in (401, 402) and not cached:
+    # Phase 31: a forwarded provider call that is turning slice away for billing means the
+    # key is invalid or out of credits, and slice cannot read a provider's prepaid balance
+    # to know why. It only sees the rejected call. Fire one alert per provider per cooldown
+    # window so a dead or dry key does not make slice go quietly silent. This is the one
+    # place a finished call knows both its served model (hence provider) and the provider's
+    # own status, and it sits on every build path (streaming and non-streaming, Anthropic
+    # and OpenAI) at once. is_billing_lockout catches a real 401/402 on any path (body or
+    # not) and, where the finalize path handed us the error body (``provider_body``, the
+    # non-streamed case), a billing 400/429 whose message says so. Phase 31b: Anthropic
+    # signals out-of-credits as a 400 with a plain body, not a 401/402, so status alone is
+    # not enough; a plain 400 or an ordinary 429 without the billing text never fires. A
+    # slice-auth 401 (a bad slice key) never reaches here: the auth middleware answers that
+    # before the handler runs, and slice's own gates use 429 (rate and budget) and 400
+    # (guardrail) with no billing body, so they do not trip it. A cache hit is a 200 that
+    # made no provider call, so cached rows are skipped. fire() never blocks and is a no-op
+    # when ALERTS_ENABLED is off. The wire kind carries the provider so the cooldown key is
+    # per provider (Anthropic dry does not mute an OpenAI alert) with no change to the
+    # mechanism.
+    if not cached and alerts.is_billing_lockout(status, provider_body):
         provider = metrics.provider_of(model)
         alerts.fire(
             label,
@@ -963,6 +969,9 @@ def _finalize_anthropic(
         output_tokens=output_tokens,
         cache_key=cache_key,
         cache_body=content,
+        # The provider's own error body, so a billing 400/429 lockout is caught alongside
+        # a 401/402 (see is_billing_lockout). On a 200 it is ignored.
+        provider_body=content,
         routed_from=routed_from,
         prompt_text=prompt_text,
         attempts=attempts,
@@ -1252,6 +1261,9 @@ def _finalize_openai(
             # Store the OpenAI-shaped body a client would get back, not the
             # provider's Anthropic body.
             cache_body=out,
+            # Detect a billing lockout off the provider's own error body (Anthropic-shaped,
+            # message preserved), not the OpenAI-translated one. On a 200 it is ignored.
+            provider_body=content,
             prompt_text=prompt_text,
             account=account,
         ),
