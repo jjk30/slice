@@ -54,17 +54,17 @@
   .block h2 .no{font-family:var(--mono);font-weight:700;font-size:.9em;color:var(--green);letter-spacing:.02em}
   .block .say{font-size:16px;color:var(--muted);line-height:1.6;max-width:38em;margin-bottom:22px}
   .block h3{font-family:var(--display);font-weight:600;font-size:19px;letter-spacing:-.012em;margin:26px 0 6px}
-  .block p{font-size:14.5px;color:var(--muted);line-height:1.6;max-width:46em;margin:10px 0 0}
+  .block p{font-size:16px;color:var(--muted);line-height:1.6;max-width:667px;margin:10px 0 0}
   .block p b,.block li b{color:var(--ink);font-weight:500}
   .block p a,.block li a{color:var(--green);border-bottom:1px solid rgba(15,110,86,.35)}
   .block code,.block li code{font-family:var(--mono);font-size:12.5px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
   .block .term{margin-top:14px}
   /* screenshots under the command blocks, one per row, each with a short label above it */
   .shot{margin:18px 0 0}
-  .shot .lab{font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:6px}
+  .shot .lab{font-family:var(--mono);font-size:13.5px;color:var(--muted);line-height:1.6;margin-bottom:6px}
   .shot img{display:block;max-width:100%;height:auto;border:1px solid var(--rule);border-radius:12px}
-  .shot figcaption{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:8px;line-height:1.6}
-  .block ol,.block ul{margin:12px 0 0 22px;font-size:14.5px;color:var(--muted);line-height:1.6;max-width:46em}
+  .shot figcaption{font-family:var(--mono);font-size:13.5px;color:var(--muted);margin-top:8px;line-height:1.6}
+  .block ol,.block ul{margin:12px 0 0 22px;font-size:16px;color:var(--muted);line-height:1.6;max-width:667px}
   .block li{margin:6px 0}
   .block ul.tight li{margin:3px 0}
   .tiles{border-top:1.5px dashed var(--rule);margin-top:14px}
@@ -73,10 +73,10 @@
   .tile .v{color:var(--muted)}
   .conn-note{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:18px;line-height:1.7}
   .conn-note b{color:var(--ink);font-weight:500}
-  .fill{display:grid;gap:5px;margin-top:10px;padding:12px 14px;background:var(--paper2);border:1px solid var(--edge);border-radius:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted);line-height:1.7}
+  .fill{display:grid;gap:5px;margin-top:10px;padding:12px 14px;background:var(--paper2);border:1px solid var(--edge);border-radius:10px;font-family:var(--mono);font-size:14px;color:var(--muted);line-height:1.7}
   .fill b{color:var(--ink);font-weight:500}
   .fill[hidden]{display:none}
-  .fill code{font-family:var(--mono);font-size:12px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
+  .fill code{font-family:var(--mono);font-size:13.5px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
   .fill a{color:var(--green);border-bottom:1px solid rgba(15,110,86,.35)}
 
   /* terminal blocks */
@@ -554,7 +554,7 @@ message = client.messages.create(
     </figure>
     <p>Anything off topic gets one line back: <b>Sorry, I can't help with that here.</b></p>
     <figure class="shot">
-      <div class="lab">Gmail: an off topic question</div>
+      <div class="lab">Gmail: blocked by NeMo Guardrails</div>
       <img src="img/07-reply-blocked.png" width="2838" height="838" loading="lazy" alt="An off topic question and slice's one line refusal">
     </figure>
   </section>

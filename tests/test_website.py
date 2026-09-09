@@ -483,7 +483,7 @@ def test_alert_step_shows_gmail_pictures_instead_of_the_sample_block(how_to):
         "Gmail: the alert email",
         "Gmail: a question about your own account",
         "Gmail: a general AWS question",
-        "Gmail: an off topic question",
+        "Gmail: blocked by NeMo Guardrails",
     ]
     here = alerts.index("Here is one:</p>")
     footer = alerts.index("Every email ends with the same line")
