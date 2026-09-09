@@ -54,6 +54,8 @@ I wanted the meter and the valve. A gateway that sits in front of every AI call,
 
 There was a second reason. I was learning agentic AI properly, working through the NVIDIA Agentic AI Professional certification, and I did not want the coursework to end in a notebook. slice is that stack (LangGraph, RAG, evaluation, guardrails, deployment) doing a real job on real traffic.
 
+PS I was craving a slice of cake when I thought about this, hence the logo, the favicon, and the thing the knife cuts on the front page. Click it at the top of this file and it takes you to [sliceapp.dev](https://sliceapp.dev/).
+
 ## What slice does
 
 - **Route.** A small classifier judges each prompt easy or hard, and sends easy ones to a cheaper model. Hard prompts stay on the model you asked for.
@@ -61,7 +63,7 @@ There was a second reason. I was learning agentic AI properly, working through t
 - **Cap.** A monthly per-account budget blocks spend past the cap and warns before it.
 - **Agent loop.** When a request is routed down, slice tries the cheap model, checks the answer, and escalates up a model ladder only if the answer is not good enough.
 - **Evaluate.** A sample of routed-down answers is scored with RAGAS, out of band, so quality is measured, not assumed.
-- **Alerts.** Budget warnings, budget blocks, and new high-risk cloud findings fire by email. WhatsApp is wired but parked, see Status.
+- **Alerts.** Budget warnings, budget blocks, and new high-risk cloud findings fire by email.
 - **AWS scanner.** A read-only scan of a connected AWS account for security risks and cost waste, with a daily Cost Explorer pull.
 - **Live dashboard.** A Vue single-page app streams spend, routing, cache, and eval numbers over Server-Sent Events.
 - **MCP server.** A stdio MCP server exposes spend, rules, recent requests, and eval summaries to an MCP client.
@@ -227,7 +229,7 @@ This is a relay, not a council. The four models pass work down a ladder in order
 | Data | PostgreSQL, Redis | Postgres logs every request and holds accounts and keys; Redis holds cache, budgets, and rate limits. |
 | Providers | Anthropic, OpenAI, Google Gemini, NVIDIA NIM | Anthropic is the wire format; the others translate. NIM adds open models with free credits. |
 | Dashboard | Vue 3, Vite, Chart.js | Single-page app fed by read endpoints and a live SSE stream. |
-| Alerts | Resend, Twilio | Email through Resend, WhatsApp through Twilio, both fire and forget. |
+| Alerts | Resend | Email alerts through Resend, fire and forget. |
 | MCP | mcp (FastMCP) | Stdio server exposing spend, rules, recent requests, and eval over HTTP to the gateway. |
 | Fine-tuning | Hugging Face PEFT on a Colab T4 | Own judge trained on own logs, free GPU, honest benchmark. |
 | Infra | Terraform, Docker, Caddy, AWS (EC2, ECR, S3, Secrets Manager, Route 53, IAM with OIDC, SSM) | One EC2 box behind Caddy with TLS; the ECS stack kept in Terraform for demos. |
@@ -361,17 +363,3 @@ The suite collects 965 tests. CI is defined in [.github/workflows/ci.yml](.githu
 - CLI: [slice-gateway on PyPI](https://pypi.org/project/slice-gateway/)
 
 Two hosts, one container. `api.sliceapp.dev` is for tools: the gateway API that Claude Code, the SDKs, curl and the CLI point at. `sliceapp.dev/dashboard` (and `/settings`) is for people: Caddy proxies those paths, the bundle under `/assets`, and the API prefixes the page calls to the same gateway, and serves the static site for everything else. `PUBLIC_BASE_URL` must be the dashboard host, `https://sliceapp.dev`, because the GitHub sign-in callback and the session cookie belong to the origin the browser is on; the api host redirects `/`, `/dashboard` and `/settings` there.
-
-## Status
-
-Verified in production: the gateway, routing, caching, budgets, auth, the dashboard, and Prometheus and Grafana monitoring run on a single EC2 box behind Caddy with TLS. The LoRA routing judge is deployed, served locally by llama.cpp as the `judge` compose service and proven on real routed traffic at 259 to 365 ms warm, with Haiku as the fallback. Real Claude Code has been run end to end through api.sliceapp.dev using `ANTHROPIC_AUTH_TOKEN`. Signing in to the dashboard in the browser goes through GitHub OAuth at sliceapp.dev/dashboard. The fixed-batch cost demo above is a real paired run against live providers. Users bring their own provider keys by design.
-
-Set aside:
-
-- WhatsApp alerts. The code is complete over Twilio, but live delivery needs a paid Twilio account or a Meta-verified sender, so it is parked.
-
-Coming next: Slack alerts.
-
-
-
-PS I was craving a slice of cake when I thought about this, hence the logo, the favicon, and the thing the knife cuts on the front page. Click it at the top of this file and it takes you to [sliceapp.dev](https://sliceapp.dev).
