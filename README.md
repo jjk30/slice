@@ -89,7 +89,7 @@ Everything in this section starts from the measured run above. Projections are m
 
 **What the gateway costs to run.** Production is one `t4g.small` instance. At the on-demand rate at the time of writing (about $0.017 an hour) that is about $12 a month for the box, and it runs everything: gateway, Postgres, Redis, Caddy, Prometheus, Grafana, and the static site. At a 45% savings rate the box pays for itself once a team spends about $27 a month on AI. The ECS Fargate stack it replaced (a task behind a load balancer with Multi-AZ RDS) metered roughly $3 to $5 a day sitting idle, which is over $100 a month for a project between demos.
 
-**What a routing decision costs.** Every auto-routed request needs one judge decision. A rented judge (Haiku) is a short call, a few hundred tokens in and a handful out, so a fraction of a cent each, but it scales with traffic and adds a network round trip. The LoRA judge trained in this repo makes the same decision in 133 ms with no per-call charge. It trained in 75 seconds on a free Colab T4.
+**What a routing decision costs.** Every auto-routed request needs one judge decision. A rented judge (Haiku) is a short call, a few hundred tokens in and a handful out, so a fraction of a cent each, but it scales with traffic and adds a network round trip. The LoRA judge trained in this repo now makes that decision on the box for $0 per call, in 259 to 365 ms on CPU (133 ms was the GPU benchmark on a Colab T4). Haiku is the fallback when the local judge is down or unsure. It trained in 75 seconds on that free T4.
 
 **Why the cache is nearly free.** A hit is one Redis lookup and no provider call. The key hashes the full request body except stream and metadata, so two prompts only collide when they would have produced the same answer anyway.
 
@@ -106,9 +106,10 @@ Everything in this section starts from the measured run above. Projections are m
  /v1/messages     |  slk_live_     guard          Redis          |       (your key)
       or     ----->  fail closed   upper bound    hit -> return  |  --->  OpenAI
   OpenAI          |                                              |       Google Gemini
- /v1/chat/        |  judge + router   ---->   agent loop         |       NVIDIA NIM
- completions      |  easy / hard              try, check,        |
-                  |  pin > rule > auto        escalate ladder    |
+ /v1/chat/        |  judge -> router  ---->   agent loop         |       NVIDIA NIM
+ completions      |  llama.cpp, local, free   try, check,        |
+                  |  Haiku is the fallback    escalate ladder    |
+                  |  pin > rule > auto                           |
                   +----------------------------------------------+
                         |             |               |
                         v             v               v
@@ -137,7 +138,11 @@ Routing precedence is fixed: **pin, then rule, then auto.**
 - A **rule** is a team switch rule, for example "route lint fixes to Haiku". Rules are enforced even when auto-routing is off.
 - **Auto** is the judge. It reads the prompt, plus a semantic hint from FAISS (the nearest past prompts for that team and what they were routed to), and answers easy or hard. Easy goes down the ladder, hard stays on the requested model.
 
-The judge is a component with a contract, not a specific model. Production uses Haiku. A NIM open model plugs in by config. The LoRA judge in [colab/](colab/) is the third option: a Qwen2.5-0.5B fine-tune trained on 728 labeled rows of what the live router actually did (90/10 split), scoring 92% on 100 unseen prompts against a 54% majority baseline, at 133 ms per decision. In a paired RAGAS comparison against the live router it disagreed on 8 answers, with answer relevancy of 0.89. It is benchmarked, not deployed.
+The judge is a component with a contract, not a specific model. Production runs the LoRA judge from [colab/](colab/): a Qwen2.5-0.5B fine-tune trained on 728 labeled rows of what the live router actually did (90/10 split), scoring 92% on 100 unseen prompts against a 54% majority baseline. In a paired RAGAS comparison against the live router it disagreed on 8 answers, with answer relevancy of 0.89. Haiku is the fallback, and a NIM open model plugs in by config.
+
+### The local judge
+
+The judge is a merged Qwen2.5-0.5B LoRA, converted to GGUF and quantized to Q4_K_M, 379 MB. The weights live in a private versioned S3 bucket and the box fetches them at boot. It is served by a llama.cpp server that runs as a compose service called `judge` next to the gateway, with a 640 MB memory cap, no published ports, and a health check; on the `t4g.small` box (2 arm64 CPUs, 2 GB RAM) it uses about 260 MB. On each auto-routed request the gateway calls the judge first with the exact training system message, `max_tokens` 3, temperature 0, and a 2 second timeout, and accepts only `easy` or `hard`. Anything else, an error, or the container being down falls back to Haiku, then to `hard`. On real routed traffic the local judge answers in 259 to 365 ms warm (about 860 to 970 ms on the first call after a restart), against 672 to 766 ms for the Haiku fallback; the 133 ms figure was the GPU benchmark on a Colab T4. Every routed response carries an `x-slice-judge: <source>:<ms>` header, where source is `local`, `fallback`, or `none`. Clients cannot reach the judge directly: a request for a `slice/` model gets the unknown-model 400.
 
 ### The agent loop
 
@@ -200,7 +205,7 @@ A hard request does not go straight to one expensive model. It runs a relay of f
 
 The flow in one line: NIM tries first, GPT drafts, Gemini checks, Sonnet closes if needed.
 
-**Two judges, two moments.** slice uses an LLM as a judge in two places, doing the same kind of decision at different points. The router judge sorts every request easy or hard before the relay runs; it is Haiku today, and the trained Qwen judge in [colab/](colab/) is the next step, making the same call in 133 ms with no per-call charge. The checker judge is Gemini inside the relay, reading each answer and deciding whether to climb. One judges the question, the other judges the answer.
+**Two judges, two moments.** slice uses an LLM as a judge in two places, doing the same kind of decision at different points. The router judge sorts every request easy or hard before the relay runs; it is the trained Qwen judge from [colab/](colab/), served locally by llama.cpp on the box for $0 per call in 259 to 365 ms, with Haiku as the fallback. The checker judge is Gemini inside the relay, reading each answer and deciding whether to climb. One judges the question, the other judges the answer.
 
 **Why it cannot overspend.** Before each rung the relay estimates the next attempt's cost as an upper bound and stops if that would cross the per-request ceiling. A dead provider is skipped and the relay continues. NeMo Guardrails wraps it with self-check rails on input and output. Every hop is logged with its provider and cost, so the dashboard shows which rung did what and what each spent. If the Gemini free tier rate-limits the check, the relay treats it as a fail and climbs, so a hard request never stalls.
 
@@ -215,7 +220,7 @@ This is a relay, not a council. The four models pass work down a ladder in order
 | Gateway | FastAPI, uvicorn, httpx | Async proxy that streams responses and hangs background work off them. Python, so the agent stack lives in the same process. |
 | Routing and agent | LangGraph | The pin/rule/auto router and the try/check/escalate loop are each a small state graph. LangGraph runs the steps; the models do the thinking. |
 | RAG | FAISS, sentence-transformers | Per-team index of past prompts gives the judge a semantic hint. Free, local, and the right size for this data. |
-| Judge | Haiku, NIM open models, LoRA Qwen2.5-0.5B | Swappable by config. Haiku in production, the LoRA judge benchmarked against it. |
+| Judge | LoRA Qwen2.5-0.5B (Q4, llama.cpp), Haiku, NIM open models | Swappable by config. The Qwen2.5-0.5B LoRA (Q4_K_M, llama.cpp) runs in production, with Haiku as the fallback. |
 | Eval | RAGAS, LangChain | Scores a sample of routed-down answers for relevancy, out of band, and benchmarks judges against each other. |
 | Safety | NeMo Guardrails | Self-check rails around the agent loop, scoped to what a gateway faces: prompt injection against the routing judge and checker, and leaks of gateway internals. Content moderation stays with the provider. |
 | Tracing | LangSmith | Optional LangChain tracing, a no-op when unset. |
@@ -239,12 +244,12 @@ Every one of these worked or was a real option. They were set aside for a reason
 |---|---|---|---|
 | ECS Fargate, ALB, Multi-AZ RDS | Deployed and verified on the live domain. | About $3 to $5 a day idle. Wrong price for a project that is demoed, not hammered. | The Terraform is still in [infra/](infra/) in its own state. `terraform apply` brings it up in about 20 minutes for a demo; `terraform destroy` puts the meter back to zero. |
 | Node and TypeScript (v1) | Eight verified phases, including cross-provider routing and team rules. | The agentic stack I was learning is Python: LangGraph, LangChain, RAGAS. Rebuilding beat translating. | The v2 gateway kept every v1 lesson: per-request cost as a first-class field, the upper-bound budget estimate, rules above the auto-routing gate. |
-| Haiku as the only judge | Still the production judge. | Renting a decision that my own logs can teach a 0.5B model to make in 133 ms. | The LoRA judge is benchmarked; swapping it in is a config change plus a serving step. |
+| Haiku as the only judge | Ran in production, now the fallback. | Renting a decision that my own logs taught a 0.5B model to make on the box for $0. | The LoRA judge is deployed and serves the auto path; Haiku takes over whenever the local judge is down or unsure. |
 | Pinecone, pgvector | Considered for the RAG index. | Paid and oversized for this data (Pinecone); one more thing on the database (pgvector). FAISS matches the course material and is free. | Both are a drop-in behind the same retrieval call. |
 | WebSockets for the dashboard | Considered. | The dashboard only listens. SSE is simpler and enough. | Not needed. |
 | S3 and CloudFront for the site | Planned. | The box was already running Caddy. Zero extra cost, one place to look. | The static site is one folder; a bucket and a distribution would host it unchanged. |
 | Azure AI Foundry for fine-tuning | Considered. | A managed button. A free Colab T4 with PEFT shows the actual work. | Nothing to bring back. |
-| TensorRT-LLM for the judge | Explored on Lightning AI, $0 spent. | Version pinning on a T4 (0.15.0 is the last with Turing and Qwen2 support) turned a garnish into a project. | The merged judge weights are in S3 and the pin is known. A fresh session away. |
+| TensorRT-LLM for the judge | Explored on Lightning AI, $0 spent. | Version pinning on a T4 (0.15.0 is the last with Turing and Qwen2 support) turned a garnish into a project. The judge ships served by llama.cpp on CPU instead. | The merged judge weights are in S3 and the pin is known. A fresh session away if a GPU serving path is ever wanted. |
 | Kubernetes in production | Manifests, kind cluster, HPA verified under load. | The live path is one box. Running an orchestrator for one replica proves nothing. | The manifests deploy the same image; EKS is a cluster away. |
 | Firebase Auth | Considered as a hosted login. | slice already has GitHub device-flow login and hashed keys. Two auth systems is one too many. | If Google or email login is ever wanted, it goes in as a layer over the existing accounts. |
 | WhatsApp alerts | Code complete over Twilio, one-way and two-way. | Twilio's trial blocks live delivery, and a real sender needs Meta business verification. | Upgrade Twilio, or register a WhatsApp Business sender, and it is live. |
@@ -327,7 +332,7 @@ adapters/       Provider adapters: Anthropic, OpenAI, Google Gemini, NVIDIA NIM 
 mcp_server/     Stdio MCP server exposing gateway reads and rule writes
 dashboard/      Vue 3 + Vite single-page dashboard
 demo/           Fixed-batch cost demo: runner, prompts, results
-colab/          LoRA judge: training notebook, RAGAS comparison against the live router
+colab/          LoRA judge now in production: training notebook, RAGAS comparison against the live router
 guardrails/     NeMo Guardrails config and slice-specific rail prompts
 migrations/     SQL migrations applied on startup
 k8s/            kind cluster config and kustomize manifests
@@ -345,7 +350,7 @@ Run the suite with pytest:
 python -m pytest -q
 ```
 
-The suite collects 608 tests. CI is defined in [.github/workflows/ci.yml](.github/workflows/ci.yml): on every push and pull request it spins up PostgreSQL 16 and Redis 7 as services, installs the requirements, applies the schema and migrations through the app's own startup path, and runs the full suite. There is no build-or-deploy step in CI.
+The suite collects 963 tests. CI is defined in [.github/workflows/ci.yml](.github/workflows/ci.yml): on every push and pull request it spins up PostgreSQL 16 and Redis 7 as services, installs the requirements, applies the schema and migrations through the app's own startup path, and runs the full suite. There is no build-or-deploy step in CI.
 
 ## Live
 
@@ -359,15 +364,13 @@ Two hosts, one container. `api.sliceapp.dev` is for tools: the gateway API that 
 
 ## Status
 
-Verified in production: the gateway, routing, caching, budgets, auth, the dashboard, and Prometheus and Grafana monitoring run on a single EC2 box behind Caddy with TLS. Real Claude Code has been run end to end through api.sliceapp.dev using `ANTHROPIC_AUTH_TOKEN`. The fixed-batch cost demo above is a real paired run against live providers. Users bring their own provider keys by design.
-
-Benchmarked, not deployed: the LoRA routing judge. Numbers above; the production judge is still Haiku.
+Verified in production: the gateway, routing, caching, budgets, auth, the dashboard, and Prometheus and Grafana monitoring run on a single EC2 box behind Caddy with TLS. The LoRA routing judge is deployed, served locally by llama.cpp as the `judge` compose service and proven on real routed traffic at 259 to 365 ms warm, with Haiku as the fallback. Real Claude Code has been run end to end through api.sliceapp.dev using `ANTHROPIC_AUTH_TOKEN`. The fixed-batch cost demo above is a real paired run against live providers. Users bring their own provider keys by design.
 
 Not yet verified in production:
 
 - WhatsApp alerts are wired through Twilio but not verified in production, because Twilio is still on a trial account.
 
-Coming next: the LoRA judge serving live, GitHub sign-in for the dashboard in the browser, and Slack alerts.
+Coming next: GitHub sign-in for the dashboard in the browser, and Slack alerts.
 
 
 

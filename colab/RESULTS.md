@@ -88,3 +88,32 @@ before number for the later TensorRT-LLM conversion.
 2. Every `apply_chat_template(..., tokenize=True)` call now passes
    `return_dict=False`, because transformers 5 returns a dict by default.
 3. `warmup_ratio=0.03` replaced with `warmup_steps=4`.
+
+## Serving in production
+
+Dated September 9, 2026. The LoRA judge is deployed and proven on real routed
+traffic.
+
+- Model: the merged Qwen2.5-0.5B LoRA, converted to GGUF and quantized to
+  Q4_K_M, 379 MB. The weights live in a private versioned S3 bucket and the box
+  fetches them at boot.
+- Serving: a llama.cpp server running as a compose service called `judge` next
+  to the gateway, with a 640 MB memory cap, no published ports, and a health
+  check. The box is a `t4g.small` (2 CPUs, arm64, 2 GB RAM) and the judge uses
+  about 260 MB.
+- Gateway: the judge is called first with the exact training system message,
+  `max_tokens` 3, temperature 0, and a 2 s timeout. Only `easy` or `hard` is
+  accepted. Anything else, an error, or the container being down falls back to
+  Haiku, then to `hard`. A client request for a `slice/` model gets the
+  unknown-model 400, so clients cannot call the judge.
+- Header: every routed response carries `x-slice-judge: <source>:<ms>`, where
+  source is `local`, `fallback`, or `none`.
+- Latency on real routed requests: local judge 259 to 365 ms warm, about 860 to
+  970 ms on the first call after a restart; the Haiku fallback 672 to 766 ms.
+  Cache hits skip the judge entirely. The 133 ms number above is the GPU
+  benchmark on a Colab T4; 259 to 365 ms is the CPU number in production.
+- Cost per decision: 0. Accuracy is unchanged from the fresh eval above (92% on
+  100 unseen prompts); the quantized model gave the same verdicts on spot
+  checks.
+- The four other judge-style jobs (relay checker, RAGAS eval, guardrails, email
+  assistant) stay on Haiku on purpose: a one-word classifier cannot do them.
