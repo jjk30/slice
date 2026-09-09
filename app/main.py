@@ -352,56 +352,118 @@ def _model_matches(model, prefixes) -> bool:
     return isinstance(model, str) and any(model.startswith(prefix) for prefix in prefixes)
 
 
-def normalize_thinking(body: bytes, served_model):
-    """Make the request's thinking block match the model that will actually serve it.
+def _message_text(content) -> str:
+    """The plain text of a message's content: the string itself, or the joined text of its
+    text blocks (two newlines between blocks). Non-text blocks are ignored."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        ]
+        return "\n\n".join(parts)
+    return ""
 
-    Pure. Returns ``(body, rewrite)``: the possibly rewritten body bytes, and a short
-    label of what changed ("enabled->adaptive", "adaptive->enabled", "dropped") or None
-    when nothing did. Only the thinking block is ever touched; everything else in the body
-    is left byte-for-byte the same shape. A body that is not a JSON object, has no thinking
-    block, or targets a model in neither prefix list comes back unchanged.
+
+def _append_system(existing, extra_texts: list):
+    """Append system texts to the top-level ``system`` field, keeping its existing type.
+
+    A list stays a list, with each text added as a ``{"type": "text"}`` block; a string
+    (or an absent/empty field) stays a string, with the pieces joined by two newlines.
+    """
+    if isinstance(existing, list):
+        return existing + [{"type": "text", "text": text} for text in extra_texts]
+    parts = [existing] if isinstance(existing, str) and existing else []
+    parts.extend(extra_texts)
+    return "\n\n".join(parts)
+
+
+def normalize_for_model(body: bytes, served_model):
+    """Rewrite the request body to fit the model that will actually serve it.
+
+    Pure. Returns ``(body, rewrites)``: the possibly rewritten body bytes and a list of
+    short labels for what changed ("enabled->adaptive", "adaptive->enabled", "dropped",
+    "effort-removed", "system-role-moved"), empty when nothing did. Only the fields below
+    are ever touched; everything else in the body is left as it was. A body that is not a
+    JSON object, or that targets a model in neither prefix list, comes back unchanged.
 
     Rules, by the served model's family:
     - adaptive-only model with ``thinking.type`` "enabled": switch to "adaptive" and drop
-      budget_tokens (adaptive carries no budget).
-    - enabled-only model with ``thinking.type`` "adaptive": switch to "enabled" with a
-      budget of the client's if present, else 1024, capped at max_tokens - 1 and never
-      below 1024; when max_tokens is 1024 or less there is no room for a valid budget, so
-      the thinking block is dropped entirely.
+      budget_tokens (adaptive carries no budget). Effort and system-role are left alone.
+    - legacy model with ``thinking.type`` "adaptive": switch to "enabled" with a budget of
+      the client's if present, else 1024, capped at max_tokens - 1 and never below 1024;
+      when max_tokens is 1024 or less there is no room for a valid budget, so the thinking
+      block is dropped entirely.
+    - legacy model with an ``output_config.effort`` key: remove it, and remove
+      output_config if it is then empty (legacy models reject the effort parameter).
+    - legacy model with any messages entry of role "system": move each entry's text onto
+      the top-level ``system`` field, in order, and drop it from messages (legacy models
+      reject the system role in messages).
     """
     try:
         payload = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return body, None
+        return body, []
     if not isinstance(payload, dict):
-        return body, None
+        return body, []
+
+    adaptive_only = _model_matches(served_model, config.THINKING_ADAPTIVE_ONLY_PREFIXES)
+    legacy = _model_matches(served_model, config.LEGACY_MODEL_PREFIXES)
+    rewrites: list[str] = []
+
     thinking = payload.get("thinking")
-    if not isinstance(thinking, dict):
-        return body, None
-    ttype = thinking.get("type")
+    if isinstance(thinking, dict):
+        ttype = thinking.get("type")
+        if adaptive_only and ttype == "enabled":
+            new_thinking = {k: v for k, v in thinking.items() if k not in ("type", "budget_tokens")}
+            new_thinking["type"] = "adaptive"
+            payload["thinking"] = new_thinking
+            rewrites.append("enabled->adaptive")
+        elif legacy and ttype == "adaptive":
+            max_tokens = payload.get("max_tokens")
+            if isinstance(max_tokens, int) and max_tokens <= 1024:
+                # No room for a budget that is >= 1024 and < max_tokens: drop the block.
+                payload.pop("thinking", None)
+                rewrites.append("dropped")
+            else:
+                client_budget = thinking.get("budget_tokens")
+                budget = client_budget if isinstance(client_budget, int) else 1024
+                if budget < 1024:
+                    budget = 1024
+                if isinstance(max_tokens, int) and budget > max_tokens - 1:
+                    budget = max_tokens - 1
+                new_thinking = {k: v for k, v in thinking.items() if k != "type"}
+                new_thinking["type"] = "enabled"
+                new_thinking["budget_tokens"] = budget
+                payload["thinking"] = new_thinking
+                rewrites.append("adaptive->enabled")
 
-    if _model_matches(served_model, config.THINKING_ADAPTIVE_ONLY_PREFIXES) and ttype == "enabled":
-        new_thinking = {k: v for k, v in thinking.items() if k not in ("type", "budget_tokens")}
-        new_thinking["type"] = "adaptive"
-        return json.dumps({**payload, "thinking": new_thinking}).encode(), "enabled->adaptive"
+    if legacy:
+        output_config = payload.get("output_config")
+        if isinstance(output_config, dict) and "effort" in output_config:
+            trimmed = {k: v for k, v in output_config.items() if k != "effort"}
+            if trimmed:
+                payload["output_config"] = trimmed
+            else:
+                payload.pop("output_config", None)
+            rewrites.append("effort-removed")
 
-    if _model_matches(served_model, config.THINKING_ENABLED_ONLY_PREFIXES) and ttype == "adaptive":
-        max_tokens = payload.get("max_tokens")
-        if isinstance(max_tokens, int) and max_tokens <= 1024:
-            # No room for a budget that is >= 1024 and < max_tokens: drop the block.
-            return json.dumps({k: v for k, v in payload.items() if k != "thinking"}).encode(), "dropped"
-        client_budget = thinking.get("budget_tokens")
-        budget = client_budget if isinstance(client_budget, int) else 1024
-        if budget < 1024:
-            budget = 1024
-        if isinstance(max_tokens, int) and budget > max_tokens - 1:
-            budget = max_tokens - 1
-        new_thinking = {k: v for k, v in thinking.items() if k != "type"}
-        new_thinking["type"] = "enabled"
-        new_thinking["budget_tokens"] = budget
-        return json.dumps({**payload, "thinking": new_thinking}).encode(), "adaptive->enabled"
+        messages = payload.get("messages")
+        if isinstance(messages, list) and any(
+            isinstance(m, dict) and m.get("role") == "system" for m in messages
+        ):
+            moved = [_message_text(m.get("content")) for m in messages if isinstance(m, dict) and m.get("role") == "system"]
+            payload["messages"] = [
+                m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")
+            ]
+            payload["system"] = _append_system(payload.get("system"), moved)
+            rewrites.append("system-role-moved")
 
-    return body, None
+    if not rewrites:
+        return body, []
+    return json.dumps(payload).encode(), rewrites
 
 
 def log_request(
@@ -445,10 +507,10 @@ def log_request(
         entry["has_beta"] = meta.get("has_beta")
         entry["beta"] = meta.get("beta")
         entry["error_message"] = error_message
-        # Present only when normalize_thinking actually rewrote the block for the served
-        # model; omitted otherwise so a request that needed no change carries no key.
-        if meta.get("thinking_rewrite") is not None:
-            entry["thinking_rewrite"] = meta.get("thinking_rewrite")
+        # Present only when normalize_for_model rewrote the body for the served model;
+        # omitted otherwise so a request that needed no change carries no key.
+        if meta.get("body_rewrites"):
+            entry["body_rewrites"] = meta.get("body_rewrites")
     logger.info(json.dumps(entry))
 
 
@@ -788,10 +850,10 @@ async def messages(request: Request):
                 served_model=served_model, requested_model=decision.requested_model,
             )
             final_model = loop.model
-            # Phase 30: the loop normalized the thinking block per rung; surface the served
-            # rung's label on this request's log line, the same key the direct path uses.
-            if loop.thinking_rewrite is not None:
-                req_meta["thinking_rewrite"] = loop.thinking_rewrite
+            # Phase 30: the loop normalized the body per rung; surface the served rung's
+            # rewrite labels on this request's log line, the same key the direct path uses.
+            if loop.body_rewrites:
+                req_meta["body_rewrites"] = loop.body_rewrites
             # The loop may have escalated (or fallen back to the client's model), so
             # recompute the routed markers against whatever it actually served.
             loop_routed_from = (
@@ -841,13 +903,13 @@ async def messages(request: Request):
             verdict, rag, prompt_text, team, account, meta=req_meta,
         )
 
-    # Phase 30: make the thinking block match the model that will serve this request,
-    # after routing has chosen it and just before the send, so an adaptive-only or
-    # enabled-only model never 400s on a mismatched thinking.type. Pure; a no-op when the
-    # body has no thinking block or the served model is in neither list.
-    body, thinking_rewrite = normalize_thinking(body, served_model)
-    if thinking_rewrite is not None:
-        req_meta["thinking_rewrite"] = thinking_rewrite
+    # Phase 30: rewrite the body to fit the model that will serve this request, after
+    # routing has chosen it and just before the send, so a legacy served model never 400s
+    # on a field (thinking type, effort, a system-role message) it does not support. Pure;
+    # a no-op when the served model is in neither list.
+    body, body_rewrites = normalize_for_model(body, served_model)
+    if body_rewrites:
+        req_meta["body_rewrites"] = body_rewrites
 
     try:
         result = await adapter.send(

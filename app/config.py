@@ -56,16 +56,17 @@ AUTO_ROUTE_ENABLED = _bool("AUTO_ROUTE_ENABLED", True)
 # Where an "easy" verdict routes to. "hard" always keeps the client's model.
 ROUTE_EASY_MODEL = os.getenv("ROUTE_EASY_MODEL", "claude-haiku-4-5-20251001")
 
-# Thinking-block compatibility. A model family accepts only one shape of extended
-# thinking, and the request has to match whichever model actually serves it (which may
-# not be the one the client named, once routing has run). slice rewrites the block for
-# the served model just before the send (see normalize_thinking in app/main.py), so a
-# routed-down request or an opus/sonnet-5 request never 400s on a mismatched type.
+# Served-model compatibility. A request built for a newer model can carry fields an
+# older model rejects, and once routing has run the served model may not be the one the
+# client named. slice rewrites the body for the served model just before the send (see
+# normalize_for_model in app/main.py), so a routed-down request or an opus/sonnet-5
+# request never 400s on a field the served model does not support.
 # Match is by prefix, so a dated snapshot like claude-haiku-4-5-20251001 still matches.
 # Models that take only {"type": "adaptive"} and reject enabled with a budget.
 THINKING_ADAPTIVE_ONLY_PREFIXES = ["claude-opus-5", "claude-sonnet-5"]
-# Models that take only {"type": "enabled", "budget_tokens": N} and reject adaptive.
-THINKING_ENABLED_ONLY_PREFIXES = [
+# Older models that take only {"type": "enabled", "budget_tokens": N} thinking, and also
+# reject the output_config.effort parameter and messages with role "system".
+LEGACY_MODEL_PREFIXES = [
     "claude-haiku-4-5",
     "claude-3",
     "claude-sonnet-4",

@@ -352,7 +352,7 @@ Run the suite with pytest:
 python -m pytest -q
 ```
 
-The suite collects 979 tests. CI is defined in [.github/workflows/ci.yml](.github/workflows/ci.yml): on every push and pull request it spins up PostgreSQL 16 and Redis 7 as services, installs the requirements, applies the schema and migrations through the app's own startup path, and runs the full suite. There is no build-or-deploy step in CI.
+The suite collects 987 tests. CI is defined in [.github/workflows/ci.yml](.github/workflows/ci.yml): on every push and pull request it spins up PostgreSQL 16 and Redis 7 as services, installs the requirements, applies the schema and migrations through the app's own startup path, and runs the full suite. There is no build-or-deploy step in CI.
 
 ## Live
 

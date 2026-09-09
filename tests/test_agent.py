@@ -681,7 +681,7 @@ async def test_loop_normalizes_adaptive_to_enabled_on_served_haiku(
     entry = _request_line(caplog)
     assert entry is not None
     assert entry["served_model"] == EASY_MODEL
-    assert entry["thinking_rewrite"] == "adaptive->enabled"
+    assert entry["body_rewrites"] == ["adaptive->enabled"]
 
 
 @respx.mock
