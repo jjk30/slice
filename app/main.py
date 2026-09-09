@@ -470,6 +470,27 @@ def after_response(
     account_id = _acct_id(account)
     scope = _acct_scope(account, team)
     label = _acct_label(account, team)
+    # Phase 31: a forwarded provider call that comes back 401 or 402 means the provider is
+    # turning slice away, and slice cannot read a provider's prepaid balance to know why.
+    # It only sees the rejected call. Fire one alert per provider per cooldown window so a
+    # dead or dry key does not make slice go quietly silent. This is the one place a
+    # finished call knows both its served model (hence provider) and the provider's own
+    # status, and it sits on every build path (streaming and non-streaming, Anthropic and
+    # OpenAI) at once. A slice-auth 401 (a bad slice key) never reaches here: the auth
+    # middleware answers that before the handler runs, and slice's own gates use 429 (rate
+    # and budget) and 400 (guardrail), never 401 or 402, so a status of 401/402 here can
+    # only be a provider's answer to a forwarded call. A cache hit is a 200 that made no
+    # provider call, so cached rows are skipped. fire() never blocks and is a no-op when
+    # ALERTS_ENABLED is off. The wire kind carries the provider so the cooldown key is per
+    # provider (Anthropic dry does not mute an OpenAI alert) with no change to the mechanism.
+    if status in (401, 402) and not cached:
+        provider = metrics.provider_of(model)
+        alerts.fire(
+            label,
+            f"{alerts.KIND_LOCKOUT}:{provider}",
+            {"provider": provider, "status": status},
+            account_id=account_id,
+        )
     # One instant for both the row and the live event, so the dashboard can match them.
     finished_at = datetime.now(timezone.utc)
     broadcaster = get_broadcaster(app)

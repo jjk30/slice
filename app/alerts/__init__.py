@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from app.alerts.channels import (
     KIND_BLOCK,
+    KIND_LOCKOUT,
     KIND_SCAN,
     KIND_WARN,
     Alert,
@@ -26,6 +27,7 @@ from app.alerts.channels import (
     DeliveryResult,
     ResendEmailChannel,
     build_default_channels,
+    is_lockout,
 )
 from app.alerts.engine import (
     AlertEngine,
@@ -41,6 +43,7 @@ from app.alerts.whatsapp import TwilioWhatsAppChannel, send_whatsapp_message
 
 __all__ = [
     "KIND_BLOCK",
+    "KIND_LOCKOUT",
     "KIND_SCAN",
     "KIND_WARN",
     "Alert",
@@ -56,6 +59,7 @@ __all__ = [
     "drain",
     "fire",
     "get_engine",
+    "is_lockout",
     "send_alert",
     "send_whatsapp_message",
 ]

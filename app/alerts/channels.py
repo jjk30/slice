@@ -35,6 +35,18 @@ KIND_BLOCK = "block"
 # copy is built from a different detail shape (a count and a list of per-finding dicts) than
 # the budget kinds, so subject_for/body_for branch on it.
 KIND_SCAN = "aws_scan"
+# Phase 31: fired when a forwarded provider call comes back 401 or 402, which almost always
+# means the provider key is invalid or out of credits. The wire kind carries the provider
+# ("provider_lockout:anthropic") so the existing per-scope-per-kind cooldown key is per
+# provider without any change to the cooldown mechanism; the copy reads the provider name
+# and the status out of the detail, so it branches on the base kind via ``is_lockout``.
+KIND_LOCKOUT = "provider_lockout"
+
+
+def is_lockout(kind: str) -> bool:
+    """True for the provider-lockout kind, base name or the ``provider_lockout:<provider>``
+    wire form the fire site uses to make the cooldown key per provider."""
+    return isinstance(kind, str) and (kind == KIND_LOCKOUT or kind.startswith(KIND_LOCKOUT + ":"))
 
 RESEND_EMAILS_URL = "https://api.resend.com/emails"
 RESEND_TIMEOUT_SECONDS = 10.0
@@ -175,7 +187,12 @@ FOOTER_NOTE = FOOTER_AWS
 
 def footer_for(kind: str) -> str:
     """The footer sentence for an alert kind: the AWS line on a scan, the AI setup line otherwise."""
-    return FOOTER_AWS if kind == KIND_SCAN else FOOTER_AI_SETUP
+    if kind == KIND_SCAN:
+        return FOOTER_AWS
+    # Budget warn/block and the provider lockout alert are all about the reader's AI setup.
+    if is_lockout(kind):
+        return FOOTER_AI_SETUP
+    return FOOTER_AI_SETUP
 
 
 # Phase 26: a budget email speaks to the person it lands with (since phase 25b that is
@@ -484,18 +501,69 @@ def _scan_skipped(alert: Alert) -> int:
         return 0
 
 
+# --- Provider lockout alert copy (phase 31) -----------------------------------
+# The detail carries the provider label the gateway derived from the served model
+# (metrics.provider_of: "anthropic" / "openai" / "gemini" / "nim") and the provider's
+# own status (401 or 402). The email says, in plain words, that the provider is
+# rejecting slice's calls, that this usually means a bad or out-of-credit key, and
+# that slice cannot see the balance so the reader has to check the provider console.
+LOCKOUT_PROVIDER_LABELS = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "gemini": "Gemini",
+    "nim": "NVIDIA NIM",
+}
+
+LOCKOUT_SUBJECT = "slice: your {provider} calls are being rejected"
+LOCKOUT_BODY = """\
+Your {provider} calls through slice are coming back with a {status} error.
+
+A {status} from a provider almost always means the API key is invalid or the account is out of credits.
+
+slice cannot see your provider balance, only that the call was rejected. Please open your {provider} console, check the key and the billing, and update the key if it is wrong or has run out.
+
+{footer}
+
+Sent {time}"""
+
+
+def _lockout_provider(alert: Alert) -> str:
+    """The provider's display name from the detail, a safe generic when it is unknown."""
+    provider = (alert.detail or {}).get("provider")
+    return LOCKOUT_PROVIDER_LABELS.get(provider, "AI provider")
+
+
+def _lockout_status(alert: Alert) -> str:
+    """The provider status from the detail, as text; a safe phrase if it is missing."""
+    status = (alert.detail or {}).get("status")
+    return str(status) if status is not None else "401 or 402"
+
+
+def _lockout_fields(alert: Alert) -> dict:
+    return {
+        "provider": _lockout_provider(alert),
+        "status": _lockout_status(alert),
+        "footer": footer_for(alert.kind),
+        "time": format_time(alert.ts),
+    }
+
+
 def subject_for(alert: Alert) -> str:
-    """``slice: team-a has used 80% ...`` / ``slice: team-a hit its budget cap ...`` / ``slice found N things to check in your AWS account``."""
+    """``slice: team-a has used 80% ...`` / ``slice: team-a hit its budget cap ...`` / ``slice found N things to check in your AWS account`` / ``slice: your Anthropic calls are being rejected``."""
     if alert.kind == KIND_SCAN:
         return _scan_subject(alert)
+    if is_lockout(alert.kind):
+        return LOCKOUT_SUBJECT.format(**_lockout_fields(alert))
     template = BLOCK_SUBJECT if alert.kind == KIND_BLOCK else WARN_SUBJECT
     return template.format(**_fields(alert))
 
 
 def body_for(alert: Alert) -> str:
-    """The plain-text body for the alert's kind: budget copy for warn/block, the issue list for a scan."""
+    """The plain-text body for the alert's kind: budget copy for warn/block, the issue list for a scan, the key warning for a provider lockout."""
     if alert.kind == KIND_SCAN:
         return _scan_body(alert)
+    if is_lockout(alert.kind):
+        return LOCKOUT_BODY.format(**_lockout_fields(alert))
     template = BLOCK_BODY if alert.kind == KIND_BLOCK else WARN_BODY
     return template.format(**_fields(alert))
 

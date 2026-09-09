@@ -33,6 +33,7 @@ import respx
 from app import config, redis_layer
 from app.alerts import (
     KIND_BLOCK,
+    KIND_LOCKOUT,
     KIND_SCAN,
     KIND_WARN,
     Alert,
@@ -1442,3 +1443,113 @@ async def test_gateway_block_email_reaches_the_account_email_end_to_end(
     assert "Raise your cap in Settings on the dashboard" in sent["text"]
     assert 'alt="slice"' in sent["html"]
     assert await fake_redis.exists(cooldown_key("acct:7", KIND_BLOCK)) == 1
+
+
+# --- Provider lockout (phase 31) -------------------------------------------------
+# A forwarded provider call that comes back 401 or 402 means the provider is turning
+# slice away, almost always a dead or out-of-credit key. after_response fires one
+# provider_lockout alert per provider per cooldown window; the client still gets the
+# provider's own error back, byte for byte.
+
+PROVIDER_402_BODY = {
+    "type": "error",
+    "error": {"type": "billing_error", "message": "Your credit balance is too low."},
+}
+
+
+@respx.mock
+async def test_forwarded_402_fires_provider_lockout_once_then_cooldown(client, wired):
+    """A forwarded 402 fires provider_lockout once; a second 402 in the window is muted;
+    the client gets the provider's own 402 body back, unchanged, both times."""
+    channel, db, redis = wired
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(402, json=PROVIDER_402_BODY))
+    previous_db = getattr(app.state, "db", None)
+    app.state.redis = redis  # restored by the conftest isolate_redis fixture
+    app.state.db = db
+    try:
+        first = await client.post("/v1/messages", json=REQUEST)
+        second = await client.post(
+            "/v1/messages", json={**REQUEST, "messages": [{"role": "user", "content": "again"}]}
+        )
+        await alerts_engine.drain()
+    finally:
+        app.state.db = previous_db
+
+    # Both calls reached the provider and both returned its 402 body verbatim.
+    assert route.call_count == 2
+    assert first.status_code == 402 and second.status_code == 402
+    assert first.json() == PROVIDER_402_BODY and second.json() == PROVIDER_402_BODY
+
+    # Exactly one lockout reached the channel; the second was collapsed by the cooldown.
+    lockouts = [a for a in channel.sent if a.kind.startswith(KIND_LOCKOUT)]
+    assert len(lockouts) == 1
+    assert lockouts[0].kind == f"{KIND_LOCKOUT}:anthropic"
+    assert lockouts[0].detail == {"provider": "anthropic", "status": 402}
+    # Two fires: one sent, one skipped by the cooldown, both on the per-provider wire kind.
+    lockout_rows = [r for r in db.alerts if r.kind.startswith(KIND_LOCKOUT)]
+    assert [r.status for r in lockout_rows] == [ALERT_STATUS_SENT, ALERT_STATUS_SKIPPED_COOLDOWN]
+    # The cooldown key is per provider, so it names the provider.
+    assert await redis.exists(cooldown_key("default", f"{KIND_LOCKOUT}:anthropic")) == 1
+
+
+async def test_provider_lockout_cooldown_is_per_provider(alerts_on, fake_redis):
+    """The wire kind carries the provider, so a dry Anthropic key does not mute an OpenAI
+    alert: Anthropic fires once (its repeat is cooled down) and OpenAI fires its own."""
+    channel = FakeChannel()
+    engine = make_engine(channel, fake_redis, FakeAlertDB())
+
+    await engine.send("acct", f"{KIND_LOCKOUT}:anthropic", {"provider": "anthropic", "status": 402})
+    await engine.send("acct", f"{KIND_LOCKOUT}:anthropic", {"provider": "anthropic", "status": 402})
+    await engine.send("acct", f"{KIND_LOCKOUT}:openai", {"provider": "openai", "status": 401})
+
+    # The Anthropic repeat is cooled down; OpenAI is a different key, so it still fires.
+    assert [a.kind for a in channel.sent] == [f"{KIND_LOCKOUT}:anthropic", f"{KIND_LOCKOUT}:openai"]
+
+
+@respx.mock
+async def test_forwarded_200_and_500_do_not_fire_lockout(client, wired):
+    """Only 401/402 count: a normal 200 and a provider 500 fire no provider_lockout."""
+    channel, db, redis = wired
+    error_500 = {"type": "error", "error": {"type": "api_error", "message": "boom"}}
+    respx.post(MESSAGES_URL).mock(
+        side_effect=[httpx.Response(200, json=RESPONSE), httpx.Response(500, json=error_500)]
+    )
+    previous_db = getattr(app.state, "db", None)
+    app.state.redis = redis
+    app.state.db = db
+    try:
+        ok = await client.post("/v1/messages", json=REQUEST)
+        err = await client.post(
+            "/v1/messages", json={**REQUEST, "messages": [{"role": "user", "content": "again"}]}
+        )
+        await alerts_engine.drain()
+    finally:
+        app.state.db = previous_db
+
+    assert ok.status_code == 200 and err.status_code == 500
+    assert [a for a in channel.sent if a.kind.startswith(KIND_LOCKOUT)] == []
+
+
+@respx.mock(assert_all_called=False)
+async def test_slice_auth_401_does_not_fire_lockout(client, wired, monkeypatch):
+    """A bad slice key is a 401 from slice's own auth middleware, before any provider call.
+    It must never be mistaken for a provider lockout."""
+    channel, db, redis = wired
+    monkeypatch.setattr(config, "AUTH_ENABLED", True)  # lock the proxy paths
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(402, json=PROVIDER_402_BODY))
+    previous_db = getattr(app.state, "db", None)
+    app.state.redis = redis
+    app.state.db = db
+    try:
+        # No Authorization header and no session cookie: the middleware rejects at the door.
+        resp = await client.post("/v1/messages", json=REQUEST)
+        await alerts_engine.drain()
+    finally:
+        app.state.db = previous_db
+
+    assert resp.status_code == 401
+    # slice's own auth error shape, not a provider body.
+    assert resp.json()["error"]["type"] == "authentication_error"
+    # The provider was never reached, and nothing fired.
+    assert route.call_count == 0
+    assert [a for a in channel.sent if a.kind.startswith(KIND_LOCKOUT)] == []
