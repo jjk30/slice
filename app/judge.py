@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import httpx
 
 from app import config
-from app.adapters import select_adapter
+from app.adapters import LOCAL, select_adapter
 from app.usage import usage_from_body
 
 logger = logging.getLogger("slice.gateway")
@@ -37,6 +37,10 @@ CLASSIFIER_SYSTEM = (
     "precision required. Reply with exactly one word, lowercase: easy or hard. No "
     "punctuation, no explanation."
 )
+
+# The local judge's system message. The Qwen LoRA (see colab/) was trained on this
+# exact wording, so it must not drift. The Haiku path keeps CLASSIFIER_SYSTEM above.
+LOCAL_JUDGE_SYSTEM = "You are slice's routing judge. Answer with exactly one word, easy or hard."
 
 VERDICT_EASY = "easy"
 VERDICT_HARD = "hard"
@@ -79,6 +83,20 @@ def _parse_verdict(text: str) -> str:
     match = _WORD.search(text.lower())
     token = match.group(0) if match else ""
     return VERDICT_EASY if token == VERDICT_EASY else VERDICT_HARD
+
+
+def _strict_verdict(text: str) -> str | None:
+    """Exactly "easy" or "hard" (case-insensitive, stripped), else None.
+
+    Stricter than ``_parse_verdict``: the local judge answering anything but those
+    two words must trigger a fallback, not silently resolve to "hard".
+    """
+    token = text.strip().lower()
+    if token == VERDICT_EASY:
+        return VERDICT_EASY
+    if token == VERDICT_HARD:
+        return VERDICT_HARD
+    return None
 
 
 def _judge_payload(text: str, model: str, hint: str | None = None) -> dict:
@@ -132,3 +150,43 @@ async def classify(
 
     verdict = _parse_verdict(_anthropic_text(body))
     return JudgeResult(verdict, input_tokens, output_tokens)
+
+
+def _local_payload(text: str) -> dict:
+    # The exact contract the Qwen judge was trained on: the fixed system message, the
+    # user text, one word out. temperature 0 for a deterministic verdict, max_tokens 3
+    # because "easy"/"hard" is a single short token and nothing more is wanted.
+    return {
+        "model": config.ROUTER_JUDGE_MODEL,
+        "max_tokens": 3,
+        "temperature": 0,
+        "system": LOCAL_JUDGE_SYSTEM,
+        "messages": [{"role": "user", "content": text}],
+    }
+
+
+async def classify_local(text: str, headers, client: httpx.AsyncClient) -> str | None:
+    """Ask the local Qwen routing judge for a verdict, or None to fall back.
+
+    Returns "easy" or "hard" only when the local judge answered cleanly with one of
+    those two words inside ``LOCAL_JUDGE_TIMEOUT_SECONDS``. Any error, timeout, or
+    other reply returns None so the caller falls back to the Haiku judge. Never raises.
+
+    The local judge costs 0, so this reports no usage and nothing here is ever billed
+    or priced: it goes straight to the internal ``LOCAL`` adapter, never through
+    ``select_adapter`` (which refuses "slice/" models) and never through pricing.
+    """
+    payload = _local_payload(text)
+    raw = json.dumps(payload).encode()
+    try:
+        result = await asyncio.wait_for(
+            LOCAL.send(payload, raw, headers, stream=False, client=client),
+            timeout=config.LOCAL_JUDGE_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001  # timeout, transport, or anything else.
+        logger.debug(json.dumps({"event": "local_judge_error", "error": str(exc)}))
+        return None
+
+    if result.status_code >= 400:
+        return None
+    return _strict_verdict(_anthropic_text(result.content or b""))

@@ -27,6 +27,20 @@ OPENAI = OpenAICompatibleAdapter(
 GEMINI = GeminiAdapter()
 NIM = make_nim_adapter()
 
+# The local routing judge (Qwen GGUF on a llama.cpp sidecar). Same OpenAI-compatible
+# class, pointed at the internal base URL with no API key. It is internal-only: it is
+# NOT returned by select_adapter (a client asking for a "slice/" model gets the plain
+# unknown-model 400), and only app.judge.classify_local reaches it, directly.
+LOCAL = OpenAICompatibleAdapter(
+    name="local judge",
+    base_url_attr="LOCAL_JUDGE_BASE_URL",
+    key_attr=None,
+    key_env="LOCAL_JUDGE_API_KEY",  # never read: the sidecar needs no key.
+    # llama.cpp's OpenAI-compatible endpoint takes plain max_tokens, unlike gpt-5.
+    token_param="max_tokens",
+    requires_key=False,
+)
+
 
 def _is_openai_o_series(model: str) -> bool:
     # The o-series: a leading 'o', a dash, and no slash (a slash means NIM).
@@ -50,7 +64,10 @@ def select_adapter(model: object):
         return OPENAI
     if model.startswith("gemini-"):
         return GEMINI
-    if "/" in model:
+    # "slice/" is the internal local judge: a client must never reach it, so it is
+    # NOT matched here and falls through to the same unknown-model 400 below. This
+    # check sits before the slash -> NIM rule, which would otherwise claim it.
+    if "/" in model and not model.startswith("slice/"):
         return NIM
 
     raise AdapterError(
@@ -67,5 +84,6 @@ __all__ = [
     "OPENAI",
     "GEMINI",
     "NIM",
+    "LOCAL",
     "select_adapter",
 ]

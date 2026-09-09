@@ -32,6 +32,47 @@ services:
       redis:
         condition: service_healthy
     env_file: .env
+    # Non-secret, fixed routing config lives here in the committed compose (same as
+    # caddy's API_DOMAIN/GRAFANA_DOMAIN), not in the boot-time .env. This turns on the
+    # local Qwen routing judge; the gateway reaches it at http://judge:8090/v1 and
+    # falls back to the Haiku judge whenever it is down or slow. Deliberately NO
+    # depends_on the judge below: the gateway must start and serve even if the judge is
+    # not up yet (fail open).
+    environment:
+      ROUTER_JUDGE_MODEL: slice/judge-q4
+
+  # --- Local routing judge (Qwen2.5-0.5B, Q4_K_M via llama.cpp) --------------
+  # A tiny always-on classifier the gateway consults to decide easy vs hard before
+  # routing. llama.cpp's OpenAI-compatible server, on the internal compose network
+  # only (no published port), reachable by the gateway as judge:8090. The model file
+  # is placed on the host at /opt/slice/models/judge_q4.gguf by scripts/fetch_judge_model.sh
+  # at boot and mounted read-only. Capped at 640m on this small box. Nothing sets
+  # depends_on this service, so a slow or failed judge never blocks the rest of the stack.
+  judge:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: unless-stopped
+    command:
+      - "-m"
+      - "/models/judge_q4.gguf"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8090"
+      - "-c"
+      - "1024"
+      - "-t"
+      - "2"
+      - "--parallel"
+      - "1"
+    volumes:
+      - /opt/slice/models:/models:ro
+    mem_limit: 640m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8090/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   # --- Phase 17 monitoring ---------------------------------------------------
   # Prometheus scrapes the gateway and node_exporter over the internal compose

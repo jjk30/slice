@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable, TypedDict
@@ -50,7 +51,18 @@ ROUTED_HEADER = "x-slice-routed"
 # when retrieval never ran (pin, rule, disabled, or empty prompt), phase-5 shape.
 RAG_HEADER = "x-slice-rag"
 
+# Response header describing which judge answered and how long it took, e.g.
+# "local:12", "fallback:340", or "none:5" (both judges failed). Absent when no judge
+# ran (pin, rule, disabled, or empty prompt). A new field alongside the headers above,
+# which are unchanged.
+JUDGE_HEADER = "x-slice-judge"
+
 VERDICT_NONE = "none"
+
+# Which judge produced the verdict, for the JUDGE_HEADER and the router state.
+JUDGE_LOCAL = "local"  # the local Qwen judge answered cleanly.
+JUDGE_FALLBACK = "fallback"  # the Haiku fallback judge answered.
+JUDGE_NONE = "none"  # neither judge produced a verdict: the "hard" default.
 
 
 @dataclass(frozen=True)
@@ -73,6 +85,11 @@ class RoutingDecision:
     # can score their context relevance. Empty when retrieval found nothing or never
     # ran, a defaulted field, so nothing that builds a RoutingDecision without it breaks.
     rag_neighbors: tuple[str, ...] = ()
+    # Which judge answered ("local", "fallback", or "none") and how long the judge step
+    # took in ms. Both defaulted: they stay unset on every path where the judge never
+    # ran (pin, rule, disabled, empty prompt), which is what suppresses the header.
+    judge_source: str = JUDGE_NONE
+    judge_latency_ms: int | None = None
 
     @property
     def routed(self) -> bool:
@@ -89,6 +106,13 @@ class RoutingDecision:
             return None
         return f"{self.requested_model} -> {self.served_model}"
 
+    @property
+    def judge_header(self) -> str | None:
+        # Only when a judge actually ran (latency was measured). "<source>:<ms>".
+        if self.judge_latency_ms is None:
+            return None
+        return f"{self.judge_source}:{self.judge_latency_ms}"
+
 
 class _State(TypedDict, total=False):
     # Seeded by route().
@@ -104,6 +128,8 @@ class _State(TypedDict, total=False):
     rag: str | None
     rag_neighbors: list[str]
     verdict: str
+    judge_source: str
+    judge_latency_ms: int
     served_model: str | None
     reason: str
 
@@ -187,28 +213,63 @@ async def _retrieve_node(state: _State) -> dict:
 
 
 async def _judge_node(state: _State) -> dict:
+    """Judge the request easy or hard, local judge first then the Haiku fallback.
+
+    Two tiers. When ``ROUTER_JUDGE_MODEL`` is set, the local Qwen judge is asked first:
+    a clean easy/hard is the answer, and it costs 0 so nothing is billed or priced.
+    Anything else, an error, or a timeout falls through to the existing Haiku path
+    (``ROUTER_JUDGE_FALLBACK_MODEL``), whose tiny call is billed exactly as before. If
+    that also fails, the verdict is "hard", as it always has been. Never raises.
+
+    ``judge_source``/``judge_latency_ms`` record which judge answered and how long the
+    whole judge step took, surfaced to the client in the routing response header.
+    """
     ctx = state["ctx"]
     classify: Callable = ctx["classify"]
-    try:
-        result = await classify(
-            state.get("user_text", ""),
-            config.JUDGE_MODEL,
-            ctx["headers"],
-            ctx["client"],
-            hint=state.get("hint"),
-        )
-    except Exception as exc:  # noqa: BLE001  # classify shouldn't raise, but never trust it.
-        logger.debug(json.dumps({"event": "judge_node_error", "error": str(exc)}))
-        return {"verdict": judge.VERDICT_HARD}
+    classify_local: Callable = ctx["classify_local"]
+    text = state.get("user_text", "")
+    started = time.perf_counter()
 
-    # Count everything: the judge's own tokens are billed to the caller's budget scope
-    # (the account since phase 12; the team string for direct callers), upper bound.
-    cost = pricing.cost_usd(config.JUDGE_MODEL, result.input_tokens, result.output_tokens)
-    await redis_layer.add_cost(
-        ctx["redis"], ctx.get("budget_scope") or ctx["team"], cost,
-        label=ctx.get("budget_label"), account_id=ctx.get("account_id"),
-    )
-    return {"verdict": result.verdict}
+    verdict: str | None = None
+    source = JUDGE_NONE
+
+    # Tier 1: the local Qwen judge, only when configured. It never bills.
+    if config.ROUTER_JUDGE_MODEL:
+        try:
+            local = await classify_local(text, ctx["headers"], ctx["client"])
+        except Exception as exc:  # noqa: BLE001  # classify_local shouldn't raise; never trust it.
+            logger.debug(json.dumps({"event": "judge_node_local_error", "error": str(exc)}))
+            local = None
+        if local is not None:
+            verdict, source = local, JUDGE_LOCAL
+
+    # Tier 2: the existing Haiku path. Reached when the local judge is off, down, slow,
+    # or unclear. Its own tokens are billed to the caller's budget scope (the account
+    # since phase 12; the team string for direct callers), upper bound.
+    if verdict is None:
+        try:
+            result = await classify(
+                text,
+                config.ROUTER_JUDGE_FALLBACK_MODEL,
+                ctx["headers"],
+                ctx["client"],
+                hint=state.get("hint"),
+            )
+        except Exception as exc:  # noqa: BLE001  # classify shouldn't raise, but never trust it.
+            logger.debug(json.dumps({"event": "judge_node_error", "error": str(exc)}))
+            verdict, source = judge.VERDICT_HARD, JUDGE_NONE
+        else:
+            verdict, source = result.verdict, JUDGE_FALLBACK
+            cost = pricing.cost_usd(
+                config.ROUTER_JUDGE_FALLBACK_MODEL, result.input_tokens, result.output_tokens
+            )
+            await redis_layer.add_cost(
+                ctx["redis"], ctx.get("budget_scope") or ctx["team"], cost,
+                label=ctx.get("budget_label"), account_id=ctx.get("account_id"),
+            )
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    return {"verdict": verdict, "judge_source": source, "judge_latency_ms": latency_ms}
 
 
 def _decide_node(state: _State) -> dict:
@@ -303,14 +364,17 @@ async def route(
     rules_cache,
     *,
     classify: Callable | None = None,
+    classify_local: Callable | None = None,
     retriever=None,
     account=None,
 ) -> RoutingDecision:
     """Run the router graph for one request. Never raises: forwards as asked on error.
 
-    ``classify`` is injectable so tests can supply a fake judge; production leaves it
-    as the real ``app.judge.classify``. ``retriever`` is the phase-6 RAG index; None
-    (or ``RAG_ENABLED`` off) skips retrieval and the router behaves exactly as phase 5.
+    ``classify`` and ``classify_local`` are injectable so tests can supply fake judges;
+    production leaves them as the real ``app.judge.classify`` (the Haiku fallback path)
+    and ``app.judge.classify_local`` (the local Qwen judge). ``retriever`` is the phase-6
+    RAG index; None (or ``RAG_ENABLED`` off) skips retrieval and the router behaves
+    exactly as phase 5.
 
     ``team`` is the caller's team label (the rule target and, before phase 12, the
     budget scope). ``account`` (phase 12) is the resolved ``Account``: its id scopes the
@@ -330,6 +394,7 @@ async def route(
             "client": client,
             "rules": rules_cache,
             "classify": classify or judge.classify,
+            "classify_local": classify_local or judge.classify_local,
             "retriever": retriever,
             "account_id": getattr(account, "id", None),
             "budget_scope": getattr(account, "scope", None),
@@ -350,4 +415,6 @@ async def route(
         reason=final.get("reason", VERDICT_NONE),
         rag=final.get("rag"),
         rag_neighbors=tuple(final.get("rag_neighbors") or ()),
+        judge_source=final.get("judge_source", JUDGE_NONE),
+        judge_latency_ms=final.get("judge_latency_ms"),
     )

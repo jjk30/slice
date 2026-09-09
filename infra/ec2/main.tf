@@ -224,6 +224,17 @@ resource "aws_s3_object" "config" {
   etag   = filemd5("${path.module}/files/${each.value}")
 }
 
+# The judge-model fetch script (scripts/fetch_judge_model.sh) is delivered the same
+# way the box's config is: uploaded to the config bucket, so the boot-time
+# `aws s3 sync s3://<bucket>/ /opt/slice/` places it at /opt/slice/scripts/. user_data
+# runs it before `docker compose up` to pull judge_q4.gguf onto the box.
+resource "aws_s3_object" "fetch_judge_model" {
+  bucket = aws_s3_bucket.config.id
+  key    = "scripts/fetch_judge_model.sh"
+  source = "${path.module}/scripts/fetch_judge_model.sh"
+  etag   = filemd5("${path.module}/scripts/fetch_judge_model.sh")
+}
+
 # ---------------------------------------------------------------------------
 # IAM: instance role + profile.
 #   - AmazonSSMManagedInstanceCore    -> Session Manager access (replaces SSH)
@@ -652,10 +663,13 @@ resource "aws_instance" "app" {
     app_secret_name = var.app_secret_name
     db_secret_name  = var.db_secret_name
     config_bucket   = aws_s3_bucket.config.bucket
-    api_domain      = var.api_subdomain
-    grafana_domain  = var.grafana_subdomain
-    db_name         = var.db_name
-    db_username     = var.db_username
+    # The private judge-weights bucket holds judge_q4.gguf; the box reads it at boot
+    # (fetch_judge_model.sh) with its existing read policy on this bucket.
+    judge_weights_bucket = aws_s3_bucket.judge_weights.bucket
+    api_domain           = var.api_subdomain
+    grafana_domain       = var.grafana_subdomain
+    db_name              = var.db_name
+    db_username          = var.db_username
   })
 
   # Replacement guard: a change to the rendered user_data updates the instance in

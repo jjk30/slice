@@ -28,6 +28,7 @@ ECR_REGISTRY="${ecr_registry}"
 SECRET_NAME="${app_secret_name}"
 DB_SECRET_NAME="${db_secret_name}"
 CONFIG_BUCKET="${config_bucket}"
+JUDGE_WEIGHTS_BUCKET="${judge_weights_bucket}"
 
 # --- Docker + jq -----------------------------------------------------------
 dnf install -y docker jq
@@ -138,6 +139,15 @@ GF_USERS_ALLOW_SIGN_UP=false
 GF_SERVER_ROOT_URL=https://$GRAFANA_DOMAIN
 EOF
 chmod 600 /opt/slice/grafana.env
+
+# --- Local routing judge model ---------------------------------------------
+# Pull the quantized Qwen judge (judge_q4.gguf) onto the box so the llama.cpp "judge"
+# service can mount it from /opt/slice/models. The script arrived with the S3 config
+# sync above; it is idempotent and skips the download when the file is already there.
+# A failure here must NOT abort the boot: the gateway fails open to the Haiku judge if
+# the judge is missing, so log it and carry on rather than let `set -e` kill the stack.
+bash /opt/slice/scripts/fetch_judge_model.sh "$JUDGE_WEIGHTS_BUCKET" \
+  || echo "judge model fetch failed; the gateway will fall back to the Haiku judge"
 
 # --- Launch ----------------------------------------------------------------
 cd /opt/slice

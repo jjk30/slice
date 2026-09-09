@@ -159,6 +159,10 @@ class OpenAICompatibleAdapter:
     ``base_url_attr`` and ``key_attr`` name attributes on the config module, read
     at call time so tests can monkeypatch them and so a missing key is caught
     per request rather than at import.
+
+    ``requires_key`` is True for real providers (a missing key is a clean 401). It
+    is False for a keyless OpenAI-compatible endpoint such as the local judge's
+    llama.cpp sidecar: pass ``key_attr=None`` and no Authorization header is sent.
     """
 
     supports_streaming = True
@@ -167,9 +171,10 @@ class OpenAICompatibleAdapter:
         self,
         name: str,
         base_url_attr: str,
-        key_attr: str,
+        key_attr: str | None,
         key_env: str,
         token_param: str = "max_completion_tokens",
+        requires_key: bool = True,
     ):
         self.name = name
         self._base_url_attr = base_url_attr
@@ -177,8 +182,12 @@ class OpenAICompatibleAdapter:
         self._key_env = key_env
         # The output-token field this provider accepts (see anthropic_to_openai_request).
         self._token_param = token_param
+        # Whether a missing key is fatal. False for a keyless endpoint (local judge).
+        self._requires_key = requires_key
 
     def _key(self) -> str | None:
+        if self._key_attr is None:
+            return None
         return getattr(config, self._key_attr)
 
     def _url(self) -> str:
@@ -194,7 +203,7 @@ class OpenAICompatibleAdapter:
         client: httpx.AsyncClient,
     ) -> AdapterResult:
         key = self._key()
-        if not key:
+        if self._requires_key and not key:
             # Never leaves the machine (rule 9).
             raise AdapterError(
                 401,
@@ -203,7 +212,10 @@ class OpenAICompatibleAdapter:
             )
 
         request = anthropic_to_openai_request(payload, self._token_param)
-        auth = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        # A keyless endpoint (the local judge) sends no Authorization header at all.
+        auth = {"Content-Type": "application/json"}
+        if key:
+            auth["Authorization"] = f"Bearer {key}"
         model = payload.get("model")
 
         if stream and self.supports_streaming:

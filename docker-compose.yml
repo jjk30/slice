@@ -47,5 +47,31 @@ services:
       DATABASE_URL: postgresql://slice:slice@db:5432/slice
       REDIS_URL: redis://redis:6379
 
+  # Local routing judge, opt-in. A plain `docker compose up` does not start it (it is
+  # behind the "judge" profile), so the default services above are unchanged and no
+  # model file is required. `docker compose --profile judge up` also runs it, serving
+  # the same OpenAI-compatible API as production at judge:8090 from a GGUF you place at
+  # ./data/judge_q4.gguf. To make the gateway actually use it, set
+  # ROUTER_JUDGE_MODEL=slice/judge-q4 in your .env (env_file above); without that the
+  # gateway ignores it and keeps using the Haiku judge.
+  judge:
+    profiles: ["judge"]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    command:
+      - "-m"
+      - "/models/judge_q4.gguf"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8090"
+      - "-c"
+      - "1024"
+      - "-t"
+      - "2"
+      - "--parallel"
+      - "1"
+    volumes:
+      - ./data/judge_q4.gguf:/models/judge_q4.gguf:ro
+
 volumes:
   slice_pgdata:

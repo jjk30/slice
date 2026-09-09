@@ -37,7 +37,7 @@ from app.account.routes import router as account_router
 from app.email_assistant import router as email_router
 from app.email_assistant import service as email_service
 from app.redis_layer import CACHE_HEADER
-from app.router import RAG_HEADER, ROUTED_HEADER, route
+from app.router import JUDGE_HEADER, RAG_HEADER, ROUTED_HEADER, route
 from app.rules import RulesCache
 from app.openai_inbound import (
     AnthropicEventReader,
@@ -714,6 +714,7 @@ async def messages(request: Request):
                 routed_header=loop_routed_header, rag=rag, prompt_text=prompt_text,
                 agent_header=loop.header, attempts=loop.attempts, cost_override=loop.spend,
                 eval_prompt=eval_prompt, eval_neighbors=eval_neighbors, account=account,
+                judge_header=decision.judge_header,
             )
 
     try:
@@ -752,6 +753,7 @@ async def messages(request: Request):
         routed_from=routed_from, verdict=verdict, routed_header=decision.routed_header,
         rag=rag, prompt_text=prompt_text, agent_header=agent_header,
         eval_prompt=eval_prompt, eval_neighbors=eval_neighbors, account=account,
+        judge_header=decision.judge_header,
     )
 
 
@@ -878,7 +880,7 @@ def _finalize_anthropic(
     result: AdapterResult, method, path, model, started, wants_stream, team, cache_key,
     *, routed_from=None, verdict=None, routed_header=None, rag=None, prompt_text=None,
     agent_header=None, attempts=1, cost_override=None, eval_prompt=None, eval_neighbors=(),
-    account=None,
+    account=None, judge_header=None,
 ):
     # Phase 8: decide once, off the request's critical section, whether this served
     # answer is sampled for RAGAS scoring. The trigger (routed down, or the agent loop
@@ -895,6 +897,10 @@ def _finalize_anthropic(
     # Phase 6: surface the retrieval outcome ("hit:N" / "empty") when RAG ran.
     if rag is not None:
         headers[RAG_HEADER] = rag
+    # The local routing judge: which judge answered and its latency ("local:12" /
+    # "fallback:340" / "none:5"). Absent when no judge ran.
+    if judge_header is not None:
+        headers[JUDGE_HEADER] = judge_header
     # Phase 7: what the agent loop did ("pass:1" / "esc:N:model" / "ceiling"), or
     # "off:stream" when a qualifying request was streaming so the loop was skipped.
     if agent_header is not None:

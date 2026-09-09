@@ -63,6 +63,34 @@ JUDGE_MODEL = os.getenv("JUDGE_MODEL", "claude-haiku-4-5-20251001")
 JUDGE_TIMEOUT_SECONDS = float(os.getenv("JUDGE_TIMEOUT_SECONDS", "3"))
 JUDGE_MAX_INPUT_CHARS = int(os.getenv("JUDGE_MAX_INPUT_CHARS", "2000"))
 
+# --- Local routing judge: a tiny Qwen2.5-0.5B one-word classifier. ---
+# A LoRA-trained Qwen judge (see colab/), quantized to GGUF, runs beside the gateway
+# as a llama.cpp server speaking an OpenAI-compatible API at LOCAL_JUDGE_BASE_URL.
+# When ROUTER_JUDGE_MODEL is set, the router asks it for the easy/hard verdict first
+# and falls back to ROUTER_JUDGE_FALLBACK_MODEL (the Haiku judge) if it is down, slow,
+# or answers anything other than easy or hard.
+#
+# Plain words, because it matters: this local judge is a one-word classifier. All it
+# can do is answer "easy" or "hard". It is NOT a chat model and must NEVER be used for
+# AGENT_CHECK_MODEL, EVAL_JUDGE_MODEL, GUARDRAILS_MODEL, or EMAIL_ASSISTANT_MODEL,
+# which do real generation and stay on Haiku (their defaults above are unchanged).
+#
+# Empty (the default) means no local judge at all: the router judges with JUDGE_MODEL
+# exactly as it does today. In production this is "slice/judge-q4".
+ROUTER_JUDGE_MODEL = os.getenv("ROUTER_JUDGE_MODEL", "")
+
+# The judge used when the local judge is off, down, slow, or unclear. Defaults to the
+# existing Haiku judge, so an empty ROUTER_JUDGE_MODEL leaves behavior identical to today.
+ROUTER_JUDGE_FALLBACK_MODEL = os.getenv("ROUTER_JUDGE_FALLBACK_MODEL", JUDGE_MODEL)
+
+# Where the local judge's llama.cpp server listens (OpenAI-compatible). It is an
+# internal sidecar with no API key and is never reachable from a client request.
+LOCAL_JUDGE_BASE_URL = os.getenv("LOCAL_JUDGE_BASE_URL", "http://judge:8090/v1")
+
+# How long the router waits for the local judge before giving up and falling back.
+# Kept tight on purpose: the whole point of a local judge is a fast, cheap verdict.
+LOCAL_JUDGE_TIMEOUT_SECONDS = float(os.getenv("LOCAL_JUDGE_TIMEOUT_SECONDS", "2.0"))
+
 # How often the in-memory switch-rules cache reloads from Postgres. Writes refresh
 # it immediately; this is just the background staleness bound.
 RULES_REFRESH_SECONDS = float(os.getenv("RULES_REFRESH_SECONDS", "30"))
