@@ -51,6 +51,9 @@ function signIn() {
       <button type="button" class="submit" @click="signIn">
         <img class="gh-mark" :src="githubMark" alt="" />{{ remembered ? `Log in as ${remembered}` : 'Sign in with GitHub' }}
       </button>
+      <p class="cookie-note">
+        Signing in sets one cookie so slice can keep you logged in. Nothing else is tracked.
+      </p>
       <button v-if="remembered" type="button" class="switch-account" @click="useDifferentAccount">
         Use a different GitHub account
       </button>
@@ -216,6 +219,13 @@ function signIn() {
   color: var(--teal-text);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.cookie-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .hint {

@@ -753,8 +753,8 @@ async def test_daily_limit_replies_once_then_stays_silent(client, env, monkeypat
     await post(client, received_event(email_id="em_3"))
     assert env.db.replies["em_3"]["verdict"] == "limit_reached"
     assert env.fakes.sent[-1]["text"] == limit_line(2)
-    assert env.fakes.sent[-1]["text"].startswith("You have reached today's reply limit of 2. You can ask again after ")
-    assert env.fakes.sent[-1]["text"].endswith(" slice will keep sending you alerts as normal.")
+    assert env.fakes.sent[-1]["text"].startswith("You have reached today's reply limit of 2. slice will keep sending you alerts as normal.")
+    assert env.fakes.sent[-1]["text"].splitlines()[-1].startswith("You can ask again after ")
     assert env.fakes.sent[-1]["headers"] == {"In-Reply-To": MESSAGE_ID, "References": MESSAGE_ID}
     assert len(env.fakes.answer_calls) == 1
     assert len(env.engine.input_calls) == 2
@@ -792,8 +792,9 @@ def test_limit_line_names_the_limit_and_the_reset_time(monkeypatch):
     monkeypatch.setattr(config, "ALERT_TIMEZONE", "America/New_York")
     now = datetime(2026, 9, 4, 15, 0, tzinfo=timezone.utc)
     assert limit_line(20, now) == (
-        "You have reached today's reply limit of 20. You can ask again after 8:00 PM EDT. "
-        "slice will keep sending you alerts as normal."
+        "You have reached today's reply limit of 20. "
+        "slice will keep sending you alerts as normal.\n\n"
+        "You can ask again after 8:00 PM EDT."
     )
     assert limit_line(20, now) == LIMIT_LINE_TEMPLATE.format(limit=20, time="8:00 PM EDT")
     # Winter: the same midnight UTC is 7:00 PM EST. A naive now is taken as UTC.
@@ -803,6 +804,22 @@ def test_limit_line_names_the_limit_and_the_reset_time(monkeypatch):
     # Another zone by name, and an unknown zone falls back to UTC.
     assert "after 1:00 AM BST." in limit_line(5, now, "Europe/London")
     assert "after 12:00 AM UTC." in limit_line(5, now, "Not/AZone")
+
+
+def test_limit_line_ends_with_the_reset_time(monkeypatch):
+    """The reply's last line is exactly ``You can ask again after <clock> <zone>.``, the
+    next midnight UTC converted into the zone, computed at send time not hardcoded."""
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(config, "ALERT_TIMEZONE", "America/New_York")
+    # Summer, Eastern: the coming midnight UTC is 8:00 PM EDT the same evening.
+    summer = datetime(2026, 7, 15, 15, 0, tzinfo=timezone.utc)
+    assert limit_line(20, summer).endswith("\n\nYou can ask again after 8:00 PM EDT.")
+    # Winter, Eastern: the same midnight UTC is 7:00 PM EST.
+    winter = datetime(2026, 1, 15, 15, 0, tzinfo=timezone.utc)
+    assert limit_line(20, winter).endswith("\n\nYou can ask again after 7:00 PM EST.")
+    # UTC: midnight UTC prints 12:00 AM UTC.
+    assert limit_line(20, summer, "UTC").endswith("\n\nYou can ask again after 12:00 AM UTC.")
 
 
 async def test_daily_limit_fails_open_without_redis(client, env, monkeypatch):

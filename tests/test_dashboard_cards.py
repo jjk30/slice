@@ -108,6 +108,17 @@ def test_app_remembers_the_login_when_a_session_loads():
     assert mount.index("await loadSession()") < mount.index("rememberLogin(session.value.login)")
 
 
+def test_login_screen_carries_the_cookie_note():
+    source = (COMPONENTS / "LoginScreen.vue").read_text(encoding="utf-8")
+    assert (
+        "Signing in sets one cookie so slice can keep you logged in. Nothing else is tracked."
+        in source
+    )
+    # One muted line under the sign-in button, no banner and no accept button.
+    assert source.index("Sign in with GitHub") < source.index("Signing in sets one cookie")
+    assert 'class="cookie-note"' in source
+
+
 def test_login_screen_reads_the_name_only_from_storage():
     source = (COMPONENTS / "LoginScreen.vue").read_text(encoding="utf-8")
     assert "const remembered = ref(lastLogin())" in source

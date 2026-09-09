@@ -111,10 +111,13 @@ EVENT_RECEIVED = "email.received"
 FIXED_LINE = "Sorry, I can't help with that here."
 
 # Phase 26: the one reply the first mail over the daily limit gets. Later ones get nothing.
-# Built at send time by ``limit_line`` with the limit and the reset time filled in.
+# Built at send time by ``limit_line`` with the limit and the reset time filled in. The
+# reply ends with the reset line on its own, so the reader's last words are when they can
+# ask again.
 LIMIT_LINE_TEMPLATE = (
-    "You have reached today's reply limit of {limit}. You can ask again after {time}. "
-    "slice will keep sending you alerts as normal."
+    "You have reached today's reply limit of {limit}. "
+    "slice will keep sending you alerts as normal.\n\n"
+    "You can ask again after {time}."
 )
 
 # Phase 26: the first line of a general-advice reply when no AWS account is connected.
