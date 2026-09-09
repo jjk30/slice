@@ -14,6 +14,7 @@ finite unless a test deliberately reaches for an unpriced one.
 """
 
 import json
+import logging
 from decimal import Decimal
 
 import fakeredis.aioredis
@@ -630,3 +631,82 @@ async def test_agent_disabled_behaves_like_phase_6(
     saved = writer.records[0]
     assert saved.model == EASY_MODEL
     assert saved.attempts == 1
+
+
+# --- Phase 30: the loop normalizes the thinking block per rung -------------------------
+
+
+def _request_line(caplog) -> dict | None:
+    """The per-request /v1/messages log line (the one carrying latency_ms)."""
+    for record in caplog.records:
+        try:
+            entry = json.loads(record.message)
+        except (ValueError, TypeError):
+            continue
+        if entry.get("path") == "/v1/messages" and "latency_ms" in entry:
+            return entry
+    return None
+
+
+# opus-5 (adaptive-only), routed down, non-streaming: exactly the loop's case (b).
+THINKING_REQUEST = {
+    "model": REQ,
+    "max_tokens": 8000,
+    "thinking": {"type": "adaptive"},
+    "messages": [{"role": "user", "content": "write a function"}],
+}
+
+
+@respx.mock
+async def test_loop_normalizes_adaptive_to_enabled_on_served_haiku(
+    client, gate_redis, writer, no_rules, monkeypatch, caplog
+):
+    _enable_auto_and_agent(monkeypatch)
+    monkeypatch.setattr(agent_checker, "check", FlakyCheck([True]))  # first try passes
+    respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=PROVIDER_RESPONSE))
+
+    with caplog.at_level(logging.INFO, logger="slice.gateway"):
+        r = await client.post("/v1/messages", json=THINKING_REQUEST, headers={"x-slice-team": "acme"})
+
+    assert r.status_code == 200
+    assert r.headers[agent_loop.AGENT_HEADER] == "pass:1"
+    assert r.headers["x-slice-routed"] == f"{REQ} -> {EASY_MODEL}"
+
+    # The one send went to the enabled-only haiku, so adaptive became enabled with a budget.
+    sent = json.loads(respx.calls[0].request.content)
+    assert sent["model"] == EASY_MODEL
+    assert sent["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+    # The served rung's rewrite label is on the per-request log line.
+    entry = _request_line(caplog)
+    assert entry is not None
+    assert entry["served_model"] == EASY_MODEL
+    assert entry["thinking_rewrite"] == "adaptive->enabled"
+
+
+@respx.mock
+async def test_loop_escalation_normalizes_each_rung_against_its_own_model(
+    client, gate_redis, writer, no_rules, monkeypatch
+):
+    _enable_auto_and_agent(monkeypatch)
+    # Escalate haiku (enabled-only) to sonnet-5 (adaptive-only), both on the Anthropic endpoint.
+    monkeypatch.setattr(config, "AGENT_LADDER", f"{EASY_MODEL},{STRONG}")
+    monkeypatch.setattr(agent_checker, "check", FlakyCheck([False, True]))  # fail, then pass
+    respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=PROVIDER_RESPONSE))
+
+    r = await client.post("/v1/messages", json=THINKING_REQUEST, headers={"x-slice-team": "acme"})
+
+    assert r.status_code == 200
+    assert r.headers[agent_loop.AGENT_HEADER] == f"esc:2:{STRONG}"
+    assert r.headers["x-slice-routed"] == f"{REQ} -> {STRONG}"
+
+    # Rung 1, enabled-only haiku: the adaptive block was rewritten to enabled with a budget.
+    first = json.loads(respx.calls[0].request.content)
+    assert first["model"] == EASY_MODEL
+    assert first["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+    # Rung 2, adaptive-only sonnet-5: normalized against its own model from the original
+    # body, so it flips back to adaptive rather than carrying rung 1's enabled block.
+    second = json.loads(respx.calls[1].request.content)
+    assert second["model"] == STRONG
+    assert second["thinking"] == {"type": "adaptive"}

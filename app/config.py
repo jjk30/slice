@@ -56,6 +56,22 @@ AUTO_ROUTE_ENABLED = _bool("AUTO_ROUTE_ENABLED", True)
 # Where an "easy" verdict routes to. "hard" always keeps the client's model.
 ROUTE_EASY_MODEL = os.getenv("ROUTE_EASY_MODEL", "claude-haiku-4-5-20251001")
 
+# Thinking-block compatibility. A model family accepts only one shape of extended
+# thinking, and the request has to match whichever model actually serves it (which may
+# not be the one the client named, once routing has run). slice rewrites the block for
+# the served model just before the send (see normalize_thinking in app/main.py), so a
+# routed-down request or an opus/sonnet-5 request never 400s on a mismatched type.
+# Match is by prefix, so a dated snapshot like claude-haiku-4-5-20251001 still matches.
+# Models that take only {"type": "adaptive"} and reject enabled with a budget.
+THINKING_ADAPTIVE_ONLY_PREFIXES = ["claude-opus-5", "claude-sonnet-5"]
+# Models that take only {"type": "enabled", "budget_tokens": N} and reject adaptive.
+THINKING_ENABLED_ONLY_PREFIXES = [
+    "claude-haiku-4-5",
+    "claude-3",
+    "claude-sonnet-4",
+    "claude-opus-4",
+]
+
 # The classifier model, and the ceiling on how long slice waits for its verdict.
 # Any failure, timeout, or unexpected output counts as "hard", never an error to
 # the client. The judge only ever sees the last user message, truncated.

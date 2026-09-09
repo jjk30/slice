@@ -348,6 +348,62 @@ def _request_log_meta(payload, headers, requested_model: str | None) -> dict:
     }
 
 
+def _model_matches(model, prefixes) -> bool:
+    return isinstance(model, str) and any(model.startswith(prefix) for prefix in prefixes)
+
+
+def normalize_thinking(body: bytes, served_model):
+    """Make the request's thinking block match the model that will actually serve it.
+
+    Pure. Returns ``(body, rewrite)``: the possibly rewritten body bytes, and a short
+    label of what changed ("enabled->adaptive", "adaptive->enabled", "dropped") or None
+    when nothing did. Only the thinking block is ever touched; everything else in the body
+    is left byte-for-byte the same shape. A body that is not a JSON object, has no thinking
+    block, or targets a model in neither prefix list comes back unchanged.
+
+    Rules, by the served model's family:
+    - adaptive-only model with ``thinking.type`` "enabled": switch to "adaptive" and drop
+      budget_tokens (adaptive carries no budget).
+    - enabled-only model with ``thinking.type`` "adaptive": switch to "enabled" with a
+      budget of the client's if present, else 1024, capped at max_tokens - 1 and never
+      below 1024; when max_tokens is 1024 or less there is no room for a valid budget, so
+      the thinking block is dropped entirely.
+    """
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return body, None
+    if not isinstance(payload, dict):
+        return body, None
+    thinking = payload.get("thinking")
+    if not isinstance(thinking, dict):
+        return body, None
+    ttype = thinking.get("type")
+
+    if _model_matches(served_model, config.THINKING_ADAPTIVE_ONLY_PREFIXES) and ttype == "enabled":
+        new_thinking = {k: v for k, v in thinking.items() if k not in ("type", "budget_tokens")}
+        new_thinking["type"] = "adaptive"
+        return json.dumps({**payload, "thinking": new_thinking}).encode(), "enabled->adaptive"
+
+    if _model_matches(served_model, config.THINKING_ENABLED_ONLY_PREFIXES) and ttype == "adaptive":
+        max_tokens = payload.get("max_tokens")
+        if isinstance(max_tokens, int) and max_tokens <= 1024:
+            # No room for a budget that is >= 1024 and < max_tokens: drop the block.
+            return json.dumps({k: v for k, v in payload.items() if k != "thinking"}).encode(), "dropped"
+        client_budget = thinking.get("budget_tokens")
+        budget = client_budget if isinstance(client_budget, int) else 1024
+        if budget < 1024:
+            budget = 1024
+        if isinstance(max_tokens, int) and budget > max_tokens - 1:
+            budget = max_tokens - 1
+        new_thinking = {k: v for k, v in thinking.items() if k != "type"}
+        new_thinking["type"] = "enabled"
+        new_thinking["budget_tokens"] = budget
+        return json.dumps({**payload, "thinking": new_thinking}).encode(), "adaptive->enabled"
+
+    return body, None
+
+
 def log_request(
     method: str,
     path: str,
@@ -389,6 +445,10 @@ def log_request(
         entry["has_beta"] = meta.get("has_beta")
         entry["beta"] = meta.get("beta")
         entry["error_message"] = error_message
+        # Present only when normalize_thinking actually rewrote the block for the served
+        # model; omitted otherwise so a request that needed no change carries no key.
+        if meta.get("thinking_rewrite") is not None:
+            entry["thinking_rewrite"] = meta.get("thinking_rewrite")
     logger.info(json.dumps(entry))
 
 
@@ -728,6 +788,10 @@ async def messages(request: Request):
                 served_model=served_model, requested_model=decision.requested_model,
             )
             final_model = loop.model
+            # Phase 30: the loop normalized the thinking block per rung; surface the served
+            # rung's label on this request's log line, the same key the direct path uses.
+            if loop.thinking_rewrite is not None:
+                req_meta["thinking_rewrite"] = loop.thinking_rewrite
             # The loop may have escalated (or fallen back to the client's model), so
             # recompute the routed markers against whatever it actually served.
             loop_routed_from = (
@@ -776,6 +840,14 @@ async def messages(request: Request):
             exc, request.method, path, served_model, started, wants_stream, routed_from,
             verdict, rag, prompt_text, team, account, meta=req_meta,
         )
+
+    # Phase 30: make the thinking block match the model that will serve this request,
+    # after routing has chosen it and just before the send, so an adaptive-only or
+    # enabled-only model never 400s on a mismatched thinking.type. Pure; a no-op when the
+    # body has no thinking block or the served model is in neither list.
+    body, thinking_rewrite = normalize_thinking(body, served_model)
+    if thinking_rewrite is not None:
+        req_meta["thinking_rewrite"] = thinking_rewrite
 
     try:
         result = await adapter.send(

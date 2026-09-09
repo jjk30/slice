@@ -66,6 +66,9 @@ class LoopResult:
     attempts: int
     spend: Decimal
     header: str
+    # Phase 30: what normalize_thinking did on the served rung ("enabled->adaptive",
+    # "adaptive->enabled", "dropped"), or None. Surfaced on the per-request log line.
+    thinking_rewrite: str | None = None
 
 
 def agent_applies(decision) -> bool:
@@ -189,15 +192,26 @@ class _LoopState(TypedDict, total=False):
     best_result: AdapterResult | None
     best_model: str | None
     last_error: AdapterResult | None
+    # Phase 30: the thinking rewrite label for the served rung, tracked next to the served
+    # result so the log line reports the rung that was actually served.
+    last_thinking_rewrite: str | None
+    best_thinking_rewrite: str | None
     passed: bool
     stop_reason: str
 
 
 async def _try_node(state: _LoopState) -> dict:
+    # Deferred import: app.main imports app.agent at load, so a top-level import here would
+    # be circular. normalize_thinking is fully defined by the time a request runs the loop.
+    from app.main import normalize_thinking
+
     ctx = state["ctx"]
     model = state["current_model"]
     payload = {**ctx["base_payload"], "model": model}
-    body = json.dumps(payload).encode()
+    # Phase 30: match the thinking block to this rung's own model right before the send, so
+    # an escalation to an adaptive-only model (or a routed-down enabled-only rung) never
+    # 400s on a mismatched thinking.type. The Anthropic adapter sends these raw bytes.
+    body, thinking_rewrite = normalize_thinking(json.dumps(payload).encode(), model)
 
     result, _input_tokens, _output_tokens, cost = await _attempt(
         model, payload, body, ctx["headers"], ctx["client"]
@@ -208,6 +222,7 @@ async def _try_node(state: _LoopState) -> dict:
         "spend": state["spend"] + cost,
         "last_result": result,
         "last_model": model,
+        "last_thinking_rewrite": thinking_rewrite,
     }
     if result.status_code >= 400:
         # A dead rung: remember it only as the last error to pass through if nothing
@@ -217,6 +232,7 @@ async def _try_node(state: _LoopState) -> dict:
         # We escalate strictly upward, so the newest good answer is the best one.
         updates["best_result"] = result
         updates["best_model"] = model
+        updates["best_thinking_rewrite"] = thinking_rewrite
     return updates
 
 
@@ -301,11 +317,15 @@ async def _single_attempt(
     payload: dict, headers, client: httpx.AsyncClient, model: str
 ) -> LoopResult:
     """The fail-open fallback: one plain attempt on the cheap model, like phase 6."""
+    from app.main import normalize_thinking
+
     swapped = {**payload, "model": model}
-    result, _in, _out, cost = await _attempt(
-        model, swapped, json.dumps(swapped).encode(), headers, client
+    body, thinking_rewrite = normalize_thinking(json.dumps(swapped).encode(), model)
+    result, _in, _out, cost = await _attempt(model, swapped, body, headers, client)
+    return LoopResult(
+        result=result, model=model, attempts=1, spend=cost, header="pass:1",
+        thinking_rewrite=thinking_rewrite,
     )
-    return LoopResult(result=result, model=model, attempts=1, spend=cost, header="pass:1")
 
 
 async def run_agent_loop(
@@ -357,10 +377,13 @@ async def run_agent_loop(
     best = final.get("best_result")
     if best is not None:
         result, model = best, final.get("best_model") or served_model
+        # The label of the rung that is served (the last good answer in hand).
+        thinking_rewrite = final.get("best_thinking_rewrite")
     else:
         # Every attempt errored: pass the last provider error through, as the proxy does.
         result = final.get("last_error") or final.get("last_result")
         model = final.get("last_model") or served_model
+        thinking_rewrite = final.get("last_thinking_rewrite")
         if result is None:
             result = _error_result(502, "api_error", "The agent loop produced no answer.")
 
@@ -370,6 +393,7 @@ async def run_agent_loop(
         attempts=attempts,
         spend=spend,
         header=_build_header(stop_reason, attempts, model),
+        thinking_rewrite=thinking_rewrite,
     )
 
 
