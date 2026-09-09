@@ -219,3 +219,39 @@ async def test_budget_counter_survives_restart(monkeypatch):
 
     after = fakeredis.aioredis.FakeRedis(server=server)
     assert (await redis_layer.check_budget(after, "team")).spend == Decimal("7")
+
+
+# --- Cache log lines ---------------------------------------------------------
+
+
+async def test_cache_events_log_one_line_each_without_the_body(caplog, monkeypatch):
+    """A miss, a set, then a hit: one structured line each on the request log's logger,
+    with the team, the account id, the first 12 characters of the key's hash and, for
+    the set, the TTL. The body never appears in any line."""
+    monkeypatch.setattr(config, "CACHE_TTL_SECONDS", 3600)
+    redis = fresh()
+    key = redis_layer.cache_key("team-a", BASE, account_id=7)
+    digest = key.rsplit(":", 1)[-1]
+    body = b'{"content":[{"text":"the secret answer"}]}'
+    with caplog.at_level(logging.INFO, logger="slice.gateway"):
+        assert await redis_layer.cache_get(redis, key, team="team-a", account_id=7) is None
+        await redis_layer.cache_set(redis, key, body, team="team-a", account_id=7)
+        assert await redis_layer.cache_get(redis, key, team="team-a", account_id=7) == body
+    lines = [json.loads(rec.message) for rec in caplog.records if rec.name == "slice.gateway"]
+    events = [line for line in lines if line.get("event", "").startswith("cache_")]
+    assert [line["event"] for line in events] == ["cache_miss", "cache_set", "cache_hit"]
+    for line in events:
+        assert line["team"] == "team-a" and line["account_id"] == 7
+        assert line["key"] == digest[:12] and len(line["key"]) == 12
+        assert "slice:cache" not in json.dumps(line)
+    assert events[1]["ttl_seconds"] == 3600
+    assert "ttl_seconds" not in events[0] and "ttl_seconds" not in events[2]
+    assert "secret answer" not in "".join(rec.message for rec in caplog.records)
+
+
+async def test_cache_events_log_nothing_when_the_cache_is_off(caplog):
+    with caplog.at_level(logging.INFO, logger="slice.gateway"):
+        assert await redis_layer.cache_get(None, "k", team="t", account_id=1) is None
+        await redis_layer.cache_set(None, "k", b"body", team="t", account_id=1)
+    assert not [rec for rec in caplog.records if "cache_" in rec.message]
+

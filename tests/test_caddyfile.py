@@ -28,7 +28,7 @@ def _block(text: str, name: str) -> str:
 
 
 def test_caddyfile_has_no_em_dash():
-    assert "\u2014" not in CADDYFILE.read_text(encoding="utf-8")
+    assert chr(0x2014) not in CADDYFILE.read_text(encoding="utf-8")
 
 
 def test_apex_proxies_the_app_paths_before_the_static_site():

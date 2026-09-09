@@ -104,7 +104,7 @@ function shareLine(t) {
       <h2 class="panel-title">Account budget</h2>
       <span v-if="meta" class="meta">{{ meta }}</span>
     </div>
-    <p v-if="budget === null && failed" class="empty">&mdash;</p>
+    <p v-if="budget === null && failed" class="empty">-</p>
     <p v-else-if="budget === null" class="loading">Loading…</p>
     <template v-else>
       <div class="account-head">
@@ -131,14 +131,14 @@ function shareLine(t) {
       <ul v-if="tokenLines.length" class="token-lines mono small" aria-label="tokens left by model, estimated">
         <li v-for="line in tokenLines" :key="line.key" class="estimate" :title="line.title">{{ line.text }}</li>
       </ul>
-      <p v-else class="mono small tokens"><span class="estimate">&mdash;</span></p>
+      <p v-else class="mono small tokens"><span class="estimate">-</span></p>
       <p v-if="sourceNote" class="mono small tokens muted">{{ sourceNote }}</p>
 
       <div v-if="teams && teams.length" class="labels">
         <div class="labels-head mono small muted">by team label</div>
         <ul class="team-list">
           <li v-for="t in teams" :key="t.team" class="label-row mono small">
-            <span class="team-name">{{ t.team ?? '\u2014' }}</span>
+            <span class="team-name">{{ t.team ?? '-' }}</span>
             <span class="muted">{{ money(t.spend_usd) }}<span v-if="shareLine(t)"> · {{ shareLine(t) }}</span></span>
           </li>
         </ul>

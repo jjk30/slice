@@ -26,7 +26,7 @@ defineProps({
       <img v-if="icon" class="kpi-icon" :src="icon" :alt="iconAlt" />{{ label }}
     </p>
     <p v-if="(value === null || value === undefined) && !failed" class="loading">Loading…</p>
-    <p v-else class="kpi-value" :class="tone ? `tone-${tone}` : ''">{{ value ?? '\u2014' }}</p>
+    <p v-else class="kpi-value" :class="tone ? `tone-${tone}` : ''">{{ value ?? '-' }}</p>
     <p v-if="sub" class="kpi-sub">{{ sub }}</p>
   </section>
 </template>

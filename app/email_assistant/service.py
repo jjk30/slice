@@ -102,6 +102,9 @@ from app.guardrails import (
 
 logger = logging.getLogger("slice.gateway")
 
+# The em dash the answer rails strip; spelled with chr() so the escape never sits in source.
+EM_DASH = chr(0x2014)
+
 EVENT_RECEIVED = "email.received"
 
 # The one reply anything blocked gets. Exactly this, nothing else.
@@ -512,7 +515,7 @@ def not_connected_reply(bucket: str) -> str:
 
 def tidy_answer(answer: str, footer: str = FOOTER_AI_SETUP) -> str:
     """Belt and braces on the model's reply: no em dashes, and always the AI footer last."""
-    text = (answer or "").replace(" \u2014 ", ", ").replace("\u2014", "-").strip()
+    text = (answer or "").replace(f" {EM_DASH} ", ", ").replace(EM_DASH, "-").strip()
     if not text.endswith(footer):
         text = f"{text}\n\n{footer}" if text else footer
     return text

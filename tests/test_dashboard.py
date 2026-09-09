@@ -474,6 +474,21 @@ def test_make_event_has_the_published_shape():
     json.dumps(event)
 
 
+def test_public_event_carries_every_field_the_live_row_reads():
+    """What the browser gets over SSE (account id stripped) is exactly the field set the
+    dashboard's live normaliser reads for a recent-calls row. The event is a request row
+    and carries no budget figures: a live event triggers a refetch of /dashboard/teams,
+    it never patches the budget payload itself."""
+    from app.dashboard.routes import _public_event
+
+    event = _public_event(make_event(
+        team="team-a", model=HAIKU, routed_from=OPUS, status=200, cost=Decimal("0.0035"), cached=False,
+        account_id=7,
+    ))
+    assert set(event) == {"request_id", "team", "model", "routed_from", "status", "cost", "cached", "created_at"}
+    assert not any(k.startswith("budget") for k in event)
+
+
 def test_make_event_null_cost_stays_null():
     event = make_event(team="t", model=UNPRICED, routed_from=None, status=200, cost=None, cached=False)
     assert event["cost"] is None
@@ -724,6 +739,32 @@ async def test_teams_endpoint_budget_from_account_gate_counter_and_per_label_sha
     assert by_team["team-a"]["spend_usd"] == pytest.approx(0.0105)
     assert by_team["team-a"]["share"] == pytest.approx(0.0105 / account_spend)
     assert by_team["team-b"]["share"] == pytest.approx(0.0035 / account_spend)
+
+
+BUDGET_FIELDS = {
+    "account", "requests", "spend_usd", "unpriced_requests", "budget_usd", "gate_spend_usd",
+    "budget_used_usd", "budget_source", "remaining_usd", "blended_cost_per_token_usd",
+    "estimated_tokens_remaining",
+}
+
+
+async def test_teams_budget_fields_are_the_same_on_every_load(client, dash_db, monkeypatch):
+    """The first load and the refetch a live event triggers are the same endpoint, and
+    each answer carries every budget field, including the two the panel's note reads
+    (budget_source and spend_usd), with Redis up and with Redis down."""
+    monkeypatch.setattr(config, "BUDGET_MONTHLY_USD", Decimal("10"))
+    dash_db.rows = [_row(team="team-a", model=SONNET)]
+    redis = fakeredis.aioredis.FakeRedis()
+    await redis.set(f"slice:budget:{LOCAL_SCOPE}:{stats.month_label()}", b"0.02")
+    app.state.redis = redis
+    first = (await client.get("/dashboard/teams")).json()
+    again = (await client.get("/dashboard/teams")).json()
+    assert set(first["budget"]) == BUDGET_FIELDS == set(again["budget"])
+    assert first["budget"]["budget_source"] == "redis" and again["budget"]["budget_source"] == "redis"
+    assert set(first) == set(again)
+    app.state.redis = None
+    down = (await client.get("/dashboard/teams")).json()
+    assert set(down["budget"]) == BUDGET_FIELDS and down["budget"]["budget_source"] == "postgres"
 
 
 async def test_teams_endpoint_fails_open_when_redis_is_down(client, dash_db, monkeypatch):

@@ -102,7 +102,7 @@ def test_how_to_step_04_says_spend_is_an_estimate(how_to):
 
 
 def test_how_to_page_has_no_em_dash(how_to):
-    assert "\u2014" not in how_to
+    assert chr(0x2014) not in how_to
 
 
 def test_how_to_page_has_copy_buttons_and_one_script(how_to):

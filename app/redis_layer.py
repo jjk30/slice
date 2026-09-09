@@ -313,22 +313,59 @@ def openai_cache_key(team: str, body: dict, *, account_id: int | None = None) ->
     return f"{_CACHE_PREFIX}:{hashlib.sha256(material).hexdigest()}"
 
 
-async def cache_get(redis: aioredis.Redis | None, key: str) -> bytes | None:
-    """The stored response body, or None on a miss or any Redis error."""
+def _cache_event(event: str, key: str, team: str | None, account_id: int | None, **extra) -> None:
+    """One structured line per cache event, the request log's logger and style.
+
+    ``key`` is the first 12 characters of the key's hash (every key starts with the same
+    ``slice:cache:v2:`` prefix, so the prefix alone would not tell keys apart). Never
+    the request body or the response.
+    """
+    digest = key.rsplit(":", 1)[-1]
+    entry = {"event": event, "team": team, "account_id": account_id, "key": digest[:12]}
+    entry.update(extra)
+    logger.info(json.dumps(entry))
+
+
+async def cache_get(
+    redis: aioredis.Redis | None,
+    key: str,
+    *,
+    team: str | None = None,
+    account_id: int | None = None,
+) -> bytes | None:
+    """The stored response body, or None on a miss or any Redis error.
+
+    Logs one ``cache_hit`` or ``cache_miss`` line (team, account id, key prefix). No line
+    when the cache is off, and a Redis error keeps its own debug line.
+    """
     if redis is None:
         return None
     try:
-        return await redis.get(key)
+        body = await redis.get(key)
     except Exception as exc:
         _debug("cache_get", exc)
         return None
+    _cache_event("cache_hit" if body is not None else "cache_miss", key, team, account_id)
+    return body
 
 
-async def cache_set(redis: aioredis.Redis | None, key: str, body: bytes) -> None:
-    """Store a response body under the TTL. Fails open: a miss is harmless."""
+async def cache_set(
+    redis: aioredis.Redis | None,
+    key: str,
+    body: bytes,
+    *,
+    team: str | None = None,
+    account_id: int | None = None,
+) -> None:
+    """Store a response body under the TTL. Fails open: a miss is harmless.
+
+    Logs one ``cache_set`` line (team, account id, key prefix, TTL in seconds).
+    """
     if redis is None:
         return
     try:
         await redis.set(key, body, ex=config.CACHE_TTL_SECONDS)
     except Exception as exc:
         _debug("cache_set", exc)
+        return
+    _cache_event("cache_set", key, team, account_id, ttl_seconds=config.CACHE_TTL_SECONDS)

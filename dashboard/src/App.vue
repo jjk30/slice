@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { getJson, getAwsCost, getScannerConnect, getFindings, AuthError } from './api.js'
 import { useLiveEvents } from './live.js'
+import { mergeTeams } from './merge.js'
 import { session, loadSession, logout, rememberLogin } from './auth.js'
 import { money, dollars, percent, integer } from './format.js'
 import KpiTile from './components/KpiTile.vue'
@@ -161,7 +162,7 @@ function onBudgetSaved(reply) {
 
 async function refreshTeams() {
   try {
-    teams.value = await getJson('/dashboard/teams')
+    teams.value = mergeTeams(teams.value, await getJson('/dashboard/teams'))
   } catch (e) {
     // A failed refresh keeps the patched payload; the next live event retries.
     if (e instanceof AuthError) session.value = null
@@ -250,7 +251,8 @@ async function loadAggregates() {
   if (seq !== aggSeq) return false
   summary.value = s
   models.value = m
-  teams.value = t
+  // Keep what the panel already has for any field this refresh leaves out (merge.js).
+  teams.value = mergeTeams(teams.value, t)
   awsCost.value = a
   awsConn.value = conn
   findings.value = f
@@ -416,7 +418,7 @@ const month = computed(() => summary.value?.month ?? teams.value?.month ?? model
 // null while loading; a dash once a load has failed.
 function kpi(fmt) {
   if (summary.value) return fmt(summary.value)
-  return failed.value ? '\u2014' : null
+  return failed.value ? '-' : null
 }
 
 const spend = computed(() => kpi((s) => money(s.spend_usd)))
@@ -449,7 +451,7 @@ function usd(raw) {
 const awsConnected = computed(() => usd(awsCost.value?.month_to_date) !== null)
 const awsBill = computed(() => {
   if (awsCost.value) return awsConnected.value ? usd(awsCost.value.month_to_date) : 'not connected'
-  return failed.value ? '\u2014' : null
+  return failed.value ? '-' : null
 })
 const awsBillSub = computed(() => {
   if (!awsCost.value) return ''
@@ -500,7 +502,7 @@ const firstRequest = computed(() => requestCount.value === 0)
         <span class="brand-path">/ dashboard</span>
       </div>
       <div class="header-right">
-        <span class="meta">this month · {{ month ?? '\u2014' }}</span>
+        <span class="meta">this month · {{ month ?? '-' }}</span>
         <span v-if="accountLogin" class="meta account">{{ accountLogin }}</span>
         <LivePill :status="liveStatus" />
         <a class="settings howto" href="https://sliceapp.dev/how-to" target="_blank" rel="noopener">How to</a>

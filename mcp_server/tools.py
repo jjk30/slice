@@ -71,20 +71,20 @@ def _gateway_error(exc: Exception, client: SliceClient) -> str:
 def _money(value) -> str:
     """A dollar amount as ``$1.2345``; an em dash for an unknown (null) amount."""
     if value is None:
-        return "\u2014"
+        return "-"
     try:
         return f"${float(value):.4f}"
     except (TypeError, ValueError):
-        return "\u2014"
+        return "-"
 
 
 def _pct(value) -> str:
     if value is None:
-        return "\u2014"
+        return "-"
     try:
         return f"{float(value) * 100:.1f}%"
     except (TypeError, ValueError):
-        return "\u2014"
+        return "-"
 
 
 # --- read tools --------------------------------------------------------------------

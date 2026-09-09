@@ -47,7 +47,7 @@ const errors = computed(() => {
   <section class="card">
     <p class="kpi-label">guardrail blocks this month</p>
     <p v-if="blocked === null && !failed" class="loading">Loading…</p>
-    <p v-else class="kpi-value" :class="tone">{{ blocked ?? '\u2014' }}</p>
+    <p v-else class="kpi-value" :class="tone">{{ blocked ?? '-' }}</p>
     <p v-if="bySource" class="kpi-sub by-source">{{ bySource }}</p>
     <p v-if="byRail" class="kpi-sub">{{ byRail }}</p>
     <p v-if="errors" class="kpi-sub">{{ errors }}</p>

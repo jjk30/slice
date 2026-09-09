@@ -1,8 +1,8 @@
-// Formatting helpers. Every helper returns an em dash for null/undefined so the
+// Formatting helpers. Every helper returns a plain hyphen for null/undefined so the
 // UI never shows a fake zero for an unknown value. Numeric formatters only
 // accept finite numbers: '', false, 'abc', Infinity all render as a dash too.
 
-const DASH = '\u2014'
+const DASH = '-'
 
 function isNil(v) {
   return v === null || v === undefined || Number.isNaN(v)

@@ -35,8 +35,14 @@ const server = await createServer({
 })
 try {
   const mod = await server.ssrLoadModule('/src/components/TeamBudgets.vue')
+  const { mergeTeams } = await server.ssrLoadModule('/src/merge.js')
   const out = []
-  for (const props of cases) out.push(await renderToString(createSSRApp(mod.default, props)))
+  // A case may be {props} or {merge: [previous props, update props]}: the update is
+  // merged over the previous payload the way App.vue does on a live refresh.
+  for (const c of cases) {
+    const props = c.merge ? { ...c.merge[0], data: mergeTeams(c.merge[0].data, c.merge[1].data) } : c
+    out.push(await renderToString(createSSRApp(mod.default, props)))
+  }
   process.stdout.write(JSON.stringify(out))
 } finally {
   await server.close()
@@ -100,3 +106,25 @@ def test_panel_shows_the_judge_note_only_for_a_redis_gap():
     # Redis down, meter on recorded spend: nothing (the existing source note stays).
     assert "judge-note" not in postgres and NOTE not in postgres
     assert "gate counter unavailable" in postgres
+
+
+def test_panel_keeps_the_note_when_a_live_update_leaves_fields_out():
+    """A refetch after a live event goes through mergeTeams (App.vue): a payload that
+    leaves out budget_source and spend_usd keeps the previous values, so the note stays.
+    The same partial payload applied raw would drop it, which is the failure the merge
+    guards against. A field the update carries still wins."""
+    full = _teams("redis", 0.0009, 0.0007)
+    partial = _teams("redis", 0.0011, 0.0007)
+    del partial["data"]["budget"]["budget_source"]
+    del partial["data"]["budget"]["spend_usd"]
+    changed = _teams("redis", 0.0011, 0.0011)
+    merged, raw, equalised = _render([
+        {"merge": [full, partial]},
+        partial,
+        {"merge": [full, changed]},
+    ])
+    assert NOTE in merged and "$0.0011" in merged
+    assert NOTE not in raw
+    # The update carried spend_usd equal to the counter: the note goes, as it should.
+    assert NOTE not in equalised
+

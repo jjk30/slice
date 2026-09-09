@@ -503,7 +503,7 @@ def after_response(
         if not cached:
             await redis_layer.add_cost(redis, scope, cost, label=label, account_id=account_id)
         if cache_key is not None and cache_body is not None and status == 200:
-            await redis_layer.cache_set(redis, cache_key, cache_body)
+            await redis_layer.cache_set(redis, cache_key, cache_body, team=team, account_id=account_id)
 
     return BackgroundTask(run)
 
@@ -569,7 +569,7 @@ async def messages(request: Request):
     cache_key = None
     if not wants_stream and isinstance(payload, dict):
         cache_key = redis_layer.cache_key(team, payload, account_id=_acct_id(account))
-        cached_body = await redis_layer.cache_get(redis, cache_key)
+        cached_body = await redis_layer.cache_get(redis, cache_key, team=team, account_id=_acct_id(account))
         if cached_body is not None:
             metrics.record_cache_event("hit")
             return _anthropic_cache_hit(
@@ -1053,7 +1053,7 @@ async def chat_completions(request: Request):
     cache_key = None
     if not wants_stream:
         cache_key = redis_layer.openai_cache_key(team, inbound, account_id=_acct_id(account))
-        cached_body = await redis_layer.cache_get(redis, cache_key)
+        cached_body = await redis_layer.cache_get(redis, cache_key, team=team, account_id=_acct_id(account))
         if cached_body is not None:
             metrics.record_cache_event("hit")
             return _openai_cache_hit(cached_body, request, model, started, team, prompt_text, account)

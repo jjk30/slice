@@ -757,7 +757,7 @@ async def test_scan_email_renders_s3_public_doc_link(monkeypatch, scan_alerts_on
         "Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/"
         "access-control-block-public-access.html" in body
     )
-    assert "\u2014" not in body  # no em dash anywhere
+    assert chr(0x2014) not in body  # no em dash anywhere
 
 
 # --- Phase 24b: expectations ------------------------------------------------
@@ -845,7 +845,7 @@ async def test_email_says_how_many_expected_findings_were_skipped(monkeypatch, s
     body = body_for(alert)
     assert "1 expected finding not shown. Manage them on the dashboard." in body
     assert "acme-site" not in body
-    assert "\u2014" not in body
+    assert chr(0x2014) not in body
 
 
 async def test_expectations_read_failure_skips_nothing(monkeypatch, scan_alerts_on):

@@ -368,9 +368,9 @@ def test_reply_subject_and_tidy_answer():
     assert reply_subject("Re: " + SUBJECT) == "Re: " + SUBJECT
     assert reply_subject("") == "Re: your slice alert"
     # Phase 26: an own-data reply ends with the AI setup line, not the AWS line.
-    assert tidy_answer("You spent $1 \u2014 about half.").endswith(FOOTER_AI_SETUP)
+    assert tidy_answer(f"You spent $1 {chr(0x2014)} about half.").endswith(FOOTER_AI_SETUP)
     assert FOOTER_NOTE not in tidy_answer("hi")
-    assert "\u2014" not in tidy_answer("a \u2014 b")
+    assert chr(0x2014) not in tidy_answer(f"a {chr(0x2014)} b")
     assert tidy_answer("Done.\n\n" + FOOTER_AI_SETUP).count(FOOTER_AI_SETUP) == 1
     # A general reply starts with the disclaimer and ends with the general line, once each.
     general = tidy_general("Sonnet is fine for most work.")
@@ -619,11 +619,11 @@ async def test_general_question_goes_to_the_general_model_with_the_disclaimer(cl
 
 async def test_general_reply_gets_the_disclaimer_even_when_the_model_forgets(client, env):
     env.engine.input_outcome = RailOutcome(label=LABEL_GENERAL)
-    env.fakes.canned_answer = "Pick Postgres unless you need a document store \u2014 it is the safe default."
+    env.fakes.canned_answer = "Pick Postgres unless you need a document store " + chr(0x2014) + " it is the safe default."
     await post(client, received_event())
     text = env.fakes.sent[0]["text"]
     assert text.startswith(GENERAL_DISCLAIMER + "\n\nPick Postgres")
-    assert "\u2014" not in text
+    assert chr(0x2014) not in text
     assert text.endswith(FOOTER_GENERAL)
     assert env.db.replies["em_1"]["verdict"] == "answered_general"
 
@@ -881,7 +881,7 @@ def test_answer_cap_and_prompt_rules():
             "the earlier answer said. Do not add new facts, numbers, or services that were not "
             "in it. If the earlier answer did not cover something, say so instead of guessing." in system
         )
-        assert "\u2014" not in system
+        assert chr(0x2014) not in system
     assert GENERAL_CONTEXT_HEADING in GENERAL_SYSTEM_PROMPT
     assert GENERAL_TAILORED_OPENER in GENERAL_SYSTEM_PROMPT
     assert GENERAL_CONNECT_LINE in GENERAL_SYSTEM_PROMPT

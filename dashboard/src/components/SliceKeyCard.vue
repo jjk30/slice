@@ -110,7 +110,7 @@ onMounted(load)
     <!-- Otherwise the masked row (or empty / loading / failed states). -->
     <template v-else>
       <p v-if="!loaded" class="loading">Loading…</p>
-      <p v-else-if="loadFailed" class="empty">&mdash;</p>
+      <p v-else-if="loadFailed" class="empty">-</p>
       <template v-else-if="card">
         <div class="key-row">
           <code class="mono key-masked">{{ masked }}</code>

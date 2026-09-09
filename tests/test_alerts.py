@@ -550,7 +550,7 @@ def test_subject_and_body_templates(monkeypatch):
 
 
 # The character we must never emit anywhere in an email: U+2014, the em dash.
-EM_DASH = "\u2014"
+EM_DASH = chr(0x2014)
 
 SCAN_DETAIL = {
     "count": 2,
