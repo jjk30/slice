@@ -283,7 +283,9 @@ STEP_02_SCREENSHOTS = [
 ]
 # Step 03: the three export lines, the curl run twice, and the Recent calls panel.
 STEP_03_SCREENSHOTS = ["03-slice-use.png", "03-curl-twice.png", "03-recent-calls.png"]
-SCREENSHOTS = ["01-install.png", *STEP_02_SCREENSHOTS, *STEP_03_SCREENSHOTS]
+# Step 07: the alert email in Gmail, then the three kinds of reply.
+STEP_07_SCREENSHOTS = ["07-alert-email.png", "07-reply-own-data.png", "07-reply-general.png", "07-reply-blocked.png"]
+SCREENSHOTS = ["01-install.png", *STEP_02_SCREENSHOTS, *STEP_03_SCREENSHOTS, *STEP_07_SCREENSHOTS]
 
 STEP_02_LABELS = [
     "Terminal after slice login",
@@ -332,7 +334,11 @@ def test_how_to_page_shows_the_screenshots(how_to):
     github = "The GitHub pages look the same on every system."
     assert how_to.count(github) == 1
     assert how_to.index('src="img/02-github-device.png"') < how_to.index(github) < how_to.index('src="img/02-github-code.png"')
-    assert how_to.count("<figcaption>") == 3
+    gmail = "Taken from my Gmail. Your findings and numbers will differ."
+    assert how_to.count(gmail) == 1
+    first_07, second_07 = (how_to.index(f'src="img/{n}"') for n in STEP_07_SCREENSHOTS[:2])
+    assert first_07 < how_to.index(gmail) < second_07
+    assert how_to.count("<figcaption>") == 4
     assert "Screenshots from a Mac" not in how_to
     tools = _section(how_to, "tools")
     assert re.findall(r'src="img/([^"]+)"', tools) == STEP_03_SCREENSHOTS
@@ -464,4 +470,36 @@ def test_what_you_should_see_boxes_sit_under_the_split_blocks(how_to):
         assert '<i class="r"></i>' not in box
     assert ".fill.see" not in how_to
     assert ".term.see[data-os]" in how_to  # the OS switch flips the per-OS boxes too
+
+
+def test_alert_step_shows_gmail_pictures_instead_of_the_sample_block(how_to):
+    """Step 07: the mocked-up email block is gone; four Gmail pictures stand in its place,
+    each after the sentence it illustrates, with a label above and outside any term block."""
+    alerts = _section(how_to, "alerts")
+    assert "my-app-uploads" not in how_to
+    assert '<div class="term">' not in alerts and 'class="copy"' not in alerts
+    assert re.findall(r'src="img/([^"]+)"', alerts) == STEP_07_SCREENSHOTS
+    assert re.findall(r'<div class="lab">([^<]+)</div>', alerts) == [
+        "Gmail: the alert email",
+        "Gmail: a question about your own account",
+        "Gmail: a general AWS question",
+        "Gmail: an off topic question",
+    ]
+    here = alerts.index("Here is one:</p>")
+    footer = alerts.index("Every email ends with the same line")
+    assert here < alerts.index('src="img/07-alert-email.png"') < footer
+    reply = alerts.index("<h3>Reply with a question</h3>")
+    off_topic = alerts.index("Anything off topic gets one line back")
+    assert reply < alerts.index('src="img/07-reply-own-data.png"') < alerts.index('src="img/07-reply-general.png"') < off_topic
+    assert off_topic < alerts.index('src="img/07-reply-blocked.png"')
+    # Every sentence of the step is still there.
+    for line in (
+        "slice scans a connected AWS account once a day.",
+        "Each finding is three short lines: what it is, why it matters, and the first thing to do.",
+        "Every email ends with the same line:",
+        "Some findings are on purpose, like a bucket that serves a public website.",
+        "Reply to the email with a question about your own account.",
+        "Anything off topic gets one line back: <b>Sorry, I can't help with that here.</b>",
+    ):
+        assert line in alerts, line
 

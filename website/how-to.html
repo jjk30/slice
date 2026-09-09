@@ -534,24 +534,29 @@ message = client.messages.create(
     <h2><span class="no">07</span>Alert emails</h2>
     <p class="say">slice scans a connected AWS account once a day. When a scan finds new high-risk items, you get one email about them, at most one an hour. The budget warning and the block from step 04 arrive the same way.</p>
     <p>Each finding is three short lines: what it is, why it matters, and the first thing to do. Then a <b>Read more</b> link to the AWS doc page for that check. Here is one:</p>
-    <div class="term">
-      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Email</span>
-        <button class="copy" type="button" aria-label="Copy command">
-          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
-          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-        </button>
-      </div>
-<pre>Your S3 storage bucket <span class="dim">my-app-uploads</span> in us-east-1 is open to the internet.
-Anyone who finds the link can read what is inside, and that is how private files leak.
-In the S3 console, open the bucket, go to Permissions, and turn on Block all public access.
-Read more: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html</pre>
-    </div>
+    <figure class="shot">
+      <div class="lab">Gmail: the alert email</div>
+      <img src="img/07-alert-email.png" width="2560" height="800" loading="lazy" alt="A slice alert email in Gmail with two findings, each three lines and a Read more link, and the AI footer">
+      <figcaption>Taken from my Gmail. Your findings and numbers will differ.</figcaption>
+    </figure>
     <p>Every email ends with the same line: <b>slice is an AI. Please double check before you change anything in AWS.</b></p>
     <p>Some findings are on purpose, like a bucket that serves a public website. Open the <b>AWS findings</b> panel on the dashboard and turn on the <b>expected</b> switch for that finding. It stays in the list, muted, and leaves the emails until you turn the switch off.</p>
 
     <h3>Reply with a question</h3>
     <p>Reply to the email with a question about your own account. For example, how much you spent this month, or what a finding means. slice does not break costs down by week. Send it from the email you saved in Settings. slice answers from your own slice data, in plain words, under 150 words. It never sends commands or scripts to run. If it does not have the number, it says so.</p>
+    <figure class="shot">
+      <div class="lab">Gmail: a question about your own account</div>
+      <img src="img/07-reply-own-data.png" width="2808" height="904" loading="lazy" alt="A reply asking how much was spent this month, and slice's answer from the account's own data">
+    </figure>
+    <figure class="shot">
+      <div class="lab">Gmail: a general AWS question</div>
+      <img src="img/07-reply-general.png" width="2794" height="1330" loading="lazy" alt="A general AWS question about NAT gateway cost, and slice's answer marked as general advice">
+    </figure>
     <p>Anything off topic gets one line back: <b>Sorry, I can't help with that here.</b></p>
+    <figure class="shot">
+      <div class="lab">Gmail: an off topic question</div>
+      <img src="img/07-reply-blocked.png" width="2838" height="838" loading="lazy" alt="An off topic question and slice's one line refusal">
+    </figure>
   </section>
 
   <!-- 08 UNINSTALL -->
