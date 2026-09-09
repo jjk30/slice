@@ -143,10 +143,10 @@ def test_default_ladder_is_the_four_provider_relay(monkeypatch):
     monkeypatch.setattr(
         config,
         "AGENT_LADDER",
-        "nvidia/nemotron-3.5-lightning-30b-a3b,gpt-5.6-terra,gemini-3.8-flash,claude-sonnet-5",
+        "nvidia/nemotron-3-super-120b-a12b,gpt-5.6-terra,gemini-3.8-flash,claude-sonnet-5",
     )
     assert build_ladder(None) == [
-        "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "nvidia/nemotron-3-super-120b-a12b",
         "gpt-5.6-terra",
         "gemini-3.8-flash",
         "claude-sonnet-5",

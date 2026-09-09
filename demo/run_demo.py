@@ -74,7 +74,7 @@ PRICES: dict[str, tuple[str, str]] = {
     "gemini-2.5-flash-lite": ("0.10", "0.40"),
     "gemini-2.0-flash": ("0.10", "0.40"),
     # NIM has free credits and no public list price; this nominal rate keeps the cost estimate finite so the rung is not blocked, and reflects a near-free worker.
-    "nvidia/nemotron-3.5-lightning-30b-a3b": ("0.05", "0.20"),
+    "nvidia/nemotron-3-super-120b-a12b": ("0.05", "0.20"),
 }
 
 PER_MILLION = Decimal(1_000_000)

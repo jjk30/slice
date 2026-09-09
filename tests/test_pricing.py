@@ -53,7 +53,7 @@ def test_known_model_with_no_usage_is_none():
 @pytest.mark.parametrize(
     "model",
     [
-        "nvidia/nemotron-3.5-lightning-30b-a3b",  # NIM worker
+        "nvidia/nemotron-3-super-120b-a12b",  # NIM worker
         "gpt-5.6-terra",                   # OpenAI drafter
         "gemini-3.8-flash",                # Gemini checker rung
         "claude-sonnet-5",                 # Anthropic closer
