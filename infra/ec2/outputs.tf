@@ -32,3 +32,8 @@ output "backup_bucket" {
   description = "Private S3 bucket that the nightly Postgres backup script uploads slice-YYYY-MM-DD.dump into. Use this name in the cron line's SLICE_BACKUP_BUCKET."
   value       = aws_s3_bucket.backups.bucket
 }
+
+output "judge_weights_bucket" {
+  description = "Private S3 bucket holding the trained Qwen routing-judge weights (judge_lora.zip, judge_merged.zip). Use this name in JUDGE_WEIGHTS_BUCKET for scripts/fetch_judge_weights.py."
+  value       = aws_s3_bucket.judge_weights.bucket
+}

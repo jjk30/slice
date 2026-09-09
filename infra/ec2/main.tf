@@ -371,6 +371,65 @@ resource "aws_iam_role_policy" "backups" {
 }
 
 # ---------------------------------------------------------------------------
+# Private S3 bucket for the trained Qwen routing-judge weights. A laptop uploads
+# judge_lora.zip and judge_merged.zip here; the box only ever reads them (see
+# scripts/fetch_judge_weights.py). Same naming scheme as the config and backup
+# buckets: project name plus account id, no secret in the name.
+# ---------------------------------------------------------------------------
+resource "aws_s3_bucket" "judge_weights" {
+  bucket = "${var.project_name}-judge-weights-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_public_access_block" "judge_weights" {
+  bucket                  = aws_s3_bucket.judge_weights.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Versioning on, so a re-uploaded weight file keeps its previous version and a
+# bad retrain can be rolled back.
+resource "aws_s3_bucket_versioning" "judge_weights" {
+  bucket = aws_s3_bucket.judge_weights.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# No lifecycle rule here, on purpose. These are model weights, not nightly
+# dumps. They must never expire and must never move to Glacier the way the
+# backups bucket does. The box has to be able to read them at any moment, so
+# they stay in the Standard storage class forever until someone deletes them by
+# hand.
+
+# The box only reads these weights (GetObject on the objects, ListBucket on the
+# bucket). Uploads happen from a laptop, never from the instance. Attached to
+# the same instance role as everything else, same style as the backups put
+# policy above.
+data "aws_iam_policy_document" "judge_weights" {
+  statement {
+    sid       = "GetJudgeWeights"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.judge_weights.arn}/*"]
+  }
+  statement {
+    sid       = "ListJudgeWeightsBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.judge_weights.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "judge_weights" {
+  name   = "${var.project_name}-ec2-judge-weights-read"
+  role   = aws_iam_role.instance.id
+  policy = data.aws_iam_policy_document.judge_weights.json
+}
+
+# ---------------------------------------------------------------------------
 # The hand-made bucket `slice-db-backups-jjk30`. It was created by hand with the
 # CLI and is IMPORTED into this state, not recreated: prevent_destroy guards it
 # so a plan can never delete it. It holds the LoRA judge model (judge-models/),
