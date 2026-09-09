@@ -109,7 +109,7 @@ AGENT_ENABLED = _bool("AGENT_ENABLED", True)
 # to be finite (an unknown price makes the estimate infinite and blocks the rung).
 AGENT_LADDER = os.getenv(
     "AGENT_LADDER",
-    "claude-haiku-4-5-20251001,gemini-3.6-flash,gpt-5.2,claude-sonnet-5",
+    "nvidia/nemotron-3-nano-30b-a3b,gpt-5.6-terra,gemini-3.8-flash,claude-sonnet-5",
 )
 
 # Hard cap on total attempts (the first try plus escalations) for one request.

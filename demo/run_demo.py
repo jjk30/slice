@@ -62,15 +62,19 @@ PRICES: dict[str, tuple[str, str]] = {
     "claude-haiku-4-5": ("1.00", "5.00"),
     "claude-haiku-4-5-20251001": ("1.00", "5.00"),
     # --- Other providers, priced by the model name the client sends. ---
+    "gpt-5.6-terra": ("2.00", "12.00"),
     "gpt-5.2": ("1.25", "10.00"),
     "gpt-5.2-mini": ("0.25", "2.00"),
     "gpt-5-mini": ("0.25", "2.00"),
     "gpt-5.1": ("1.25", "10.00"),
     "gpt-5.1-mini": ("0.25", "2.00"),
     "gemini-3.6-flash": ("1.50", "7.50"),
+    "gemini-3.8-flash": ("0.75", "3.75"),
     "gemini-2.5-flash": ("0.30", "2.50"),
     "gemini-2.5-flash-lite": ("0.10", "0.40"),
     "gemini-2.0-flash": ("0.10", "0.40"),
+    # NIM has free credits and no public list price; this nominal rate keeps the cost estimate finite so the rung is not blocked, and reflects a near-free worker.
+    "nvidia/nemotron-3-nano-30b-a3b": ("0.05", "0.20"),
 }
 
 PER_MILLION = Decimal(1_000_000)

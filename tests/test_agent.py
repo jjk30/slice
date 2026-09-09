@@ -135,6 +135,24 @@ async def test_build_ladder_appends_requested_as_final_rung(monkeypatch):
     assert build_ladder("b") == ["a", "b", "c"]
 
 
+def test_default_ladder_is_the_four_provider_relay(monkeypatch):
+    # The shipped default string: NIM worker, OpenAI drafter, Gemini checker rung,
+    # Anthropic closer, cheap to strong. Pinned here (like every ladder test) so a
+    # local .env override of AGENT_LADDER never masks what the default should be.
+    # build_ladder(None) appends nothing.
+    monkeypatch.setattr(
+        config,
+        "AGENT_LADDER",
+        "nvidia/nemotron-3-nano-30b-a3b,gpt-5.6-terra,gemini-3.8-flash,claude-sonnet-5",
+    )
+    assert build_ladder(None) == [
+        "nvidia/nemotron-3-nano-30b-a3b",
+        "gpt-5.6-terra",
+        "gemini-3.8-flash",
+        "claude-sonnet-5",
+    ]
+
+
 async def test_escalation_from_rung_above_or_straight_to_final(monkeypatch):
     monkeypatch.setattr(config, "AGENT_LADDER", "a,b,c")
     # Current model on the ladder: start one rung above it.

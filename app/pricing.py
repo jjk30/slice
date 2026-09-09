@@ -33,6 +33,7 @@ PRICES: dict[str, Price] = {
     # Approximate public list rates as of this code's knowledge; a model missing
     # here still logs its tokens and simply carries a null cost. Update freely.
     # OpenAI (current gpt-5.2 family).
+    "gpt-5.6-terra": _price("2.00", "12.00"),
     "gpt-5.2": _price("1.25", "10.00"),
     "gpt-5.2-mini": _price("0.25", "2.00"),
     "gpt-5-mini": _price("0.25", "2.00"),
@@ -42,11 +43,14 @@ PRICES: dict[str, Price] = {
     # gemini-3.6-flash has an intro rate through 2026-12; we bill the higher
     # standard rate so cost estimates stay upper bounds and date-independent.
     "gemini-3.6-flash": _price("1.50", "7.50"),
+    "gemini-3.8-flash": _price("0.75", "3.75"),
     "gemini-2.5-flash": _price("0.30", "2.50"),
     "gemini-2.5-flash-lite": _price("0.10", "0.40"),
     "gemini-2.0-flash": _price("0.10", "0.40"),
     # NIM models have no public per-token list price, so they are intentionally
     # absent: their tokens are logged and cost_usd stays null.
+    # NIM has free credits and no public list price; this nominal rate keeps the cost estimate finite so the rung is not blocked, and reflects a near-free worker.
+    "nvidia/nemotron-3-nano-30b-a3b": _price("0.05", "0.20"),
 }
 
 PER_MILLION = Decimal(1_000_000)

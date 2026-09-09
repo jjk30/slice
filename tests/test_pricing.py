@@ -9,7 +9,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.pricing import cost_usd
+from app.pricing import cost_usd, price_for
 
 # Sonnet lists at $3/M in, $15/M out: 1000 + 1000 tokens = $0.018.
 SONNET_COST = Decimal("0.018000")
@@ -48,3 +48,18 @@ def test_existing_entries_unchanged():
 
 def test_known_model_with_no_usage_is_none():
     assert cost_usd("claude-sonnet-4-5", None, None) is None
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "nvidia/nemotron-3-nano-30b-a3b",  # NIM worker
+        "gpt-5.6-terra",                   # OpenAI drafter
+        "gemini-3.8-flash",                # Gemini checker rung
+        "claude-sonnet-5",                 # Anthropic closer
+    ],
+)
+def test_agent_ladder_models_are_priced(model):
+    # Every rung of the four-provider ladder must resolve to a finite price so its
+    # cost estimate is finite and the rung is not blocked.
+    assert price_for(model) is not None
