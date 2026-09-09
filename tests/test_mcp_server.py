@@ -10,9 +10,10 @@ endpoint was actually called).
 from __future__ import annotations
 
 import httpx
+import pytest
 import respx
 
-from mcp_server import tools
+from mcp_server import config, tools
 from mcp_server.client import SliceClient
 from mcp_server.config import Settings
 
@@ -361,9 +362,23 @@ def test_settings_from_env_defaults(monkeypatch):
     monkeypatch.delenv("SLICE_BASE_URL", raising=False)
     monkeypatch.delenv("SLICE_API_KEY", raising=False)
     s = Settings.from_env()
-    assert s.base_url == "http://localhost:8080"
+    assert s.base_url == "https://api.sliceapp.dev"
     assert s.api_key is None
     assert s.auth_headers() == {}
+
+
+def test_load_settings_exits_without_api_key(monkeypatch):
+    monkeypatch.delenv("SLICE_API_KEY", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        config.load_settings()
+    # A string exit arg means exit code 1, and it is the one-line message printed to stderr.
+    assert "SLICE_API_KEY" in str(exc.value)
+
+
+def test_load_settings_returns_when_api_key_is_set(monkeypatch):
+    monkeypatch.setenv("SLICE_API_KEY", "slk_live_abc")
+    s = config.load_settings()
+    assert s.api_key == "slk_live_abc"
 
 
 def test_settings_from_env_reads_key_and_trims_slash(monkeypatch):

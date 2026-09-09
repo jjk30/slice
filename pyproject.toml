@@ -1,14 +1,16 @@
-# Builds the `slice-gateway` distribution: the slice CLI only (slice login / init / use).
-# The wheel ships a single top-level module, slice_cli.py, and depends on typer and httpx
-# only. None of the server stack (fastapi, langgraph, redis, torch, ...) is imported or
-# required. Inside the repo, `python -m app.cli` still works via the app/cli.py shim.
+# Builds the `slice-gateway` distribution: the slice CLI (slice login / init / use) and
+# the standalone slice MCP server (slice-mcp). The wheel ships the slice_cli.py module and
+# the mcp_server package, and depends on typer, httpx, and mcp only. None of the server
+# stack (fastapi, langgraph, redis, torch, ...) is imported or required, and the app/
+# server package is never pulled in. Inside the repo, `python -m app.cli` still works via
+# the app/cli.py shim and `python -m mcp_server` runs the server from source.
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "slice-gateway"
-version = "0.2.2"
+version = "0.2.3"
 description = "Command-line client for slice, the self-hosted LLM gateway."
 readme = "PYPI.md"
 requires-python = ">=3.11"
@@ -17,6 +19,7 @@ authors = [{ name = "Jishnu Janardanan" }]
 dependencies = [
     "typer",
     "httpx",
+    "mcp>=1.9,<2",
 ]
 classifiers = [
     "Environment :: Console",
@@ -32,8 +35,12 @@ Repository = "https://github.com/jjk30/slice"
 [project.scripts]
 # `slice login`, `slice init`, `slice use <tool>`. See slice_cli.py.
 slice = "slice_cli:main"
+# `slice-mcp`: the stdio MCP server. See mcp_server/__main__.py.
+slice-mcp = "mcp_server.__main__:main"
 
 [tool.setuptools]
-# Ship only the CLI module. Setting py-modules disables package auto-discovery, so the
-# app/ server package is never pulled into the wheel.
+# Ship the CLI module and the mcp_server package, and nothing else. Listing py-modules and
+# packages explicitly disables package auto-discovery, so the app/ server package (and
+# every other repo folder) is never pulled into the wheel.
 py-modules = ["slice_cli"]
+packages = ["mcp_server"]

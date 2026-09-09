@@ -1,5 +1,6 @@
-# The slice-gateway distribution is the CLI only. Keep the sdist to the CLI module,
-# its PyPI readme, the license, and build metadata. Nothing from the server repo.
+# The slice-gateway distribution is the CLI plus the standalone MCP server. Keep the sdist
+# to those two, the PyPI readme, the license, and build metadata. Nothing else from the
+# server repo (mcp_server is kept, so it is not pruned here).
 prune tests
 prune app
 prune infra
@@ -12,7 +13,6 @@ prune demo
 prune scripts
 prune guardrails
 prune docs
-prune mcp_server
 prune gateway
 prune pipeline
 prune rag_store

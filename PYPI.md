@@ -24,11 +24,23 @@ This package installs the `slice` command. It logs you in through GitHub, then p
 
 Run `slice use anthropic`, `slice use openai`, `slice use curl`, or `slice use claude-code` to print the exact lines for your tool.
 
+## Claude Code MCP
+
+This package also installs `slice-mcp`, a stdio MCP server. Add it to Claude Code with one command:
+
+    claude mcp add slice -s user -e SLICE_API_KEY=slk_live_... -- slice-mcp
+
+It exposes six read and write tools over your slice account: check spend against budget, list recent requests, show the eval pass rate, and list, add, or delete model-routing rules. It talks to the hosted gateway by default; set `SLICE_BASE_URL` for a self-hosted one.
+
 ## The gateway
 
 This is only the client. The slice gateway itself, the server that does the routing, caching, budgets, and dashboards, lives on GitHub at https://github.com/jjk30/slice.
 
 Homepage: https://sliceapp.dev
+
+## What's new in 0.2.3
+
+The package now installs `slice-mcp`, the slice MCP server, so `pipx install slice-gateway` gives you both the CLI and the Claude Code integration. See the Claude Code MCP section above.
 
 ## What's new in 0.2.2
 

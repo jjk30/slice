@@ -3,20 +3,23 @@
 Two knobs, both read from the environment at construction time so a test can set them
 with ``monkeypatch.setenv`` and build a fresh ``Settings``:
 
-- ``SLICE_BASE_URL``: where the gateway is (default ``http://localhost:8080``, the
-  gateway's own default ``PORT``). A trailing slash is trimmed so paths join cleanly.
-- ``SLICE_API_KEY``: the slice key. Optional: unset means "no key", which is exactly
-  what a gateway in local/unlocked mode (``AUTH_ENABLED`` off) wants. When set it rides
-  on every gateway call as ``Authorization: Bearer <key>``, the header the phase-12 auth
-  middleware reads (see ``app.auth.keys.bearer_token``).
+- ``SLICE_BASE_URL``: where the gateway is (default ``https://api.sliceapp.dev``, the
+  hosted gateway). Point it at ``http://localhost:8080`` for a self-hosted gateway. A
+  trailing slash is trimmed so paths join cleanly.
+- ``SLICE_API_KEY``: the slice key. It rides on every gateway call as
+  ``Authorization: Bearer <key>``, the header the phase-12 auth middleware reads (see
+  ``app.auth.keys.bearer_token``). ``Settings.from_env`` leaves it unset when absent (a
+  self-hosted gateway in local/unlocked mode needs no key); the ``slice-mcp`` entry point
+  calls ``load_settings``, which requires it, since the hosted default has auth on.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 
-DEFAULT_BASE_URL = "http://localhost:8080"
+DEFAULT_BASE_URL = "https://api.sliceapp.dev"
 
 
 @dataclass(frozen=True)
@@ -39,3 +42,12 @@ class Settings:
         if self.api_key:
             return {"Authorization": f"Bearer {self.api_key}"}
         return {}
+
+
+def load_settings() -> Settings:
+    """Settings for the ``slice-mcp`` entry point. Exits with a one-line message when
+    SLICE_API_KEY is unset, since the default hosted gateway requires a slice key."""
+    settings = Settings.from_env()
+    if settings.api_key is None:
+        sys.exit("slice-mcp: set SLICE_API_KEY to your slice key (slk_live_...).")
+    return settings
