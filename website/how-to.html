@@ -44,11 +44,13 @@
   .lede-h p{font-size:16.5px;color:var(--muted);max-width:36em;margin:16px 0 0;line-height:1.55}
   .h-mark{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--green);margin-bottom:14px}
 
-  /* two-column layout: sticky step rail on the left, content on the right */
-  .layout{max-width:1120px;margin:0 auto;padding:0 32px;display:grid;grid-template-columns:230px minmax(0,1fr);gap:0 56px;align-items:start}
-  .layout .lede-h{grid-column:2;grid-row:1}
-  .layout .blocks{grid-column:2;grid-row:2}
-  .steps{grid-column:1;grid-row:1 / span 2;position:sticky;top:24px}
+  /* full-width three-column grid: sticky step rail pinned far left, content
+     centered in the middle column, the empty right column balancing the rail so
+     the 720px content block lands exactly where it sat before the rail existed */
+  .layout{display:grid;grid-template-columns:230px minmax(0,1fr) 230px;align-items:start}
+  .layout .lede-h{grid-column:2;grid-row:1;justify-self:center;width:100%;max-width:720px}
+  .layout .blocks{grid-column:2;grid-row:2;justify-self:center;width:100%;max-width:720px}
+  .steps{grid-column:1;grid-row:1 / span 2;position:sticky;top:24px;padding-left:32px}
   .steps ol{list-style:none;margin:0;padding:0}
   .steps li{border-top:1px solid var(--rule)}
   .steps li:last-child{border-bottom:1px solid var(--rule)}
@@ -138,10 +140,11 @@
   footer{border-top:1px solid var(--rule);padding:26px 0 54px;display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
   footer a:hover{color:var(--ink)}
 
-  /* mobile: single column, the step rail becomes the wrapped row it was before */
-  @media(max-width:820px){
-    .layout{display:block;padding:0 24px}
-    .steps{position:static;top:auto;grid-column:auto;grid-row:auto;margin:22px 0 10px}
+  /* narrow (under 1240px): single column, content back to its centered 720px
+     block, the step rail becomes the wrapped row under the lede, not sticky */
+  @media(max-width:1239.98px){
+    .layout{display:block;max-width:720px;margin:0 auto;padding:0 24px}
+    .steps{position:static;top:auto;grid-column:auto;grid-row:auto;padding-left:0;margin:22px 0 10px}
     .steps ol{display:flex;flex-wrap:wrap;gap:8px 18px}
     .steps li,.steps li:last-child{border:0}
     .steps a{display:inline;font-size:12.5px;padding:0 0 2px;border-left:0;border-bottom:1px solid var(--dot)}
