@@ -224,6 +224,24 @@
   .note a{color:var(--muted);border-bottom:1px solid var(--dot)}
   .note a:hover{color:var(--ink)}
 
+  /* request flow, stat card, and screenshots for the added sections */
+  .flow{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap;margin-top:24px}
+  .flow .fbox{flex:1 1 190px;background:var(--paper2);border:1px solid var(--edge);border-radius:12px;padding:14px 16px}
+  .flow .ft{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--green);margin-bottom:9px}
+  .flow .d{font-size:13.5px;color:var(--muted);line-height:1.5}
+  .flow .pill{display:inline-block;font-family:var(--mono);font-size:12px;color:var(--ink);background:var(--edge);border-radius:6px;padding:3px 8px;margin:3px 5px 0 0}
+  .flow .arrow{align-self:center;font-family:var(--mono);color:var(--faint);font-size:16px;flex:0 0 auto}
+  .judgebox{margin-top:12px;max-width:360px;background:var(--paper2);border:1.5px dashed var(--green);border-radius:12px;padding:12px 15px}
+  .judgebox .d{font-size:13.5px;color:var(--muted);line-height:1.5}
+  .judgebox .fall{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:7px}
+  .statcard{margin-top:26px;background:var(--paper2);border:1px solid var(--edge);border-radius:14px;padding:22px 24px}
+  .statcard .lab{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .statcard .big{font-family:var(--display);font-weight:700;font-size:clamp(40px,9vw,64px);line-height:.85;color:var(--green);letter-spacing:-.04em;margin-top:8px}
+  .statcard .sub{font-family:var(--mono);font-size:13px;color:var(--muted);margin-top:12px}
+  .shotfig{margin:18px 0 0}
+  .shotfig .lab{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-bottom:6px}
+  .shotfig img{display:block;max-width:100%;height:auto;border:1px solid var(--rule);border-radius:12px}
+
   /* animated hero */
   .hero{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(280px,.85fr);gap:clamp(48px,8vw,112px);align-items:center;padding:36px 0 64px;min-height:min(70vh,620px)}
   @media(max-width:760px){.hero{grid-template-columns:1fr;gap:6px;text-align:center;padding:6px 0 34px;min-height:0}}
@@ -494,6 +512,87 @@ Logged in as <span class="ph">(your-github-username)</span></pre>
         <div class="b"><code>s3://acme-user-uploads</code> is open to the whole internet and holds files that look like IDs and passports. slice caught it before anyone else did.</div>
       </div>
     </div>
+  </section>
+
+  <!-- THE NUMBER -->
+  <section class="block" id="number">
+    <div class="h-mark">measured, not promised</div>
+    <h2>The number.</h2>
+    <p class="say">A fixed 50-prompt developer workload, sent twice: once straight to Anthropic, once through slice, both naming the same baseline model. Same work, smaller bill.</p>
+    <div class="statcard">
+      <div class="lab">Same 50-prompt workload, through slice</div>
+      <div class="big">45.28%</div>
+      <div class="sub">cheaper. $0.141615 through slice vs $0.258801 direct.</div>
+    </div>
+    <div class="fledger" style="margin-top:22px">
+      <div class="frow"><span class="verb">Routed</span><span class="dots"></span><span class="txt">27 requests dropped to a cheaper model, <b>saving $0.087675</b>.</span></div>
+      <div class="frow"><span class="verb">Cached</span><span class="dots"></span><span class="txt">5 repeat prompts served at $0, <b>saving $0.029511</b>.</span></div>
+      <div class="frow"><span class="verb">Hard</span><span class="dots"></span><span class="txt">19 prompts stayed on the model you asked for.</span></div>
+    </div>
+    <p class="conn-note">Routing plus cache reconcile exactly to the $0.117186 saved.</p>
+  </section>
+
+  <!-- HOW A REQUEST MOVES -->
+  <section class="block" id="path">
+    <div class="h-mark">the request path</div>
+    <h2>How a request moves.</h2>
+    <p class="say">Your tool talks to slice. slice guards, caches, judges, and routes, then calls the provider. One hop in, one hop out.</p>
+    <div class="flow">
+      <div class="fbox"><div class="ft">client</div><div class="d">Anthropic or OpenAI JSON.</div></div>
+      <div class="arrow">&rarr;</div>
+      <div class="fbox"><div class="ft">slice gateway</div><span class="pill">guard</span><span class="pill">cache</span><span class="pill">judge</span><span class="pill">router</span></div>
+      <div class="arrow">&rarr;</div>
+      <div class="fbox"><div class="ft">providers</div><span class="pill">Anthropic</span><span class="pill">OpenAI</span><span class="pill">Gemini</span><span class="pill">NVIDIA NIM</span></div>
+    </div>
+    <div class="judgebox">
+      <div class="ft">local judge &rarr; router</div>
+      <div class="d">Qwen2.5 0.5B on llama.cpp, local, free.</div>
+      <div class="fall">Haiku fallback</div>
+    </div>
+    <div class="fledger" style="margin-top:24px">
+      <div class="frow"><span class="verb">In</span><span class="dots"></span><span class="txt">a request arrives as Anthropic or OpenAI JSON.</span></div>
+      <div class="frow"><span class="verb">Guard</span><span class="dots"></span><span class="txt">auth resolves your slice key, then the budget cap blocks anything over the line.</span></div>
+      <div class="frow"><span class="verb">Cache</span><span class="dots"></span><span class="txt">a repeat is served at once, never touching a provider.</span></div>
+      <div class="frow"><span class="verb">Route</span><span class="dots"></span><span class="txt">the router picks the served model: pin, then rule, then the judge on the auto path.</span></div>
+      <div class="frow"><span class="verb">Out</span><span class="dots"></span><span class="txt">the adapter calls the provider, then logging and the dashboard run after.</span></div>
+    </div>
+  </section>
+
+  <!-- THE JUDGE IS OURS -->
+  <section class="block" id="judge">
+    <div class="h-mark">our own model</div>
+    <h2>The judge is ours.</h2>
+    <p class="say">The router judge is a Qwen2.5 0.5B model, trained on slice's own routed traffic, scoring 92% on 100 unseen prompts. Shrunk to 4-bit, it runs on the same small box, answering in 259 to 365 ms per decision at zero cost per call. If it is down, Haiku steps in.</p>
+  </section>
+
+  <!-- HARD PROMPTS RUN A RELAY -->
+  <section class="block" id="relay">
+    <div class="h-mark">the hard tail</div>
+    <h2>Hard prompts run a relay.</h2>
+    <p class="say">A hard request does not jump to one expensive model. It runs a ladder, cheapest first, and stops the moment an answer is good enough. Gemini checks each draft, and only a fail climbs.</p>
+    <div class="fledger" style="margin-top:22px">
+      <div class="frow"><span class="verb">1 Worker</span><span class="dots"></span><span class="txt"><b>NIM</b> takes the easy, high-volume work first.</span></div>
+      <div class="frow"><span class="verb">2 Drafter</span><span class="dots"></span><span class="txt"><b>GPT</b> writes the first full answer for the rest.</span></div>
+      <div class="frow"><span class="verb">3 Checker</span><span class="dots"></span><span class="txt"><b>Gemini</b> reads the draft and decides good or wrong.</span></div>
+      <div class="frow"><span class="verb">4 Closer</span><span class="dots"></span><span class="txt"><b>Sonnet</b> steps in only for the hard part, last and least.</span></div>
+    </div>
+    <p class="say" style="margin-top:22px">Take a team sending 1,000 requests a day. Straight to a strong model, a typical 1,000-in, 500-out request costs about $0.0105, so about $315 a month. Through the relay, say 700 land on the near-free NIM worker, 240 pass the Gemini check at the GPT rung, and 60 climb to Sonnet, plus the router judge running locally on all 1,000 at no cost per call. The day lands near $3 against about $10.50 going direct, roughly a 70% cut on the same work.</p>
+  </section>
+
+  <!-- ASK SLICE FROM CLAUDE CODE -->
+  <section class="block" id="ask">
+    <div class="h-mark">inside your editor</div>
+    <h2>Ask slice from Claude Code.</h2>
+    <p class="say">slice ships an MCP server with six tools, so you can ask about spend, rules, recent requests, and eval without leaving Claude Code. Type a plain question and the answer comes back inline.</p>
+    <figure class="shotfig">
+      <div class="lab">Claude Code: your spend this month</div>
+      <img src="img/mcp-08-spend.png" width="2850" height="914" loading="lazy" alt="Claude Code showing this month's slice spend against the budget">
+    </figure>
+    <figure class="shotfig">
+      <div class="lab">Claude Code: your last five requests</div>
+      <img src="img/mcp-09-requests.png" width="3456" height="808" loading="lazy" alt="Claude Code showing the last five requests with model, cost, and routed from">
+    </figure>
+    <p class="conn-note">Set it up in one command. See <a href="https://sliceapp.dev/how-to#ask" target="_blank" rel="noopener">the how-to</a> for the steps.</p>
   </section>
 
   <!-- ALERTS -->
