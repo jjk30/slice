@@ -129,14 +129,18 @@ def test_site_header_links_to_how_to():
 
 
 def test_every_get_started_link_goes_to_the_install_section(how_to):
-    """Get started means the how-to page; the dashboard is reached from that page's own
-    Open the dashboard button at the bottom. Both pages are checked, and the page's own
-    section nav still has its install anchor."""
+    """On index, Get started means the how-to page. On the how-to page itself that
+    destination is the current page, so its Get started scrolls to the install section
+    instead. The dashboard is reached from the how-to page's own Open the dashboard
+    button at the bottom."""
     index = INDEX.read_text(encoding="utf-8")
     assert 'id="install"' in how_to
-    links = re.findall(r'<a[^>]*href="([^"]*)"[^>]*>\s*(?:<svg[^>]*>.*?</svg>)?\s*Get started\s*</a>', index + how_to, re.S)
-    assert len(links) == 3, links
-    assert set(links) == {"https://sliceapp.dev/how-to"}
+    pattern = r'<a[^>]*href="([^"]*)"[^>]*>\s*(?:<svg[^>]*>.*?</svg>)?\s*Get started\s*</a>'
+    index_links = re.findall(pattern, index, re.S)
+    how_to_links = re.findall(pattern, how_to, re.S)
+    assert len(index_links) == 2, index_links
+    assert set(index_links) == {"https://sliceapp.dev/how-to"}
+    assert how_to_links == ["#install"]
     assert 'href="https://sliceapp.dev/dashboard"' in how_to and "Open the dashboard" in how_to
 
 
