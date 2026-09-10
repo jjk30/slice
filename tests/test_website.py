@@ -283,9 +283,22 @@ STEP_02_SCREENSHOTS = [
 ]
 # Step 03: the three export lines, the curl run twice, and the Recent calls panel.
 STEP_03_SCREENSHOTS = ["03-slice-use.png", "03-curl-twice.png", "03-recent-calls.png"]
+# The "Ask slice from Claude Code" section (MCP): install, add, trust, then the /mcp walk,
+# the permission prompt and the spend answer, then the recent-requests answer.
+MCP_SCREENSHOTS = [
+    "mcp-01-install.png",
+    "mcp-02-add.png",
+    "mcp-03-trust.png",
+    "mcp-04-connected.png",
+    "mcp-05-server.png",
+    "mcp-06-tools.png",
+    "mcp-07-permission.png",
+    "mcp-08-spend.png",
+    "mcp-09-requests.png",
+]
 # Step 07: the alert email in Gmail, then the three kinds of reply.
 STEP_07_SCREENSHOTS = ["07-alert-email.png", "07-reply-own-data.png", "07-reply-general.png", "07-reply-blocked.png"]
-SCREENSHOTS = ["01-install.png", *STEP_02_SCREENSHOTS, *STEP_03_SCREENSHOTS, *STEP_07_SCREENSHOTS]
+SCREENSHOTS = ["01-install.png", *STEP_02_SCREENSHOTS, *STEP_03_SCREENSHOTS, *MCP_SCREENSHOTS, *STEP_07_SCREENSHOTS]
 
 STEP_02_LABELS = [
     "Terminal after slice login",

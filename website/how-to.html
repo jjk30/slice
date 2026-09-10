@@ -151,17 +151,18 @@
   <section class="lede-h">
     <div class="h-mark">how to</div>
     <h1>Set up slice, step by step.</h1>
-    <p>Eight short steps, from install to uninstall. Every block below can be copied with the button in its top right corner.</p>
-    <p>Tested on Mac and Linux. The Windows lines are standard PowerShell.</p>
+    <p>Nine short steps, from install to uninstall. Every block below can be copied with the button in its top right corner.</p>
+    <p>Tested on Mac and Linux. The Windows lines are standard PowerShell. It all works the same in the terminal inside VS Code.</p>
     <ul class="toc">
       <li><a href="#install"><span class="n">01</span>Install</a></li>
       <li><a href="#login"><span class="n">02</span>Log in</a></li>
       <li><a href="#tools"><span class="n">03</span>Point your tools at slice</a></li>
-      <li><a href="#spend"><span class="n">04</span>Watch spend</a></li>
-      <li><a href="#aws"><span class="n">05</span>Connect AWS</a></li>
-      <li><a href="#actions"><span class="n">06</span>GitHub Actions</a></li>
-      <li><a href="#alerts"><span class="n">07</span>Alert emails</a></li>
-      <li><a href="#uninstall"><span class="n">08</span>Uninstall and revoke</a></li>
+      <li><a href="#ask"><span class="n">04</span>Ask slice from Claude Code</a></li>
+      <li><a href="#spend"><span class="n">05</span>Watch spend</a></li>
+      <li><a href="#aws"><span class="n">06</span>Connect AWS</a></li>
+      <li><a href="#actions"><span class="n">07</span>GitHub Actions</a></li>
+      <li><a href="#alerts"><span class="n">08</span>Alert emails</a></li>
+      <li><a href="#uninstall"><span class="n">09</span>Uninstall and revoke</a></li>
     </ul>
   </section>
 
@@ -371,6 +372,7 @@ Logged in as your username (account 1).</pre>
       <span><code>(your slice key)</code>: your slice login key. Starts with slk_live_. Easiest: run <code>slice use claude-code</code> and it prints these three lines with your slice key already in. Or open <code>~/.slice/config.json</code> and copy it from there.</span>
       <span>Delete the brackets when you paste.</span>
       <span>Paste the three lines only into your terminal, they hold your key.</span>
+      <span>These three lines last only for the open terminal window. Close it and you set them again, or put them in your shell profile.</span>
     </div>
     <figure class="shot">
       <div class="lab">Terminal after slice use claude-code</div>
@@ -435,9 +437,142 @@ message = client.messages.create(
     </figure>
   </section>
 
-  <!-- 04 WATCH SPEND -->
+  <!-- 04 ASK SLICE FROM CLAUDE CODE -->
+  <section class="block" id="ask">
+    <h2><span class="no">04</span>Ask slice from Claude Code</h2>
+    <p class="say">Every step here works in the Mac Terminal, the Linux terminal, PowerShell on Windows, or the terminal inside VS Code. Same commands.</p>
+    <p>The pictures are from my Mac. Your username, folder names, times, and numbers will look different. That is fine.</p>
+
+    <p><b>1. Get the latest slice.</b> Upgrade the package, then list what pipx put on your machine. You should see both <code>slice</code> and <code>slice-mcp</code>.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre data-os="mac linux"><span class="dim">$</span> pipx upgrade slice-gateway
+<span class="dim">$</span> pipx list</pre>
+<pre data-os="win" hidden><span class="dim">&gt;</span> pipx upgrade slice-gateway
+<span class="dim">&gt;</span> pipx list</pre>
+    </div>
+    <figure class="shot">
+      <div class="lab">Terminal after pipx upgrade</div>
+      <img src="img/mcp-01-install.png" width="1038" height="324" loading="lazy" alt="Terminal after pipx upgrade slice-gateway, with pipx list showing slice and slice-mcp">
+    </figure>
+    <p>slice-mcp with no key prints a short error. That is expected. It just proves the command is installed.</p>
+
+    <p><b>2. Set your three keys.</b> These are the same three as the Claude Code section above. <code>slice use claude-code</code> prints them with your slice key filled in.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre data-os="mac linux"><span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="st">https://api.sliceapp.dev</span>
+<span class="kw">export</span> ANTHROPIC_API_KEY=<span class="ph">(your own Anthropic key)</span>
+<span class="kw">export</span> ANTHROPIC_AUTH_TOKEN=<span class="ph">(your slice key)</span></pre>
+<pre data-os="win" hidden><span class="kw">$env:</span>ANTHROPIC_BASE_URL=<span class="st">"https://api.sliceapp.dev"</span>
+<span class="kw">$env:</span>ANTHROPIC_API_KEY="<span class="ph">(your own Anthropic key)</span>"
+<span class="kw">$env:</span>ANTHROPIC_AUTH_TOKEN="<span class="ph">(your slice key)</span>"</pre>
+    </div>
+    <div class="fill">
+      <b>Do not mix the two keys up.</b>
+      <span>The Anthropic key starts <code>sk-ant-api</code> and comes from console.anthropic.com. It is the one that pays Anthropic.</span>
+      <span>The slice key starts <code>slk_live_</code> and comes from sliceapp.dev/settings. It is your slice login key.</span>
+      <span>These three lines last only for the open terminal window. Close it and you set them again, or put the three lines in your shell profile.</span>
+    </div>
+
+    <p><b>3. Register the MCP with Claude Code.</b> One command adds it. <code>-s user</code> means it works from any folder, not just the one you are in.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre data-os="mac linux"><span class="dim">$</span> claude mcp add slice -s user -e SLICE_API_KEY=$ANTHROPIC_AUTH_TOKEN -- slice-mcp</pre>
+<pre data-os="win" hidden><span class="dim">&gt;</span> claude mcp add slice -s user -e SLICE_API_KEY=$env:ANTHROPIC_AUTH_TOKEN -- slice-mcp</pre>
+    </div>
+    <figure class="shot">
+      <div class="lab">Terminal after claude mcp add</div>
+      <img src="img/mcp-02-add.png" width="1228" height="248" loading="lazy" alt="Terminal after claude mcp add slice, confirming the slice MCP server was added">
+    </figure>
+    <p>If you ever need to redo it, run <code>claude mcp remove slice -s user</code> first.</p>
+
+    <p><b>4. Start Claude Code.</b> Run <code>claude</code> in your project folder. Two things you may see.</p>
+    <div class="term">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
+        <div class="tabs" role="tablist" aria-label="Operating system"><button class="tab on" type="button" role="tab" aria-selected="true" data-os="mac"><img class="ti mac" src="apple.png" alt="" width="16" height="16">Mac</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="linux"><img class="ti" src="tux.png" alt="" width="16" height="16">Linux</button><button class="tab" type="button" role="tab" aria-selected="false" data-os="win"><img class="ti" src="windows.svg" alt="" width="16" height="16">Windows</button></div>
+        <button class="copy" type="button" aria-label="Copy command">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+          <svg class="ic-done" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+<pre data-os="mac linux"><span class="dim">$</span> claude</pre>
+<pre data-os="win" hidden><span class="dim">&gt;</span> claude</pre>
+    </div>
+    <ul>
+      <li>A yellow warning that both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY are set. Ignore it. slice needs both. One is your slice key, one is your Anthropic key.</li>
+      <li>The first time in a folder, it asks "Is this a project you trust?". Pick <b>Yes, I trust this folder</b>.</li>
+    </ul>
+    <figure class="shot">
+      <div class="lab">Claude Code: trust this folder</div>
+      <img src="img/mcp-03-trust.png" width="3448" height="516" loading="lazy" alt="Claude Code asking Is this a project you trust, with Yes I trust this folder as the choice">
+    </figure>
+
+    <p><b>5. Check it is connected.</b> Type <code>/mcp</code> and press Enter. You should see <b>slice, connected, 6 tools</b>.</p>
+    <figure class="shot">
+      <div class="lab">Claude Code: /mcp shows slice connected</div>
+      <img src="img/mcp-04-connected.png" width="3456" height="380" loading="lazy" alt="Claude Code /mcp panel showing slice connected with 6 tools">
+    </figure>
+    <p>Press Enter on <b>slice</b> to see the details. The command is <code>slice-mcp</code>.</p>
+    <figure class="shot">
+      <div class="lab">Claude Code: the slice server details</div>
+      <img src="img/mcp-05-server.png" width="3456" height="494" loading="lazy" alt="Claude Code showing the slice server details, with the command slice-mcp">
+    </figure>
+    <p>Press Enter on <b>View tools</b> to see the six tools. Press Esc three times to get back to the prompt.</p>
+    <figure class="shot">
+      <div class="lab">Claude Code: the six slice tools</div>
+      <img src="img/mcp-06-tools.png" width="3456" height="394" loading="lazy" alt="Claude Code listing the six slice tools">
+    </figure>
+
+    <p><b>6. Ask it something.</b> Type <b>what is my slice spend this month</b>. The first time, it asks <b>Do you want to proceed?</b>.</p>
+    <figure class="shot">
+      <div class="lab">Claude Code: the permission prompt</div>
+      <img src="img/mcp-07-permission.png" width="3454" height="896" loading="lazy" alt="Claude Code asking Do you want to proceed before running a slice tool">
+    </figure>
+    <p>Pick <b>2, Yes, and don't ask again</b>, so it stops asking for that tool. Pick <b>1</b> to be asked every time. Pick <b>3</b> to say no. It asks once per tool, so you will see it again for the next tool. Then the answer.</p>
+    <figure class="shot">
+      <div class="lab">Claude Code: your spend this month</div>
+      <img src="img/mcp-08-spend.png" width="2850" height="914" loading="lazy" alt="Claude Code showing this month's slice spend against the budget">
+    </figure>
+
+    <p><b>7. Try another.</b> Type <b>what did my last 5 requests cost</b>.</p>
+    <figure class="shot">
+      <div class="lab">Claude Code: your last five requests</div>
+      <img src="img/mcp-09-requests.png" width="3456" height="808" loading="lazy" alt="Claude Code showing the last five requests with model, cost, and routed from">
+    </figure>
+    <p>Every request that says routed from opus-5 was answered by Haiku at a fraction of the cost. That is slice working.</p>
+
+    <h3>The six tools</h3>
+    <ul class="tight">
+      <li><code>get_spend</code>: this month's spend against your budget.</li>
+      <li><code>list_rules</code>: your model-routing rules.</li>
+      <li><code>get_recent_requests</code>: your last calls, with model, cost, and time.</li>
+      <li><code>get_eval_summary</code>: the eval pass rate.</li>
+      <li><code>add_rule</code>: add a routing rule.</li>
+      <li><code>delete_rule</code>: remove a routing rule.</li>
+    </ul>
+  </section>
+
+  <!-- 05 WATCH SPEND -->
   <section class="block" id="spend">
-    <h2><span class="no">04</span>Watch spend</h2>
+    <h2><span class="no">05</span>Watch spend</h2>
     <p class="say">The dashboard is at <a href="https://sliceapp.dev/dashboard" target="_blank" rel="noopener">sliceapp.dev/dashboard</a>. Sign in with GitHub. The first time, it asks for an email so slice can reach you.</p>
 
     <h3>The five tiles</h3>
@@ -459,9 +594,9 @@ message = client.messages.create(
     </ul>
   </section>
 
-  <!-- 05 CONNECT AWS -->
+  <!-- 06 CONNECT AWS -->
   <section class="block" id="aws">
-    <h2><span class="no">05</span>Connect AWS</h2>
+    <h2><span class="no">06</span>Connect AWS</h2>
     <p class="say">Optional. Connect a read-only role and the dashboard shows your AWS bill next to your AI spend. slice also scans the account once a day for risks and waste.</p>
     <ol>
       <li>In the dashboard, click <b>Settings</b>. Find <b>Connect AWS (optional)</b>.</li>
@@ -501,9 +636,9 @@ message = client.messages.create(
     <p>To disconnect, delete the <code>slice-scanner-role</code> stack in CloudFormation. slice's access ends the moment the role is gone.</p>
   </section>
 
-  <!-- 06 GITHUB ACTIONS -->
+  <!-- 07 GITHUB ACTIONS -->
   <section class="block" id="actions">
-    <h2><span class="no">06</span>GitHub Actions</h2>
+    <h2><span class="no">07</span>GitHub Actions</h2>
     <p class="say">There is no slice action. A workflow step can call the gateway with curl. Store two repository secrets: <code>SLICE_KEY</code> and <code>ANTHROPIC_API_KEY</code>.</p>
     <p><b>Paste the key on its own.</b> When you paste a key into a GitHub secret, make sure nothing comes after it, no Enter and no space. A stray Enter breaks the request and slice answers 400 <b>Request body is not valid JSON</b>. On a Mac you can clean the clipboard first with <code>pbpaste | tr -d '\r\n ' | pbcopy</code>.</p>
     <p><b>A key for CI.</b> Make it in the dashboard: open <b>Your slice key</b> and click <b>Create new key</b>. Copy it once. This revokes every other live key on the account, including your laptop's, so run <code>slice login</code> again afterwards. A CLI login does not revoke a dashboard key.</p>
@@ -529,9 +664,9 @@ message = client.messages.create(
     <p>Every call from CI shows up in the dashboard and counts against the same account cap.</p>
   </section>
 
-  <!-- 07 ALERT EMAILS -->
+  <!-- 08 ALERT EMAILS -->
   <section class="block" id="alerts">
-    <h2><span class="no">07</span>Alert emails</h2>
+    <h2><span class="no">08</span>Alert emails</h2>
     <p class="say">slice scans a connected AWS account once a day. When a scan finds new high-risk items, you get one email about them, at most one an hour. The budget warning and the block from step 04 arrive the same way.</p>
     <p>Each finding is three short lines: what it is, why it matters, and the first thing to do. Then a <b>Read more</b> link to the AWS doc page for that check. Here is one:</p>
     <figure class="shot">
@@ -559,9 +694,9 @@ message = client.messages.create(
     </figure>
   </section>
 
-  <!-- 08 UNINSTALL -->
+  <!-- 09 UNINSTALL -->
   <section class="block" id="uninstall">
-    <h2><span class="no">08</span>Uninstall and revoke</h2>
+    <h2><span class="no">09</span>Uninstall and revoke</h2>
     <p class="say">Remove the CLI and its saved key, then revoke the key on the server.</p>
     <div class="term">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Terminal</span>
