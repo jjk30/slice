@@ -45,14 +45,14 @@
   .h-mark{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--green);margin-bottom:14px}
 
   /* two-column layout: sticky step rail on the left, content on the right */
-  .layout{max-width:1006px;margin:0 auto;padding:0 24px;display:grid;grid-template-columns:230px 1fr;gap:0 56px;align-items:start}
+  .layout{max-width:1120px;margin:0 auto;padding:0 32px;display:grid;grid-template-columns:230px minmax(0,1fr);gap:0 56px;align-items:start}
   .layout .lede-h{grid-column:2;grid-row:1}
   .layout .blocks{grid-column:2;grid-row:2}
   .steps{grid-column:1;grid-row:1 / span 2;position:sticky;top:24px}
   .steps ol{list-style:none;margin:0;padding:0}
   .steps li{border-top:1px solid var(--rule)}
   .steps li:last-child{border-bottom:1px solid var(--rule)}
-  .steps a{display:block;font-family:var(--mono);font-size:13.5px;color:var(--muted);padding:10px 14px;border-left:2px solid transparent;transition:color .14s ease,background .14s ease,border-color .14s ease}
+  .steps a{display:block;font-family:var(--mono);font-size:13.5px;color:var(--muted);padding:10px 14px 10px 0;border-left:2px solid transparent;transition:color .14s ease,background .14s ease,border-color .14s ease}
   .steps a .n{color:var(--green);margin-right:10px}
   .steps a:hover{color:var(--ink);background:#fff}
   .steps a.active{color:var(--ink);background:#fff;border-left-color:var(--green)}
