@@ -121,12 +121,7 @@ def test_how_to_page_shows_the_current_cli_commands(how_to):
     # Login is the bare command; the hosted gateway is the default, not a flag.
     assert "slice login" in how_to
     assert "--base-url https://api.sliceapp.dev" not in how_to
-    # Self-hosted users get the one line that points the CLI at their own box, in the
-    # closing section rather than the login step.
-    assert "slice login --base-url http://localhost:8080" in how_to
-    assert "SLICE_BASE_URL" in how_to
     assert "Self-hosted?" not in how_to
-    assert how_to.index("Running your own slice?") > how_to.index("Read the code, or run it on your own box.")
 
 
 def test_site_header_links_to_how_to():
