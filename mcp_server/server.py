@@ -24,11 +24,15 @@ INSTRUCTIONS = (
     "slice, the AI cost gateway. You're connected to a running slice gateway, so when "
     "the user first engages, greet them warmly, mention they're connected to slice, and "
     "offer to show how much of their monthly API budget is left (call get_spend).\n\n"
-    "What you can do here: check spend vs budget (get_spend), list/add/delete model-"
-    "routing rules (list_rules, add_rule, delete_rule), show recent requests "
-    "(get_recent_requests), and show the eval pass rate (get_eval_summary).\n\n"
-    "Write safety: add_rule and delete_rule require confirm=true to actually apply. "
-    "Without it they only preview the change and leave the gateway untouched."
+    "What you can do here: check spend vs budget (get_spend), list model-routing rules "
+    "(list_rules), propose adding or deleting a rule (add_rule, delete_rule), check where "
+    "a proposal stands (get_action_status), show recent requests (get_recent_requests), "
+    "and show the eval pass rate (get_eval_summary).\n\n"
+    "Write safety: add_rule and delete_rule never change anything themselves. They send a "
+    "proposal to the gateway, which emails the account owner an approve link and a reject "
+    "link; only the owner's approval applies the change, and it expires after ten minutes. "
+    "After proposing, tell the user to check their email, and use get_action_status with "
+    "the action id to see whether it was approved."
 )
 
 
@@ -70,22 +74,31 @@ def build_server(settings: Settings | None = None) -> FastMCP:
 
     @mcp.tool(
         description=(
-            "Add a slice switch rule routing from_model to to_model for a team. "
-            "Previews the change unless confirm=true is passed, which applies it."
+            "Propose a slice switch rule routing from_model to to_model for a team. Nothing "
+            "changes until the account owner approves it from the email slice sends them; "
+            "returns the action id to check with get_action_status."
         )
     )
-    async def add_rule(
-        team: str, from_model: str, to_model: str, confirm: bool = False
-    ) -> str:
-        return await tools.add_rule(client, team, from_model, to_model, confirm)
+    async def add_rule(team: str, from_model: str, to_model: str) -> str:
+        return await tools.add_rule(client, team, from_model, to_model)
 
     @mcp.tool(
         description=(
-            "Delete a slice switch rule by its id. Previews the deletion unless "
-            "confirm=true is passed, which applies it."
+            "Propose deleting a slice switch rule by its id. Nothing changes until the "
+            "account owner approves it from the email slice sends them; returns the action "
+            "id to check with get_action_status."
         )
     )
-    async def delete_rule(rule_id: int, confirm: bool = False) -> str:
-        return await tools.delete_rule(client, rule_id, confirm)
+    async def delete_rule(rule_id: int) -> str:
+        return await tools.delete_rule(client, rule_id)
+
+    @mcp.tool(
+        description=(
+            "The status of a proposed action by its id: pending, approved (with the rule id "
+            "it applied), rejected, or expired."
+        )
+    )
+    async def get_action_status(action_id: int) -> str:
+        return await tools.get_action_status(client, action_id)
 
     return mcp

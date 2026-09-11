@@ -729,11 +729,13 @@ class ResendEmailChannel:
         subject: str,
         text: str,
         headers: dict[str, str] | None = None,
+        html: str | None = None,
     ) -> DeliveryResult:
         """One arbitrary email from the configured sender (phase 23b). Never raises.
 
-        ``text`` is the body; the HTML version is rendered from it (phase 26), so both
-        go to Resend and the text stays the fallback.
+        ``text`` is the body; the HTML version is rendered from it (phase 26) unless the
+        caller hands in its own ``html`` (phase 32b, the approval email with its buttons),
+        so both go to Resend and the text stays the fallback.
 
         The reply-by-email assistant answers the sender of an inbound mail, so the
         recipient is per call rather than the channel's fixed ``to`` list; ``headers``
@@ -749,7 +751,7 @@ class ResendEmailChannel:
             "to": recipients,
             "subject": subject,
             "text": text,
-            "html": render_html(text),
+            "html": html if html is not None else render_html(text),
         }
         if headers:
             payload["headers"] = dict(headers)

@@ -66,7 +66,7 @@ PS I was craving a slice of cake when I thought about this, hence the logo, the 
 - **Alerts.** Budget warnings, budget blocks, and new high-risk cloud findings fire by email.
 - **AWS scanner.** A read-only scan of a connected AWS account for security risks and cost waste, with a daily Cost Explorer pull.
 - **Live dashboard.** A Vue single-page app streams spend, routing, cache, and eval numbers over Server-Sent Events.
-- **MCP server.** A stdio MCP server exposes spend, rules, recent requests, and eval summaries to an MCP client.
+- **MCP server.** A stdio MCP server exposes spend, rules, recent requests, and eval summaries to an MCP client. Rule writes are proposed by the agent and approved by a person from an email link; the agent cannot apply a change itself.
 - **CLI.** A `slice` command logs you in through GitHub and prints the lines that point a tool at the gateway.
 
 ## The number
@@ -166,7 +166,7 @@ Only auto-routed-down, non-streaming requests enter the loop. It tries the cheap
 - **Slice keys** (`slk_live_...`) are stored as SHA-256 hashes, tied to one account, revocable from the dashboard.
 - **Provider keys**: Anthropic always uses the caller's own `x-api-key`, forwarded and never stored. OpenAI, Gemini, and NIM use server keys held in AWS Secrets Manager.
 - **Fail closed on auth, fail open on availability.** A bad, missing, or revoked key is a 401 and an unreadable key store is a 503. A down Redis is skipped and traffic flows.
-- **Writes need auth**, both on the API and through MCP, where write tools require a confirmation step.
+- **Writes need auth**, and through MCP they need a person. An MCP write tool only proposes a change; the gateway emails the account owner an approve link and a reject link, and only the approval applies it. Links are one use, expire in ten minutes, and carry a random token stored only as a hash.
 - **The AWS scanner** uses a read-only IAM role created by a one-click CloudFormation template in the user's account, and only ever reads.
 - **What slice sees.** What your tool sends to the model, the same text the provider gets. Per request it logs model, tokens, cost, status, latency, and team, keeps the first 4,000 characters of the prompt (`prompt_text`, for the RAG index), and caches responses for `CACHE_TTL_SECONDS` (3600 by default). Eval rows hold scores, not text. No other prompt or answer text is kept.
 - **What slice never touches.** Your repo, your machine, your environment variables. Provider keys are forwarded, never stored. The AWS role makes eleven read calls (`list_buckets`, `get_bucket_acl`, `get_bucket_policy_status`, `get_public_access_block`, `get_bucket_encryption`, `describe_security_groups`, `describe_volumes`, `describe_instances`, `list_users`, `list_attached_user_policies`, `get_cost_and_usage`) and never `get_object` or `list_objects`. It reads settings and the bill, not files or secrets.
@@ -230,7 +230,7 @@ This is a relay, not a council. The four models pass work down a ladder in order
 | Providers | Anthropic, OpenAI, Google Gemini, NVIDIA NIM | Anthropic is the wire format; the others translate. NIM adds open models with free credits. |
 | Dashboard | Vue 3, Vite, Chart.js | Single-page app fed by read endpoints and a live SSE stream. |
 | Alerts | Resend | Email alerts through Resend, fire and forget. |
-| MCP | mcp (FastMCP) | Stdio server exposing spend, rules, recent requests, and eval over HTTP to the gateway. |
+| MCP | mcp (FastMCP) | Stdio server exposing spend, rules, recent requests, and eval over HTTP to the gateway. Writes go through email approval. |
 | Fine-tuning | Hugging Face PEFT on a Colab T4 | Own judge trained on own logs, free GPU, honest benchmark. |
 | Infra | Terraform, Docker, Caddy, AWS (EC2, ECR, S3, Secrets Manager, Route 53, IAM with OIDC, SSM) | One EC2 box behind Caddy with TLS; the ECS stack kept in Terraform for demos. |
 | Monitoring | Prometheus, Grafana | `slice_*` counters and histograms scraped from `/metrics`. |
@@ -331,7 +331,7 @@ Requests route to one of four upstreams, picked by the model name: `claude-*` to
 ```
 app/            FastAPI gateway: router, judge, agent loop, adapters, auth, cache, budgets, eval, guardrails, scanner, alerts, dashboard API, CLI
 adapters/       Provider adapters: Anthropic, OpenAI, Google Gemini, NVIDIA NIM (under app/)
-mcp_server/     Stdio MCP server exposing gateway reads and rule writes
+mcp_server/     Stdio MCP server exposing gateway reads and email-approved rule writes
 dashboard/      Vue 3 + Vite single-page dashboard
 demo/           Fixed-batch cost demo: runner, prompts, results
 colab/          LoRA judge now in production: training notebook, RAGAS comparison against the live router

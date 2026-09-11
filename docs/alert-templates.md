@@ -277,3 +277,48 @@ turns go to the topic rail (so a follow-up like "the cheaper option you mentione
 is judged as the question it really is), the answer prompt, and the output rail. Only the real content of
 an answer is kept, without the footer, disclaimer or connect lines; blocked, limited and
 failed mails are never stored, and if Redis is down there is simply no memory.
+
+---
+
+## Approval email (phase 32)
+
+Sent by `POST /actions/propose` (`app/actions.py`) when an MCP agent proposes adding or
+deleting a routing rule. Goes to the account's saved profile email. Unlike the alerts
+above, its HTML is not rendered from the text by `render_html`: it is its own table
+layout with inline styles, Helvetica/Arial (Gmail strips web fonts), the hosted cake logo
+(`https://sliceapp.dev/logo.png`, never base64), a change card (Team, Route, Asked by,
+Expires), then two buttons, "Approve change" (teal `#0F6E56`, white text) and "Reject"
+(white, thin border). The text below is the plain fallback and says the same things.
+`{expires}` is ten minutes after the proposal, in `ALERT_TIMEZONE`. `{asked_by}` names the slice key the request rode in on the way the dashboard's key card does, display prefix plus device name (`slk_live_ab12... on cli:my-laptop`); with auth off it reads `An agent using your slice key`.
+
+**Subject:** `slice: approve a change to your routing rules`
+
+```
+An agent wants to change a routing rule
+
+{sentence}
+
+Team: {team}
+Route: {route}
+Asked by: {asked_by}
+Expires: {expires}
+
+Approve change: {approve_url}
+
+Reject: {reject_url}
+
+Each link works once, and both stop working at {expires}. If you did not expect this, reject it or ignore it.
+
+slice is an AI. Please double check before you change your AI setup.
+
+Sent {time}
+```
+
+`{sentence}` is one of:
+
+- `slice will add a rule for team {team} that sends {from_model} requests to {to_model} instead.`
+- `slice will delete rule #{id} for team {team}, which sends {from_model} requests to {to_model}.`
+
+The links land on a small page in the site's own fonts and colors: a centered card with a
+green check for "Change approved", a red cross for "Change rejected", and a muted mark for
+"This link has expired" and "This link was already used".

@@ -15,6 +15,11 @@ account A can never see or touch account B's rules, scores, events, alerts, or k
 Writes to rules persist to Postgres and then refresh the in-memory rules cache
 immediately, so a newly created or deleted rule takes effect on the very next request
 rather than waiting out the background reload interval.
+
+Phase 32: the validation (``validate_rule_fields``, ``validate_rule_id``) and the two
+writes (``apply_add_rule``, ``apply_delete_rule``) are module-level functions so the
+approval flow in ``app.actions`` runs exactly the same checks and the same writes as
+the direct endpoints here, never a copy of them.
 """
 
 from __future__ import annotations
@@ -30,6 +35,14 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 def _error(status: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": {"message": message}})
+
+
+def _anthropic_error(status: int, error_type: str, message: str) -> JSONResponse:
+    """The same Anthropic-shaped error body the /v1 proxy returns (app/main.py)."""
+    return JSONResponse(
+        status_code=status,
+        content={"type": "error", "error": {"type": error_type, "message": message}},
+    )
 
 
 def _rule_json(rule) -> dict:
@@ -59,6 +72,126 @@ def _no_account() -> JSONResponse:
     return _error(401, "Missing slice key. Send it as 'Authorization: Bearer slk_...'.")
 
 
+class RuleWriteError(Exception):
+    """A rule write that could not be applied, with the status the caller should answer with."""
+
+    def __init__(self, status: int, message: str) -> None:
+        self.status = status
+        self.message = message
+        super().__init__(message)
+
+
+class RuleExistsError(RuleWriteError):
+    """An exact duplicate of a rule the account already has (phase 32c). Carries that rule."""
+
+    def __init__(self, rule: dict) -> None:
+        self.rule = rule
+        super().__init__(409, RULE_EXISTS_MESSAGE)
+
+
+RULE_EXISTS_MESSAGE = "This rule already exists."
+
+
+def _rule_key(team, from_model, to_model) -> tuple[str, str, str]:
+    """The identity of a rule for the duplicate check: stripped, case-insensitive."""
+    return tuple(str(value or "").strip().lower() for value in (team, from_model, to_model))
+
+
+async def find_duplicate_rule(db, account_id: int | None, fields: dict) -> dict | None:
+    """The account's existing rule with the same team, from_model and to_model (after strip,
+    case-insensitive), or None. Reads the store, not the cache, so a rule written a moment
+    ago by another process still counts. Raises ``RuleWriteError`` (503) when the store
+    cannot be read: a write must not go ahead on an unanswered question.
+    """
+    if db is None or not getattr(db, "enabled", False):
+        raise RuleWriteError(503, "Rule storage is unavailable (database not connected).")
+    try:
+        rows = await db.load_rules()
+    except Exception as exc:  # noqa: BLE001
+        raise RuleWriteError(503, "Could not check existing rules.") from exc
+    wanted = _rule_key(fields["team"], fields["from_model"], fields["to_model"])
+    for row in rows:
+        if row.get("account_id") != account_id:
+            continue
+        if _rule_key(row.get("team"), row.get("from_model"), row.get("to_model")) == wanted:
+            return dict(row)
+    return None
+
+
+def validate_rule_fields(body) -> tuple[dict | None, str | None]:
+    """The stripped ``{team, from_model, to_model}`` from a JSON body, or an error message.
+
+    The one set of rules for a new switch rule: every field a non-empty string, and the
+    two models different. ``POST /admin/rules`` and ``POST /actions/propose`` both use it.
+    """
+    if not isinstance(body, dict):
+        return None, "Request body must be a JSON object."
+    fields = {}
+    for name in ("team", "from_model", "to_model"):
+        value = body.get(name)
+        if not isinstance(value, str) or not value.strip():
+            return None, f"'{name}' is required and must be a non-empty string."
+        fields[name] = value.strip()
+    if fields["from_model"] == fields["to_model"]:
+        return None, "'from_model' and 'to_model' must differ."
+    return fields, None
+
+
+def validate_rule_id(value) -> tuple[int | None, str | None]:
+    """A positive integer rule id from any JSON value, or an error message."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return None, "'rule_id' is required and must be a positive integer."
+    try:
+        rule_id = int(value)
+    except (TypeError, ValueError):
+        return None, "'rule_id' is required and must be a positive integer."
+    if rule_id <= 0:
+        return None, "'rule_id' is required and must be a positive integer."
+    return rule_id, None
+
+
+async def apply_add_rule(db, rules, account_id: int | None, fields: dict) -> dict:
+    """Store one validated rule for ``account_id`` and refresh the cache. Returns the row.
+
+    Raises ``RuleWriteError`` (503) when storage is missing or the insert fails, and
+    ``RuleExistsError`` (409) when the account already has this exact rule.
+    """
+    if db is None or not getattr(db, "enabled", False):
+        raise RuleWriteError(503, "Rule storage is unavailable (database not connected).")
+    existing = await find_duplicate_rule(db, account_id, fields)
+    if existing is not None:
+        raise RuleExistsError(existing)
+    try:
+        row = await db.add_rule(
+            fields["team"], fields["from_model"], fields["to_model"], account_id=account_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise RuleWriteError(503, "Could not store the rule.") from exc
+    if rules is not None:
+        await rules.refresh()
+    return dict(row)
+
+
+async def apply_delete_rule(db, rules, account_id: int | None, rule_id: int) -> int:
+    """Delete one of ``account_id``'s rules and refresh the cache. Returns the deleted id.
+
+    Raises ``RuleWriteError``: 503 when storage is missing or the delete fails, 404 when
+    no such rule belongs to the account (another account's rule is a 404, not a 403: its
+    existence is not the caller's business either).
+    """
+    if db is None or not getattr(db, "enabled", False):
+        raise RuleWriteError(503, "Rule storage is unavailable (database not connected).")
+    try:
+        deleted = await db.delete_rule(rule_id, account_id=account_id)
+    except Exception as exc:  # noqa: BLE001
+        raise RuleWriteError(503, "Could not delete the rule.") from exc
+    if not deleted:
+        raise RuleWriteError(404, f"No rule with id {rule_id}.")
+    if rules is not None:
+        await rules.refresh()
+    return rule_id
+
+
 @router.get("/rules")
 async def list_rules(request: Request):
     """The caller's switch rules currently in effect."""
@@ -81,36 +214,20 @@ async def create_rule(request: Request):
         body = await request.json()
     except Exception:  # noqa: BLE001
         return _error(400, "Request body is not valid JSON.")
-    if not isinstance(body, dict):
-        return _error(400, "Request body must be a JSON object.")
 
-    fields = {}
-    for name in ("team", "from_model", "to_model"):
-        value = body.get(name)
-        if not isinstance(value, str) or not value.strip():
-            return _error(400, f"'{name}' is required and must be a non-empty string.")
-        fields[name] = value.strip()
-
-    if fields["from_model"] == fields["to_model"]:
-        return _error(400, "'from_model' and 'to_model' must differ.")
-
-    db = _get_db(request)
-    if db is None or not getattr(db, "enabled", False):
-        return _error(503, "Rule storage is unavailable (database not connected).")
+    fields, message = validate_rule_fields(body)
+    if fields is None:
+        return _error(400, message)
 
     try:
-        row = await db.add_rule(
-            fields["team"], fields["from_model"], fields["to_model"], account_id=account.id
-        )
-    except Exception:  # noqa: BLE001
-        return _error(503, "Could not store the rule.")
-
-    rules = _get_rules(request)
-    if rules is not None:
-        await rules.refresh()
+        row = await apply_add_rule(_get_db(request), _get_rules(request), account.id, fields)
+    except RuleExistsError as exc:
+        return _anthropic_error(409, "invalid_request_error", exc.message)
+    except RuleWriteError as exc:
+        return _error(exc.status, exc.message)
 
     # Never echo the owner: the caller knows who they are, and the id is an internal key.
-    public = {k: v for k, v in dict(row).items() if k != "account_id"}
+    public = {k: v for k, v in row.items() if k != "account_id"}
     return JSONResponse(status_code=201, content={"rule": public})
 
 
@@ -184,23 +301,14 @@ async def delete_rule(request: Request, rule_id: int):
     account = _account(request)
     if account is None:
         return _no_account()
-    db = _get_db(request)
-    if db is None or not getattr(db, "enabled", False):
-        return _error(503, "Rule storage is unavailable (database not connected).")
-
     try:
-        deleted = await db.delete_rule(rule_id, account_id=account.id)
-    except Exception:  # noqa: BLE001
-        return _error(503, "Could not delete the rule.")
+        deleted = await apply_delete_rule(
+            _get_db(request), _get_rules(request), account.id, rule_id
+        )
+    except RuleWriteError as exc:
+        return _error(exc.status, exc.message)
 
-    if not deleted:
-        return _error(404, f"No rule with id {rule_id}.")
-
-    rules = _get_rules(request)
-    if rules is not None:
-        await rules.refresh()
-
-    return {"deleted": rule_id}
+    return {"deleted": deleted}
 
 
 # --- Slice keys (phase 12) ---------------------------------------------------------

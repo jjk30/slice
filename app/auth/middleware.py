@@ -24,6 +24,7 @@ never reaches it and a 401 still carries the CORS headers the dashboard needs to
 from __future__ import annotations
 
 import json
+import re
 
 from app import config
 from app.auth.keys import bearer_token
@@ -34,11 +35,17 @@ from app.auth.tokens import verify_jwt
 LOCKED_ROUTES = {("POST", "/v1/messages"), ("POST", "/v1/chat/completions")}
 # Phase 18a adds /scanner/*: the AWS scanner endpoints need a valid slice key too.
 # Phase 20 adds /account/*: the account profile read/write is per-account, key-required.
-LOCKED_PREFIXES = ("/admin/", "/dashboard/", "/scanner/", "/account/")
+# Phase 32 adds /actions/*: proposing a write and reading its status are per-account,
+# key-required. The two decision links are the exception, see OPEN_LINK_PATTERN.
+LOCKED_PREFIXES = ("/admin/", "/dashboard/", "/scanner/", "/account/", "/actions/")
 # Phase 30: the two page paths. A GET on the exact path is the app's own HTML (served by
 # app.main when the dashboard is built), and it must be open so a signed-out browser
 # gets the login screen rather than a 401. Every /dashboard/<api> path stays locked.
 PAGE_PATHS = ("/dashboard", "/settings")
+# Phase 32: the approve and reject links in the approval email. They are opened from a
+# mail client with no session and no key; the one-use token in the query string is the
+# whole authorization, checked by the handler (app.actions). GET only.
+OPEN_LINK_PATTERN = re.compile(r"^/actions/\d+/(approve|reject)$")
 
 # The single tenant everything runs under when AUTH_ENABLED is off (local dev mode).
 # Its id is None on purpose: the proxy writes every local row with a NULL account_id
@@ -59,6 +66,8 @@ def is_locked(method: str, path: str) -> bool:
     if (method.upper(), path) in LOCKED_ROUTES:
         return True
     if method.upper() == "GET" and path in PAGE_PATHS:
+        return False
+    if method.upper() == "GET" and OPEN_LINK_PATTERN.match(path):
         return False
     return path.startswith(LOCKED_PREFIXES) or path in {p.rstrip("/") for p in LOCKED_PREFIXES}
 

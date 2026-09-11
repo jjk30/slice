@@ -17,6 +17,7 @@ from starlette.background import BackgroundTask
 from app import budget, config, metrics, pricing, redis_layer
 from app.adapters import AdapterError, AdapterResult, select_adapter
 from app.adapters.base import STREAM_DOWNGRADED_HEADER
+from app.actions import router as actions_router
 from app.admin import router as admin_router
 from app.auth import Authenticator
 from app.auth.middleware import AuthMiddleware, current_account
@@ -230,6 +231,8 @@ app.include_router(auth_router)
 app.include_router(scanner_router)
 app.include_router(account_router)
 app.include_router(email_router)
+# Phase 32: human in the loop approvals for MCP writes (propose, approve, reject, status).
+app.include_router(actions_router)
 
 
 def get_client(app: FastAPI) -> httpx.AsyncClient:

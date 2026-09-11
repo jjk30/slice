@@ -637,6 +637,25 @@ async def test_admin_rejects_bad_bodies(client, admin_db, body):
     assert admin_db.rows == []
 
 
+async def test_admin_duplicate_rule_is_409(client, admin_db):
+    """Phase 32c: the same team, from_model and to_model again (after strip, case folded)
+    is refused with an Anthropic-shaped 409 and nothing more is stored."""
+    body = {"team": "acme", "from_model": OPUS, "to_model": SONNET}
+    assert (await client.post("/admin/rules", json=body)).status_code == 201
+    r = await client.post("/admin/rules", json=body)
+    assert r.status_code == 409
+    assert r.json() == {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "This rule already exists."},
+    }
+    shouted = {"team": " ACME ", "from_model": OPUS.upper(), "to_model": SONNET.upper()}
+    assert (await client.post("/admin/rules", json=shouted)).status_code == 409
+    assert len(admin_db.rows) == 1
+    # A different target model is a different rule.
+    other = {"team": "acme", "from_model": OPUS, "to_model": "claude-haiku-4-5-20251001"}
+    assert (await client.post("/admin/rules", json=other)).status_code == 201
+
+
 async def test_admin_delete_missing_is_404(client, admin_db):
     r = await client.delete("/admin/rules/999")
     assert r.status_code == 404

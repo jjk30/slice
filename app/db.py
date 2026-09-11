@@ -370,6 +370,30 @@ DELETE_RULE = (
     "DELETE FROM switch_rules WHERE id = $1 AND account_id IS NOT DISTINCT FROM $2 RETURNING id"
 )
 
+# Phase 32: pending actions (human in the loop approvals for MCP writes). The token is
+# never stored, only its SHA-256; the payload is the validated write body as JSONB. A
+# status change is one conditional UPDATE keyed on the status it moves from, so two
+# clicks on the same link can never both apply (the second finds no pending row).
+PENDING_ACTION_COLUMNS = (
+    "id, account_id, kind, payload, token_hash, status, created_at, expires_at, "
+    "decided_at, decided_via, applied_rule_id"
+)
+INSERT_PENDING_ACTION = f"""
+INSERT INTO pending_actions (account_id, kind, payload, token_hash, expires_at)
+VALUES ($1, $2, $3::jsonb, $4, $5)
+RETURNING {PENDING_ACTION_COLUMNS}
+"""
+SELECT_PENDING_ACTION = f"SELECT {PENDING_ACTION_COLUMNS} FROM pending_actions WHERE id = $1"
+UPDATE_PENDING_ACTION_STATUS = f"""
+UPDATE pending_actions
+SET status          = $3,
+    decided_at      = CASE WHEN $3 = 'pending' THEN NULL ELSE now() END,
+    decided_via     = $4,
+    applied_rule_id = COALESCE($5, applied_rule_id)
+WHERE id = $1 AND status = $2
+RETURNING {PENDING_ACTION_COLUMNS}
+"""
+
 
 @dataclass(frozen=True)
 class RequestRecord:
@@ -1132,6 +1156,67 @@ class Database:
         async with self._pool.acquire() as connection:
             row = await connection.fetchrow(DELETE_RULE, rule_id, account_id)
         return row is not None
+
+    # --- Pending actions (phase 32) ------------------------------------------
+    # Same contract as the rule writes: the caller needs an answer, so these raise on
+    # failure and the actions routes turn that into a clean 503.
+
+    @staticmethod
+    def _action_row(row) -> dict | None:
+        if row is None:
+            return None
+        out = dict(row)
+        payload = out.get("payload")
+        if isinstance(payload, str):
+            try:
+                out["payload"] = json.loads(payload)
+            except ValueError:
+                out["payload"] = {}
+        return out
+
+    async def create_pending_action(
+        self, account_id: int | None, kind: str, payload: dict, token_hash: str, expires_at: datetime
+    ) -> dict:
+        """Insert one pending action and return the stored row (with its new id)."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                INSERT_PENDING_ACTION, account_id, kind, json.dumps(payload), token_hash, expires_at
+            )
+        return self._action_row(row)
+
+    async def get_pending_action(self, action_id: int) -> dict | None:
+        """The pending_actions row for ``action_id``, or None."""
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(SELECT_PENDING_ACTION, int(action_id))
+        return self._action_row(row)
+
+    async def set_pending_action_status(
+        self,
+        action_id: int,
+        *,
+        from_status: str,
+        to_status: str,
+        decided_via: str | None = None,
+        applied_rule_id: int | None = None,
+    ) -> dict | None:
+        """Move one row from ``from_status`` to ``to_status`` atomically.
+
+        Returns the updated row, or None when the row was not in ``from_status`` (someone
+        else decided it first, or it was already expired): the caller treats None as
+        "already decided". ``decided_at`` is stamped for any status but pending.
+        """
+        if self._pool is None:
+            raise RuntimeError("database is not connected")
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                UPDATE_PENDING_ACTION_STATUS,
+                int(action_id), from_status, to_status, decided_via, applied_rule_id,
+            )
+        return self._action_row(row)
 
     # --- Accounts and slice keys (phase 12) ----------------------------------
     # The login path (upsert_account, create_key) and the admin key endpoints raise on

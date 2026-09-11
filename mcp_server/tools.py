@@ -1,10 +1,10 @@
 """The slice MCP tools: pure ``(SliceClient, args) -> str`` coroutines.
 
 This module is deliberately free of the ``mcp`` SDK so the tests can drive it against a
-mocked gateway with nothing else in the way. Each function makes one (or, for a confirmed
-write, one) gateway call through ``SliceClient`` and returns compact, human-readable text,
-never a raw JSON dump, and never an unhandled exception. Every gateway failure is caught
-and rendered by ``_gateway_error`` into a plain sentence.
+mocked gateway with nothing else in the way. Each function makes one gateway call through
+``SliceClient`` and returns compact, human-readable text, never a raw JSON dump, and never
+an unhandled exception. Every gateway failure is caught and rendered by ``_gateway_error``
+into a plain sentence.
 
 Endpoint map (discovered from the existing FastAPI routes, nothing here is invented):
 
@@ -12,8 +12,13 @@ Endpoint map (discovered from the existing FastAPI routes, nothing here is inven
 - ``list_rules``           → ``GET  /admin/rules``           (the account's switch rules)
 - ``get_recent_requests``  → ``GET  /dashboard/recent?limit=`` (latest requests)
 - ``get_eval_summary``     → ``GET  /admin/eval/summary``     (RAGAS pass rate)
-- ``add_rule``             → ``POST /admin/rules``            (confirm handshake)
-- ``delete_rule``          → ``DELETE /admin/rules/{id}``     (confirm handshake)
+- ``add_rule``             → ``POST /actions/propose``        (proposal, approved by email)
+- ``delete_rule``          → ``POST /actions/propose``        (proposal, approved by email)
+- ``get_action_status``    → ``GET  /actions/{id}``           (pending, approved, rejected, expired)
+
+Phase 32: the write tools never touch ``/admin/rules``. They validate, then propose the
+change; the gateway emails the account owner an approve link and a reject link, and only
+the approval applies the write. The agent has no way to apply a change itself.
 
 Note (flagged for the report): ``/dashboard/recent`` does not expose ``latency_ms``: the
 column exists in the ``requests`` table but the route's SQL and response omit it. Rather
@@ -23,6 +28,8 @@ show. Nothing was added to the gateway.
 """
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from mcp_server.client import (
     GatewayError,
@@ -239,11 +246,11 @@ async def get_eval_summary(client: SliceClient) -> str:
     return "\n".join(lines)
 
 
-# --- write tools (two-call confirm handshake) --------------------------------------
+# --- write tools (proposed, approved by email) --------------------------------------
 
 
 def _validate_rule(team: str, from_model: str, to_model: str) -> str | None:
-    """Reject a malformed rule up front, before any preview or write. Message or None."""
+    """Reject a malformed rule up front, before any proposal. Message or None."""
     for name, value in (("team", team), ("from_model", from_model), ("to_model", to_model)):
         if not isinstance(value, str) or not value.strip():
             return f"Invalid rule: '{name}' is required and must be a non-empty string."
@@ -252,53 +259,58 @@ def _validate_rule(team: str, from_model: str, to_model: str) -> str | None:
     return None
 
 
-async def add_rule(
-    client: SliceClient,
-    team: str,
-    from_model: str,
-    to_model: str,
-    confirm: bool = False,
-) -> str:
-    """Add a switch rule. Previews unless ``confirm=true``; then POSTs ``/admin/rules``.
+def _expires_text(raw) -> str:
+    """``2026-09-11 10:20 UTC`` from the gateway's ISO expires_at; the raw value if odd."""
+    if not isinstance(raw, str) or not raw:
+        return "unknown"
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw
+    if when.tzinfo is not None:
+        when = when.astimezone(timezone.utc)
+    return when.strftime("%Y-%m-%d %H:%M UTC")
 
-    Inputs are validated before anything else, so a bad rule is rejected without a preview
-    or a call. With ``confirm`` false/omitted the tool describes exactly what would change
-    and does NOT touch the gateway. Only ``confirm=true`` sends the write.
+
+async def _propose(client: SliceClient, kind: str, payload: dict) -> str:
+    """POST one proposal and render the gateway's answer as the sentence the user sees."""
+    try:
+        data = await client.request(
+            "POST", "/actions/propose", json_body={"kind": kind, "payload": payload}
+        )
+    except GatewayError as exc:
+        if exc.status_code == 409 and exc.message:
+            # A rule the account already has (phase 32c): the gateway's own sentence, plainly.
+            return f"{exc.message} Nothing was sent for approval."
+        return _gateway_error(exc, client)
+    except GatewayFailure as exc:
+        return _gateway_error(exc, client)
+    if not isinstance(data, dict) or data.get("action_id") is None:
+        return "slice returned an unexpected response for the proposal."
+    return (
+        f"Sent for approval. Check your email. Action #{data['action_id']} expires at "
+        f"{_expires_text(data.get('expires_at'))}."
+    )
+
+
+async def add_rule(client: SliceClient, team: str, from_model: str, to_model: str) -> str:
+    """Propose a switch rule. The gateway emails the owner; only their approval applies it.
+
+    Inputs are validated before anything else, so a bad rule is rejected without a call.
+    This tool never writes: it POSTs ``/actions/propose`` and reports the action id.
     """
     error = _validate_rule(team, from_model, to_model)
     if error is not None:
         return error
-
-    team, from_model, to_model = team.strip(), from_model.strip(), to_model.strip()
-    detail = f"team={team}: {from_model} → {to_model}"
-
-    if not confirm:
-        return (
-            f"Would add rule: {detail}. "
-            "Call again with confirm=true to apply."
-        )
-
-    try:
-        data = await client.request(
-            "POST",
-            "/admin/rules",
-            json_body={"team": team, "from_model": from_model, "to_model": to_model},
-        )
-    except GatewayFailure as exc:
-        return _gateway_error(exc, client)
-
-    rule = data.get("rule") if isinstance(data, dict) else None
-    if isinstance(rule, dict) and rule.get("id") is not None:
-        return f"Added rule #{rule['id']}: {detail}."
-    return f"Added rule: {detail}."
+    payload = {"team": team.strip(), "from_model": from_model.strip(), "to_model": to_model.strip()}
+    return await _propose(client, "add_rule", payload)
 
 
-async def delete_rule(client: SliceClient, rule_id: int, confirm: bool = False) -> str:
-    """Delete a switch rule by id. Previews unless ``confirm=true``; then DELETEs it.
+async def delete_rule(client: SliceClient, rule_id: int) -> str:
+    """Propose deleting a switch rule by id. Only the owner's email approval applies it.
 
-    The id is validated (a positive integer) before anything else. With ``confirm``
-    false/omitted the tool describes what would be deleted and does NOT touch the gateway.
-    Only ``confirm=true`` sends the write.
+    The id is validated (a positive integer) before anything else. This tool never
+    writes: it POSTs ``/actions/propose`` and reports the action id.
     """
     try:
         rule_id = int(rule_id)
@@ -306,18 +318,32 @@ async def delete_rule(client: SliceClient, rule_id: int, confirm: bool = False) 
         return "Invalid rule id: it must be an integer."
     if rule_id <= 0:
         return "Invalid rule id: it must be a positive integer."
+    return await _propose(client, "delete_rule", {"rule_id": rule_id})
 
-    if not confirm:
-        return (
-            f"Would delete rule #{rule_id}. "
-            "Call again with confirm=true to apply."
-        )
+
+async def get_action_status(client: SliceClient, action_id: int) -> str:
+    """Where a proposed action stands. Reads ``GET /actions/{id}``."""
+    try:
+        action_id = int(action_id)
+    except (TypeError, ValueError):
+        return "Invalid action id: it must be an integer."
+    if action_id <= 0:
+        return "Invalid action id: it must be a positive integer."
 
     try:
-        data = await client.request("DELETE", f"/admin/rules/{rule_id}")
+        data = await client.request("GET", f"/actions/{action_id}")
     except GatewayFailure as exc:
         return _gateway_error(exc, client)
+    if not isinstance(data, dict) or data.get("status") is None:
+        return "slice returned an unexpected response for the action."
 
-    if isinstance(data, dict) and "deleted" in data:
-        return f"Deleted rule #{data['deleted']}."
-    return f"Deleted rule #{rule_id}."
+    status = data["status"]
+    kind = data.get("kind", "?")
+    line = f"Action #{action_id} ({kind}): {status}"
+    if status == "pending":
+        line += f". Waiting for email approval; expires at {_expires_text(data.get('expires_at'))}"
+    elif status == "approved":
+        applied = data.get("applied_rule_id")
+        if applied is not None:
+            line += f". Rule #{applied} was {'added' if kind == 'add_rule' else 'deleted'}"
+    return line + "."

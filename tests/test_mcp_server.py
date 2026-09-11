@@ -3,8 +3,8 @@
 The gateway is always faked: respx intercepts httpx, so nothing hits the network. Each
 test drives the pure tool coroutines in ``mcp_server.tools`` against a ``SliceClient``
 pointed at a stand-in base URL, exactly as the real server would, and asserts on the
-human-readable text the tool returns (and, for the write tools, on whether the write
-endpoint was actually called).
+human-readable text the tool returns (and, for the write tools, that the proposal
+endpoint was called and the direct write endpoints were not).
 """
 
 from __future__ import annotations
@@ -255,103 +255,156 @@ async def test_other_gateway_error_surfaces_message():
     assert "database not connected" in out
 
 
-# --- write tools: confirm handshake -----------------------------------------------
+# --- write tools: proposals, never direct writes (phase 32) ----------------------
+
+PROPOSAL = {"action_id": 12, "status": "pending", "expires_at": "2026-09-11T10:20:00+00:00"}
+
+
+def _mock_write_endpoints():
+    """The direct write endpoints, mocked so a stray call would be visible (and wrong)."""
+    post = respx.post(f"{BASE}/admin/rules").mock(return_value=httpx.Response(201, json={"rule": {"id": 9}}))
+    delete = respx.delete(url__regex=rf"{BASE}/admin/rules/\d+").mock(
+        return_value=httpx.Response(200, json={"deleted": 7})
+    )
+    return post, delete
 
 
 @respx.mock
-async def test_add_rule_without_confirm_does_not_call_endpoint():
-    route = respx.post(f"{BASE}/admin/rules").mock(
-        return_value=httpx.Response(201, json={"rule": {"id": 9}})
-    )
-    out = await tools.add_rule(
-        make_client(), team="default", from_model="big", to_model="small"
-    )
-    assert route.called is False  # the write endpoint was NOT hit
-    assert "Would add rule" in out
-    assert "team=default: big → small" in out
-    assert "confirm=true" in out
-
-
-@respx.mock
-async def test_add_rule_with_confirm_calls_endpoint():
-    route = respx.post(f"{BASE}/admin/rules").mock(
-        return_value=httpx.Response(
-            201,
-            json={"rule": {"id": 9, "team": "default", "from_model": "big", "to_model": "small"}},
-        )
-    )
-    out = await tools.add_rule(
-        make_client(), team="default", from_model="big", to_model="small", confirm=True
-    )
-    assert route.called is True
-    assert "Added rule #9" in out
-    # The body carried exactly the validated fields.
-    sent = route.calls.last.request
+async def test_add_rule_proposes_and_never_touches_admin_rules():
+    post, delete = _mock_write_endpoints()
+    propose = respx.post(f"{BASE}/actions/propose").mock(return_value=httpx.Response(201, json=PROPOSAL))
+    out = await tools.add_rule(make_client(), team="default", from_model="big", to_model="small")
+    assert propose.called is True
+    assert post.called is False and delete.called is False
+    assert out == "Sent for approval. Check your email. Action #12 expires at 2026-09-11 10:20 UTC."
     import json as _json
 
-    body = _json.loads(sent.content)
-    assert body == {"team": "default", "from_model": "big", "to_model": "small"}
+    body = _json.loads(propose.calls.last.request.content)
+    assert body == {
+        "kind": "add_rule",
+        "payload": {"team": "default", "from_model": "big", "to_model": "small"},
+    }
 
 
 @respx.mock
-async def test_add_rule_invalid_rejected_before_confirm():
-    route = respx.post(f"{BASE}/admin/rules").mock(
-        return_value=httpx.Response(201, json={"rule": {"id": 1}})
-    )
-    # Same from/to model is malformed: rejected even with confirm=true, no call made.
-    out = await tools.add_rule(
-        make_client(), team="default", from_model="x", to_model="x", confirm=True
-    )
-    assert route.called is False
+async def test_delete_rule_proposes_and_never_touches_admin_rules():
+    post, delete = _mock_write_endpoints()
+    propose = respx.post(f"{BASE}/actions/propose").mock(return_value=httpx.Response(201, json=PROPOSAL))
+    out = await tools.delete_rule(make_client(), rule_id=7)
+    assert propose.called is True
+    assert post.called is False and delete.called is False
+    assert "Sent for approval" in out and "Action #12" in out
+    import json as _json
+
+    body = _json.loads(propose.calls.last.request.content)
+    assert body == {"kind": "delete_rule", "payload": {"rule_id": 7}}
+
+
+@respx.mock
+async def test_add_rule_invalid_rejected_before_proposal():
+    propose = respx.post(f"{BASE}/actions/propose").mock(return_value=httpx.Response(201, json=PROPOSAL))
+    # Same from/to model is malformed: rejected with no call made.
+    out = await tools.add_rule(make_client(), team="default", from_model="x", to_model="x")
+    assert propose.called is False
     assert "must differ" in out
 
 
 @respx.mock
 async def test_add_rule_blank_field_rejected():
-    route = respx.post(f"{BASE}/admin/rules").mock(
-        return_value=httpx.Response(201, json={"rule": {"id": 1}})
-    )
-    out = await tools.add_rule(
-        make_client(), team="  ", from_model="big", to_model="small", confirm=True
-    )
-    assert route.called is False
+    propose = respx.post(f"{BASE}/actions/propose").mock(return_value=httpx.Response(201, json=PROPOSAL))
+    out = await tools.add_rule(make_client(), team="  ", from_model="big", to_model="small")
+    assert propose.called is False
     assert "'team' is required" in out
 
 
 @respx.mock
-async def test_delete_rule_without_confirm_does_not_call_endpoint():
-    route = respx.delete(f"{BASE}/admin/rules/7").mock(
-        return_value=httpx.Response(200, json={"deleted": 7})
-    )
-    out = await tools.delete_rule(make_client(), rule_id=7)
-    assert route.called is False
-    assert "Would delete rule #7" in out
-    assert "confirm=true" in out
-
-
-@respx.mock
-async def test_delete_rule_with_confirm_calls_endpoint():
-    route = respx.delete(f"{BASE}/admin/rules/7").mock(
-        return_value=httpx.Response(200, json={"deleted": 7})
-    )
-    out = await tools.delete_rule(make_client(), rule_id=7, confirm=True)
-    assert route.called is True
-    assert "Deleted rule #7" in out
-
-
-@respx.mock
 async def test_delete_rule_not_found_surfaces_gateway_error():
-    respx.delete(f"{BASE}/admin/rules/999").mock(
-        return_value=httpx.Response(404, json={"error": {"message": "No rule with id 999."}})
+    respx.post(f"{BASE}/actions/propose").mock(
+        return_value=httpx.Response(
+            404, json={"type": "error", "error": {"type": "not_found_error", "message": "No rule with id 999."}}
+        )
     )
-    out = await tools.delete_rule(make_client(), rule_id=999, confirm=True)
+    out = await tools.delete_rule(make_client(), rule_id=999)
     assert "HTTP 404" in out
     assert "No rule with id 999" in out
 
 
-async def test_delete_rule_invalid_id_rejected_before_confirm():
+@respx.mock
+async def test_propose_email_failure_surfaces_502():
+    respx.post(f"{BASE}/actions/propose").mock(
+        return_value=httpx.Response(
+            502,
+            json={"type": "error", "error": {"type": "api_error", "message": "The approval email could not be sent, so the action was not created."}},
+        )
+    )
+    out = await tools.add_rule(make_client(), team="default", from_model="big", to_model="small")
+    assert "HTTP 502" in out
+    assert "could not be sent" in out
+
+
+@respx.mock
+async def test_add_rule_duplicate_surfaces_the_gateway_sentence_plainly():
+    respx.post(f"{BASE}/actions/propose").mock(
+        return_value=httpx.Response(
+            409, json={"type": "error", "error": {"type": "invalid_request_error", "message": "This rule already exists."}}
+        )
+    )
+    out = await tools.add_rule(make_client(), team="default", from_model="big", to_model="small")
+    assert out == "This rule already exists. Nothing was sent for approval."
+    assert "HTTP 409" not in out
+
+
+async def test_delete_rule_invalid_id_rejected_before_proposal():
     # No respx.mock: a call would fail loudly, proving validation short-circuits first.
-    out = await tools.delete_rule(make_client(), rule_id=-1, confirm=True)
+    out = await tools.delete_rule(make_client(), rule_id=-1)
+    assert "positive integer" in out
+
+
+@respx.mock
+async def test_get_action_status_pending():
+    route = respx.get(f"{BASE}/actions/12").mock(
+        return_value=httpx.Response(
+            200,
+            json={"action_id": 12, "kind": "add_rule", "status": "pending", "applied_rule_id": None,
+                  "expires_at": "2026-09-11T10:20:00+00:00"},
+        )
+    )
+    out = await tools.get_action_status(make_client(), action_id=12)
+    assert route.called is True
+    assert "Action #12 (add_rule): pending" in out
+    assert "expires at 2026-09-11 10:20 UTC" in out
+
+
+@respx.mock
+async def test_get_action_status_approved_with_rule_id():
+    respx.get(f"{BASE}/actions/12").mock(
+        return_value=httpx.Response(
+            200,
+            json={"action_id": 12, "kind": "add_rule", "status": "approved", "applied_rule_id": 9},
+        )
+    )
+    out = await tools.get_action_status(make_client(), action_id=12)
+    assert "approved" in out
+    assert "Rule #9 was added" in out
+
+
+@respx.mock
+async def test_get_action_status_rejected_and_not_found():
+    respx.get(f"{BASE}/actions/13").mock(
+        return_value=httpx.Response(200, json={"action_id": 13, "kind": "delete_rule", "status": "rejected"})
+    )
+    respx.get(f"{BASE}/actions/99").mock(
+        return_value=httpx.Response(
+            404, json={"type": "error", "error": {"type": "not_found_error", "message": "No action with id 99."}}
+        )
+    )
+    assert "rejected" in await tools.get_action_status(make_client(), action_id=13)
+    out = await tools.get_action_status(make_client(), action_id=99)
+    assert "HTTP 404" in out and "No action with id 99" in out
+
+
+async def test_get_action_status_invalid_id_rejected_before_call():
+    out = await tools.get_action_status(make_client(), action_id=0)
     assert "positive integer" in out
 
 
