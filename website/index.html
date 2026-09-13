@@ -35,10 +35,9 @@
   .brand .mark{width:28px;height:28px;object-fit:contain;display:block}
   .brand b{font-family:var(--display);font-weight:700;font-size:20px}
   .navr{display:flex;align-items:center;gap:18px}
-  .navlink{font-family:var(--mono);font-size:13px;color:var(--muted);transition:color .14s ease}
-  .navlink:hover{color:var(--ink)}
-  .nav .go{font-family:var(--mono);font-size:13px;color:var(--green);border:1px solid var(--green);padding:8px 15px;border-radius:9px;transition:background .14s ease,color .14s ease}
-  .nav .go:hover{background:var(--green);color:#fff}
+  /* The nav Get started is the hero .btn (same green, white text, terminal icon), sized down. */
+  .nav .btn{font-size:13.5px;padding:8px 15px;gap:7px;border-radius:9px}
+  .nav .btn svg{width:14px;height:14px}
 
   /* hero heading */
   .lede-h{padding:34px 0 26px;text-align:center}
@@ -309,8 +308,9 @@
       <b>slice</b>
     </a>
     <div class="navr">
-      <a href="/how-to" class="navlink">How to</a>
-      <a href="/how-to" class="go">Get started</a>
+      <a class="btn" href="/how-to" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>Get started
+      </a>
     </div>
   </nav>
 
@@ -320,7 +320,7 @@
       <h1>Don't let vibe coding <span class="pop">eat your budget.</span></h1>
       <p class="sub">slice sits in front of every AI call your team makes, routes the easy ones to cheaper models, and cuts the bill before it runs away.</p>
       <div class="act">
-        <a class="btn" href="/how-to">
+        <a class="btn" href="/how-to" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>Get started
         </a>
         <a class="os" href="https://github.com/jjk30/slice" target="_blank" rel="noopener">View on GitHub &rarr;</a>

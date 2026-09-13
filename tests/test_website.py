@@ -124,8 +124,23 @@ def test_how_to_page_shows_the_current_cli_commands(how_to):
     assert "Self-hosted?" not in how_to
 
 
-def test_site_header_links_to_how_to():
-    assert 'href="/how-to"' in INDEX.read_text(encoding="utf-8")
+def _nav(page: str) -> str:
+    return re.search(r'<nav class="nav">(.*?)</nav>', page, re.S).group(1)
+
+
+def test_site_header_links_to_how_to(how_to):
+    """The front page nav carries one link to the how-to page, the green Get started
+    button, and it opens in a new tab. The how-to page's own nav is just the brand:
+    no link back to itself and no Get started button."""
+    index_nav = _nav(INDEX.read_text(encoding="utf-8"))
+    links = re.findall(r'<a[^>]*href="/how-to"[^>]*>', index_nav)
+    assert len(links) == 1, links
+    assert 'target="_blank"' in links[0] and 'rel="noopener"' in links[0]
+    assert 'class="btn"' in links[0]
+    how_to_nav = _nav(how_to)
+    assert 'href="/how-to"' not in how_to_nav
+    assert 'href="#install"' not in how_to_nav and "Get started" not in how_to_nav
+    assert '<a class="brand" href="/">' in how_to_nav
 
 
 def test_brand_logo_links_to_the_root(how_to):
@@ -136,18 +151,21 @@ def test_brand_logo_links_to_the_root(how_to):
 
 
 def test_every_get_started_link_goes_to_the_install_section(how_to):
-    """On index, Get started means the how-to page. On the how-to page itself that
-    destination is the current page, so its Get started scrolls to the install section
-    instead. The dashboard is reached from the how-to page's own Open the dashboard
-    button at the bottom."""
+    """On index, Get started means the how-to page: the nav button and the hero button
+    both go to /how-to in a new tab. The how-to page has no Get started button at all,
+    the install section is the top of the page. The dashboard is reached from the
+    how-to page's own Open the dashboard button at the bottom."""
     index = INDEX.read_text(encoding="utf-8")
     assert 'id="install"' in how_to
-    pattern = r'<a[^>]*href="([^"]*)"[^>]*>\s*(?:<svg[^>]*>.*?</svg>)?\s*Get started\s*</a>'
+    pattern = r'<a([^>]*)href="([^"]*)"([^>]*)>\s*(?:<svg[^>]*>.*?</svg>)?\s*Get started\s*</a>'
     index_links = re.findall(pattern, index, re.S)
     how_to_links = re.findall(pattern, how_to, re.S)
     assert len(index_links) == 2, index_links
-    assert set(index_links) == {"/how-to"}
-    assert how_to_links == ["#install"]
+    assert {href for _, href, _ in index_links} == {"/how-to"}
+    for before, _, after in index_links:
+        attrs = before + after
+        assert 'class="btn"' in attrs and 'target="_blank"' in attrs and 'rel="noopener"' in attrs, attrs
+    assert how_to_links == []
     assert 'href="https://sliceapp.dev/dashboard"' in how_to and "Open the dashboard" in how_to
 
 
@@ -217,8 +235,8 @@ def test_no_link_points_at_the_html_address(how_to):
         hrefs = re.findall(r'href="([^"]+)"', page)
         assert not [h for h in hrefs if "how-to.html" in h or "index.html" in h], hrefs
         assert not [h for h in hrefs if h.startswith("https://sliceapp.dev/how-to")], hrefs
-        assert 'href="/how-to"' in page
-    assert 'href="/how-to#ask"' in index
+    # Only the front page links to the how-to page; the how-to nav is just the brand.
+    assert 'href="/how-to"' in index and 'href="/how-to#ask"' in index
 
 
 def test_install_section_lists_the_versions_under_the_pipx_paragraph(how_to):
