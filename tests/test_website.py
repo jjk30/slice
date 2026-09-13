@@ -125,7 +125,14 @@ def test_how_to_page_shows_the_current_cli_commands(how_to):
 
 
 def test_site_header_links_to_how_to():
-    assert 'href="https://sliceapp.dev/how-to"' in INDEX.read_text(encoding="utf-8")
+    assert 'href="/how-to"' in INDEX.read_text(encoding="utf-8")
+
+
+def test_brand_logo_links_to_the_root(how_to):
+    """The cake mark plus the word slice in the top nav is one link to / on both pages,
+    never index.html, so the address bar stays clean after a click."""
+    index = INDEX.read_text(encoding="utf-8")
+    assert all('<a class="brand" href="/">' in page for page in (index, how_to))
 
 
 def test_every_get_started_link_goes_to_the_install_section(how_to):
@@ -139,7 +146,7 @@ def test_every_get_started_link_goes_to_the_install_section(how_to):
     index_links = re.findall(pattern, index, re.S)
     how_to_links = re.findall(pattern, how_to, re.S)
     assert len(index_links) == 2, index_links
-    assert set(index_links) == {"https://sliceapp.dev/how-to"}
+    assert set(index_links) == {"/how-to"}
     assert how_to_links == ["#install"]
     assert 'href="https://sliceapp.dev/dashboard"' in how_to and "Open the dashboard" in how_to
 
@@ -201,13 +208,17 @@ def test_install_section_is_pipx_on_three_tabs(how_to):
 
 
 def test_no_link_points_at_the_html_address(how_to):
-    """Phase 31: the how-to page is /how-to; every link on both pages uses the clean URL
-    (with its #section where it has one), never how-to.html."""
+    """Phase 31: the how-to page is /how-to and the front page is /. Every link on both
+    pages uses the root-relative clean URL (with its #section where it has one): never
+    how-to.html or index.html, and never the absolute https://sliceapp.dev/how-to form,
+    which Caddy would otherwise have to rewrite on every click."""
     index = INDEX.read_text(encoding="utf-8")
     for page in (index, how_to):
-        assert 'href="how-to.html' not in page and "how-to.html" not in re.findall(r'href="([^"]+)"', page).__str__()
-        assert 'href="https://sliceapp.dev/how-to' in page
-    assert 'href="https://sliceapp.dev/how-to"' in index and 'href="https://sliceapp.dev/how-to"' in how_to
+        hrefs = re.findall(r'href="([^"]+)"', page)
+        assert not [h for h in hrefs if "how-to.html" in h or "index.html" in h], hrefs
+        assert not [h for h in hrefs if h.startswith("https://sliceapp.dev/how-to")], hrefs
+        assert 'href="/how-to"' in page
+    assert 'href="/how-to#ask"' in index
 
 
 def test_install_section_lists_the_versions_under_the_pipx_paragraph(how_to):

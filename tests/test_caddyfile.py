@@ -17,8 +17,20 @@ CADDYFILE = ROOT / "infra" / "ec2" / "files" / "Caddyfile"
 
 # Every API prefix the dashboard calls same-origin (dashboard/src), plus the two pages
 # and the bundle. If a new prefix is added to the app, it must be added here and in
-# the Caddyfile or the apex would serve a 404 page for it.
-APP_PATHS = ["/dashboard", "/settings", "/dashboard/*", "/assets/*", "/auth/*", "/scanner/*", "/admin/*", "/account/*"]
+# the Caddyfile or the apex would serve a 404 page for it. /actions/* is the phase 32
+# approval router (app/actions.py): the propose and status calls, and the approve and
+# reject links in the email, all land on the apex.
+APP_PATHS = [
+    "/dashboard",
+    "/settings",
+    "/dashboard/*",
+    "/assets/*",
+    "/auth/*",
+    "/scanner/*",
+    "/admin/*",
+    "/account/*",
+    "/actions/*",
+]
 
 
 def _block(text: str, name: str) -> str:
@@ -56,6 +68,14 @@ def test_apex_serves_clean_urls_for_the_static_pages():
     assert apex.index("redir /how-to.html") < apex.index("@app path")
     directive = "\n    try_files {path} {path}.html\n"
     assert apex.index("reverse_proxy @app") < apex.index(directive) < apex.index("\n    file_server\n")
+
+
+def test_apex_redirects_index_html_to_the_root():
+    """The front page is /; a request for the old /index.html address moves there for
+    good, placed with the how-to redirect ahead of the app path matcher."""
+    apex = _block(CADDYFILE.read_text(encoding="utf-8"), "sliceapp.dev")
+    assert "redir /index.html / permanent" in apex
+    assert apex.index("redir /index.html") < apex.index("@app path")
 
 
 def test_api_host_sends_the_pages_to_the_apex_and_keeps_metrics_hidden():
