@@ -77,7 +77,7 @@ A fixed 50-prompt developer workload was sent twice: once straight to Anthropic,
 
 - 27 requests were routed down to a cheaper model, saving $0.087675.
 - 5 identical prompts were served from cache at $0, saving $0.029511.
-- The 19 hard prompts stayed on `claude-sonnet-4-6`, the model the client asked for.
+- 19 responses came from `claude-sonnet-4-6`, the model the client asked for: 18 hard prompts, plus 1 of the 5 cache hits.
 
 Routing plus cache reconcile exactly to the $0.117186 saved. Reproduce it with [demo/run_demo.py](demo/run_demo.py) over [demo/batch.json](demo/batch.json); the full breakdown is in [demo/results/summary.md](demo/results/summary.md).
 
@@ -194,26 +194,44 @@ One box, one `docker compose` file, all of it defined in Terraform under [infra/
 
 The same image runs on Kubernetes. [k8s/](k8s/) holds a kind cluster config and kustomize manifests with a horizontal pod autoscaler, and under load it scaled from 2 to 4 replicas. That is the demo path for the orchestrated setup; the single box is the live path, because a `t4g.small` does not need an orchestrator.
 
-## The multi-agent relay
+## Agents in slice
 
-A hard request does not go straight to one expensive model. It runs a relay of four providers, each pinned to the role it is cheapest and best at, cheapest first. The relay stops the moment an answer is good enough, so the expensive rung runs only on the hard tail. All four providers are proven live through the gateway.
+slice has three small LangGraph graphs. LangGraph runs the steps. The models do the thinking.
 
-| Rung | Role | Model | Job |
+| Graph | File | Steps | Job |
 |---|---|---|---|
-| 1 | Worker | `nvidia/nemotron-3-super-120b-a12b` (NIM) | Takes the easy, high-volume work first. If the answer passes, the relay stops here. |
-| 2 | Drafter | `gpt-5.6-terra` (OpenAI) | Writes the first full answer for anything the worker could not finish. |
-| 3 | Checker | `gemini-3.8-flash` (Gemini) | Reads the draft and decides good or wrong. Only a fail escalates. |
-| 4 | Closer | `claude-sonnet-5` (Anthropic) | Steps in only for the hard part, when the checker is not satisfied. Used last and least. |
+| Router | `app/router.py` | pin, rule, retrieve, judge, decide | Picks the model to serve. |
+| Agent loop | `app/agent/loop.py` | try, check, decide, in a circle | Tries the cheap model first and climbs only when the answer fails. |
+| AWS scanner | `app/scanner/graph.py` | supervisor, eight workers, collector | Runs the eight AWS checks at the same time: four security checks and four cost-waste checks. |
 
-The flow in one line: NIM tries first, GPT drafts, Gemini checks, Sonnet closes if needed.
+The scanner is the multi-agent one in the classic sense: a supervisor fans out to eight check workers that run in parallel, and a collector merges the results. If one worker fails, the other seven still finish.
 
-**Two judges, two moments.** slice uses an LLM as a judge in two places, doing the same kind of decision at different points. The router judge sorts every request easy or hard before the relay runs; it is the trained Qwen judge from [colab/](colab/), served locally by llama.cpp on the box for $0 per call in 259 to 365 ms, with Haiku as the fallback. The checker judge is Gemini inside the relay, reading each answer and deciding whether to climb. One judges the question, the other judges the answer.
+**Which requests enter the loop.** Only easy ones. The judge said easy, the router sent the request down to the cheap model (`ROUTE_EASY_MODEL`), and the request is not streaming. A hard request skips the loop and goes straight to the model the client asked for. Pins, rules, cache hits, and streams skip it too.
 
-**Why it cannot overspend.** Before each rung the relay estimates the next attempt's cost as an upper bound and stops if that would cross the per-request ceiling. A dead provider is skipped and the relay continues. NeMo Guardrails wraps it with self-check rails on input and output. Every hop is logged with its provider and cost, so the dashboard shows which rung did what and what each spent. If the Gemini free tier rate-limits the check, the relay treats it as a fail and climbs, so a hard request never stalls.
+**The three steps.**
 
-**Back of the envelope.** Take a team sending 1,000 requests a day. Going straight to a strong model at about $3 in and $15 out per million tokens, a typical 1,000-in, 500-out request costs about $0.0105, so about $315 a month. Through the relay the mix changes the bill. Say 700 are easy and land on the near-free NIM worker, 240 pass the Gemini check at the GPT rung, and only 60 fail the check and climb to Sonnet. The router judge runs locally on all 1,000 at no cost per call and the Gemini checks on the 300 hard ones. The day lands near $3 against about $10.50 going direct, roughly a 70% cut on the same work. The exact number moves with the easy-to-hard mix: a team sending only hard prompts saves less, a team with repeats and bulk jobs saves more.
+1. **Try.** Send the prompt to the current model.
+2. **Check.** Grade the answer. A provider error, an empty answer, or a cut-off answer fails at once, with no model call. Otherwise one small model (`AGENT_CHECK_MODEL`, Haiku by default) reads the prompt and the answer and replies with one word: pass or fail.
+3. **Decide.** On a pass, serve the answer. On a fail, climb one rung. The loop stops when the attempt cap is hit (3 by default), the ladder runs out, or the next rung could cross the cost ceiling. It then serves the best answer it has.
 
-This is a relay, not a council. The four models pass work down a ladder in order, not all at once. A parallel version, all four working one request together and a coordinator merging the result, is a larger build kept for later.
+**The ladder.** The ladder is a list of models, cheap to strong, across all four providers. It is set by `AGENT_LADDER`. The default is:
+
+| Rung | Provider | Model |
+|---|---|---|
+| 1 | NVIDIA NIM | `nvidia/nemotron-3-super-120b-a12b` |
+| 2 | OpenAI | `gpt-5.6-terra` |
+| 3 | Google | `gemini-3.8-flash` |
+| 4 | Anthropic | `claude-sonnet-5` |
+
+Every rung does the same job: answer the prompt. No rung checks another. The model the client asked for is always the last rung, and it is added if it is not on the list. If the cheap model is on the ladder, the loop climbs from the rung above it. If it is not, the loop goes straight to the last rung. All four providers are proven live through the gateway.
+
+**Two judges, two moments.** slice uses an LLM as a judge in two places. The router judge sorts every auto-routed request easy or hard before the loop runs. It is the trained Qwen judge from [colab/](colab/), served locally by llama.cpp on the box for $0 per call in 259 to 365 ms, with Haiku as the fallback. The checker judge sits inside the loop and grades each answer pass or fail. One judges the question, the other judges the answer.
+
+**Why it cannot overspend.** Before each climb the loop estimates the next attempt's cost as an upper bound and stops if that would cross the per-request ceiling ($0.25 by default). The checker's own cost counts toward the ceiling too. A dead provider counts as a fail, so the loop moves on to the next rung. If the check call itself breaks, the answer is accepted, so a broken checker can never block traffic or climb forever. NeMo Guardrails wraps the loop with self-check rails on input and output.
+
+**What gets logged.** Each attempt writes one log line with the rung, the check result, and the spend so far. The request row stores how many attempts it took, and the response carries an `x-slice-agent` header, for example `pass:1` or `esc:2:<model>`.
+
+This is a ladder, not a council. The models are tried in order, one at a time, and the expensive one runs only when the cheap ones fail. A version where all four work on one request together and a coordinator merges the result is a larger build kept for later.
 
 ## Tools, and why each one
 
@@ -352,7 +370,7 @@ Run the suite with pytest:
 python -m pytest -q
 ```
 
-The suite collects 989 tests. CI is defined in [.github/workflows/ci.yml](.github/workflows/ci.yml): on every push and pull request it spins up PostgreSQL 16 and Redis 7 as services, installs the requirements, applies the schema and migrations through the app's own startup path, and runs the full suite. There is no build-or-deploy step in CI.
+The suite collects 1020 tests. CI is defined in [.github/workflows/ci.yml](.github/workflows/ci.yml): on every push and pull request it spins up PostgreSQL 16 and Redis 7 as services, installs the requirements, applies the schema and migrations through the app's own startup path, and runs the full suite. On a push to main, after the tests pass, a second job builds the arm64 image and pushes it to ECR through GitHub OIDC, with no stored AWS keys. CI does not deploy. The box pulls the image by hand.
 
 ## Live
 

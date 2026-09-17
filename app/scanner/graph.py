@@ -1,21 +1,26 @@
-"""The scanner's supervisor graph (phase 18a): a real LangGraph StateGraph, not a loop.
+"""The scanner's supervisor graph (phase 18a and 18c): a real LangGraph StateGraph, not a loop.
 
-    supervisor ─┬─▶ s3_public   ─┐
-                ├─▶ sg_open      ─┤
-                ├─▶ unencrypted  ─┼─▶ collector ─▶ END
-                └─▶ iam_risk     ─┘
+    supervisor ─┬─▶ s3_public       ─┐
+                ├─▶ sg_open         ─┤
+                ├─▶ unencrypted     ─┤
+                ├─▶ iam_risk        ─┤
+                ├─▶ ebs_waste       ─┼─▶ collector ─▶ END
+                ├─▶ eip_waste       ─┤
+                ├─▶ snapshot_waste  ─┤
+                └─▶ idle_instances  ─┘
 
-The supervisor node fans out to the four check nodes, which run **in parallel** (one
-LangGraph superstep: each node offloads its blocking boto3 work to a thread, so the four
-run concurrently on the event loop). A collector node merges their output. This mirrors
-the supervisor/worker agent pattern from the NVIDIA cert rather than a for-loop over the
+The supervisor node fans out to the eight check nodes (four security checks from phase
+18a, four cost-waste checks from phase 18c), which run **in parallel** (one LangGraph
+superstep: each node offloads its blocking boto3 work to a thread, so the eight run
+concurrently on the event loop). A collector node merges their output. This mirrors the
+supervisor/worker agent pattern from the NVIDIA cert rather than a for-loop over the
 checks.
 
 The merge is a reducer on the state: ``findings``, ``ran`` and ``errors`` each carry an
-``operator.add`` annotation, so LangGraph combines the concurrent writes from the four
+``operator.add`` annotation, so LangGraph combines the concurrent writes from the eight
 branches instead of rejecting them. Fail-open is enforced at the node: each node wraps
 its check in try/except, so one check raising records an error and drops its findings but
-never touches the other three or the run.
+never touches the other seven or the run.
 """
 
 from __future__ import annotations
@@ -49,14 +54,14 @@ def _supervisor_node(state: ScanState) -> dict:
 
 def _collector_node(state: ScanState) -> dict:
     # The join point. The reducer has already merged every branch's findings by the time
-    # this runs; it exists so the four workers converge on one node before END.
+    # this runs; it exists so the eight workers converge on one node before END.
     return {}
 
 
 def _make_check_node(name: str, fn):
     async def node(state: ScanState) -> dict:
         try:
-            # boto3 is blocking; run it in a thread so the four checks truly run at once.
+            # boto3 is blocking; run it in a thread so the eight checks truly run at once.
             found = await asyncio.to_thread(fn, state["session"])
             return {"findings": list(found or []), "ran": [name]}
         except Exception as exc:  # noqa: BLE001  # one check failing never kills the others.

@@ -1,8 +1,10 @@
 """Phase 18a: the AWS security scanner: scan the account slice itself runs in.
 
-A supervisor LangGraph (``app.scanner.graph``) fans out to four read-only boto3 checks
-(``app.scanner.checks``: public S3, world-open security groups, unencrypted storage, IAM
-risk), a collector merges the findings, and ``app.scanner.service`` persists them and
+A supervisor LangGraph (``app.scanner.graph``) fans out to eight read-only boto3 checks
+(``app.scanner.checks``: four security checks, public S3, world-open security groups,
+unencrypted storage, and IAM risk, plus four cost-waste checks, EBS volume waste, idle
+Elastic IPs, old snapshots, and idle instances), a collector merges the findings, and
+``app.scanner.service`` persists them and
 alerts on any *new* HIGH finding through the existing email/WhatsApp pipe. Cost Explorer
 spend is pulled once a day (``app.scanner.cost``), latched in Redis because that API bills
 per call. The ``/scanner/*`` endpoints (``app.scanner.routes``) expose runs and costs.
