@@ -54,7 +54,7 @@ I wanted the meter and the valve. A gateway that sits in front of every AI call,
 
 There was a second reason. I was learning agentic AI properly, working through the NVIDIA Agentic AI Professional certification, and I did not want the coursework to end in a notebook. slice is that stack (LangGraph, RAG, evaluation, guardrails, deployment) doing a real job on real traffic.
 
-PS I was craving a slice of cake when I thought about this, hence the logo, the favicon, and the thing the knife cuts on the front page. Click it at the top of this file and it takes you to [sliceapp.dev](https://sliceapp.dev/).
+PS I was craving a slice of cake when I thought about this, hence the logo lol.  [sliceapp.dev](https://sliceapp.dev/).
 
 ## What slice does
 
