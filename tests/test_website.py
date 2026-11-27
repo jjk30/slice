@@ -151,8 +151,8 @@ def test_brand_logo_links_to_the_root(how_to):
 
 
 def test_every_get_started_link_goes_to_the_install_section(how_to):
-    """On index, Get started means the how-to page: the nav button and the hero button
-    both go to /how-to in a new tab. The how-to page has no Get started button at all,
+    """On index, Get started means the how-to page: the nav button, the hero button, and the
+    button under the news stories all go to /how-to in a new tab. The how-to page has no Get started button at all,
     the install section is the top of the page. The dashboard is reached from the
     how-to page's own Open the dashboard button at the bottom."""
     index = INDEX.read_text(encoding="utf-8")
@@ -160,7 +160,7 @@ def test_every_get_started_link_goes_to_the_install_section(how_to):
     pattern = r'<a([^>]*)href="([^"]*)"([^>]*)>\s*(?:<svg[^>]*>.*?</svg>)?\s*Get started\s*</a>'
     index_links = re.findall(pattern, index, re.S)
     how_to_links = re.findall(pattern, how_to, re.S)
-    assert len(index_links) == 2, index_links
+    assert len(index_links) == 3, index_links
     assert {href for _, href, _ in index_links} == {"/how-to"}
     for before, _, after in index_links:
         attrs = before + after
