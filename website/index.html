@@ -264,7 +264,7 @@
   .hero .os:hover{color:var(--green-deep);text-decoration:underline;text-underline-offset:3px}
   @media(max-width:760px){.hero .honest{justify-content:center}}
 
-  /* vector cake with a real knife cut */
+  /* vector cake: knife cut, then the plate and cake spin to the next flavour */
   .stage{position:relative;display:flex;align-items:center;justify-content:flex-end;min-height:min(60vh,540px);perspective:1000px}
   @media(max-width:760px){.stage{order:-1;min-height:0;padding-top:8px;justify-content:center}}
   .tilt{position:relative;transform-style:preserve-3d;transition:transform .25s cubic-bezier(.2,.7,.2,1);will-change:transform;cursor:pointer;width:min(100%,460px);display:flex;flex-direction:column;align-items:center}
@@ -275,13 +275,21 @@
   .ck-t{stroke:#33212B;stroke-width:3.5;stroke-linejoin:round;stroke-linecap:round}
   .ck-h{fill:none;stroke-width:6;stroke-linecap:round;stroke-linejoin:round}
   .ck-w12{stroke-width:12}.ck-w5{stroke-width:5.5}.ck-pl{stroke-width:2}
-  .ck-sh{filter:blur(9px)}.ck-sh2{filter:blur(6px)}
-  .ck-ft{font-family:var(--body);font-weight:800;font-size:13.5px;text-anchor:middle;fill:#fff}
-  .ck-kn{transform:translateY(-150px);transition:transform .75s cubic-bezier(.3,.7,.2,1)}
+  .ck-rim{stroke-width:5;stroke-linecap:round;stroke-dasharray:.1 31.76;opacity:.4}
+  .ck-ft{font-family:var(--body);font-weight:800;font-size:13px;text-anchor:middle;fill:#fff;display:none}
+  .ck-f0 .ck-t0,.ck-f1 .ck-t1,.ck-f2 .ck-t2,.ck-f3 .ck-t3{display:inline}
+  .ck-top{fill:var(--ck-top)}.ck-sp{fill:var(--ck-sp)}.ck-sp2{fill:var(--ck-sp2)}.ck-fl{fill:var(--ck-fl)}.ck-bs{fill:var(--ck-bs)}.ck-po{fill:var(--ck-po)}.ck-sd{fill:var(--ck-sd)}.ck-ss{fill:var(--ck-ss);opacity:var(--ck-sso)}.ck-shi{stroke:var(--ck-shi)}.ck-thi{stroke:var(--ck-thi)}
+  .ck-f0{--ck-top:#FFFFFF;--ck-thi:#EFE6F2;--ck-sp:#F8DDA8;--ck-sp2:#F8DDA8;--ck-fl:#F58CCB;--ck-bs:#F8DDA8;--ck-po:#EBC27E;--ck-sd:#F27CC4;--ck-ss:#E062AF;--ck-sso:.55;--ck-shi:#FBB9E2}
+  .ck-f1{--ck-top:#D83A52;--ck-thi:#EE6C80;--ck-sp:#FBE8B4;--ck-sp2:#FBE8B4;--ck-fl:#FBE8B4;--ck-bs:#C98B4E;--ck-po:#F1D58F;--ck-sd:#F6DC9A;--ck-ss:#C98B4E;--ck-sso:1;--ck-shi:#FFF3CF}
+  .ck-f2{--ck-top:#4B2A1D;--ck-thi:#6A4130;--ck-sp:#8B5637;--ck-sp2:#8B5637;--ck-fl:#F2DFC2;--ck-bs:#8B5637;--ck-po:#6F4229;--ck-sd:#6E402B;--ck-ss:#4B2A1D;--ck-sso:.6;--ck-shi:#93603F}
+  .ck-f3{--ck-top:#5B3626;--ck-thi:#7A4E3A;--ck-sp:#BFEADB;--ck-sp2:#F7B3CF;--ck-fl:#FFF4DA;--ck-bs:#4E3227;--ck-po:#5B3626;--ck-sd:#A9E2CF;--ck-ss:#4E3227;--ck-sso:1;--ck-shi:#DDF6EC}
+  .ck-kn{opacity:1;transform:translateY(-150px);transition:transform .75s cubic-bezier(.3,.7,.2,1)}
   .ck-cake.is-up .ck-kn{transform:translateY(-172px);transition:transform .22s ease-out}
   .ck-cake.is-down .ck-kn{transform:translateY(134px);transition:transform .26s cubic-bezier(.55,0,.85,.35)}
+  .ck-cake.is-khide .ck-kn{opacity:0;transform:translateY(-205px);transition:transform .4s ease-in,opacity .28s ease-in}
+  .ck-cake.is-kshow .ck-kn{transition:transform .6s cubic-bezier(.3,.7,.2,1),opacity .35s ease-out}
   .ck-bob{animation:ckbob 3.4s ease-in-out infinite}
-  .ck-cake.is-up .ck-bob,.ck-cake.is-down .ck-bob{animation:none}
+  .ck-cake.is-up .ck-bob,.ck-cake.is-down .ck-bob,.ck-cake.is-khide .ck-bob{animation:none}
   @keyframes ckbob{50%{transform:translateY(-7px)}}
   .ck-pc{transition:transform .5s cubic-bezier(.4,0,.2,1)}
   .ck-cake.is-out .ck-pc{transform:translate(54px,-10px);transition:transform .65s cubic-bezier(.3,1.35,.5,1)}
@@ -298,6 +306,14 @@
   .ck-cake.is-crumbs .ck-c3{transform:translate(38px,30px)}
   .ck-cake.is-crumbs .ck-c4{transform:translate(-6px,54px)}
   .ck-cake.is-crumbs .ck-c5{transform:translate(60px,44px)}
+  /* the spin: plate dots and cake turn one full circle together */
+  .ck-cake.is-spin .ck-lf{transform-origin:245px 372px;animation:ckspinl 1.4s linear both}
+  .ck-cake.is-spin .ck-pc{transform-origin:245px 372px;animation:ckspinp 1.4s linear both}
+  .ck-cake.is-spin .ck-rim{animation:ckrim 1.4s linear both}
+  .ck-cake.is-spin .ck-flag,.ck-cake.is-spin .ck-st,.ck-cake.is-spin .ck-sv,.ck-cake.is-spin .ck-cr{transition:none}
+  @keyframes ckspinl{0.00%{transform:scale(1.000,1.000)}2.08%{transform:scale(1.000,1.000)}4.17%{transform:scale(0.999,1.000)}6.25%{transform:scale(0.998,1.000)}8.33%{transform:scale(0.992,1.001)}10.42%{transform:scale(0.982,1.002)}12.50%{transform:scale(0.964,1.003)}14.58%{transform:scale(0.935,1.006)}16.67%{transform:scale(0.894,1.009)}18.75%{transform:scale(0.837,1.014)}20.83%{transform:scale(0.762,1.019)}22.92%{transform:scale(0.668,1.025)}25.00%{transform:scale(0.556,1.031)}27.08%{transform:scale(0.424,1.037)}29.17%{transform:scale(0.275,1.042)}31.25%{transform:scale(0.000,1.044)}33.33%{transform:scale(0.000,1.045)}35.42%{transform:scale(-0.233,1.043)}37.50%{transform:scale(-0.405,1.038)}39.58%{transform:scale(-0.567,1.031)}41.67%{transform:scale(-0.712,1.022)}43.75%{transform:scale(-0.833,1.014)}45.83%{transform:scale(-0.924,1.007)}47.92%{transform:scale(-0.981,1.002)}50.00%{transform:scale(-1.000,1.000)}52.08%{transform:scale(-0.981,1.002)}54.17%{transform:scale(-0.924,1.007)}56.25%{transform:scale(-0.833,1.014)}58.33%{transform:scale(-0.712,1.022)}60.42%{transform:scale(-0.567,1.031)}62.50%{transform:scale(-0.405,1.038)}64.58%{transform:scale(-0.233,1.043)}66.67%{transform:scale(0.000,1.045)}68.75%{transform:scale(0.000,1.044)}70.83%{transform:scale(0.275,1.042)}72.92%{transform:scale(0.424,1.037)}75.00%{transform:scale(0.556,1.031)}77.08%{transform:scale(0.668,1.025)}79.17%{transform:scale(0.762,1.019)}81.25%{transform:scale(0.837,1.014)}83.33%{transform:scale(0.894,1.009)}85.42%{transform:scale(0.935,1.006)}87.50%{transform:scale(0.964,1.003)}89.58%{transform:scale(0.982,1.002)}91.67%{transform:scale(0.992,1.001)}93.75%{transform:scale(0.998,1.000)}95.83%{transform:scale(0.999,1.000)}97.92%{transform:scale(1.000,1.000)}100.00%{transform:scale(1.000,1.000)}}
+  @keyframes ckspinp{0.00%{transform:scale(1.000,1.000) translate(54px,-10px)}2.08%{transform:scale(1.000,1.000) translate(54px,-10px)}4.17%{transform:scale(0.999,1.000) translate(54px,-10px)}6.25%{transform:scale(0.998,1.000) translate(54px,-10px)}8.33%{transform:scale(0.992,1.001) translate(54px,-10px)}10.42%{transform:scale(0.982,1.002) translate(54px,-10px)}12.50%{transform:scale(0.964,1.003) translate(54px,-10px)}14.58%{transform:scale(0.935,1.006) translate(54px,-10px)}16.67%{transform:scale(0.894,1.009) translate(54px,-10px)}18.75%{transform:scale(0.837,1.014) translate(54px,-10px)}20.83%{transform:scale(0.762,1.019) translate(54px,-10px)}22.92%{transform:scale(0.668,1.025) translate(54px,-10px)}25.00%{transform:scale(0.556,1.031) translate(54px,-10px)}27.08%{transform:scale(0.424,1.037) translate(54px,-10px)}29.17%{transform:scale(0.275,1.042) translate(54px,-10px)}31.25%{transform:scale(0.000,1.044) translate(54px,-10px)}33.33%{transform:scale(0.000,1.045) translate(0px,0px)}35.42%{transform:scale(-0.233,1.043) translate(0px,0px)}37.50%{transform:scale(-0.405,1.038) translate(0px,0px)}39.58%{transform:scale(-0.567,1.031) translate(0px,0px)}41.67%{transform:scale(-0.712,1.022) translate(0px,0px)}43.75%{transform:scale(-0.833,1.014) translate(0px,0px)}45.83%{transform:scale(-0.924,1.007) translate(0px,0px)}47.92%{transform:scale(-0.981,1.002) translate(0px,0px)}50.00%{transform:scale(-1.000,1.000) translate(0px,0px)}52.08%{transform:scale(-0.981,1.002) translate(0px,0px)}54.17%{transform:scale(-0.924,1.007) translate(0px,0px)}56.25%{transform:scale(-0.833,1.014) translate(0px,0px)}58.33%{transform:scale(-0.712,1.022) translate(0px,0px)}60.42%{transform:scale(-0.567,1.031) translate(0px,0px)}62.50%{transform:scale(-0.405,1.038) translate(0px,0px)}64.58%{transform:scale(-0.233,1.043) translate(0px,0px)}66.67%{transform:scale(0.000,1.045) translate(0px,0px)}68.75%{transform:scale(0.000,1.044) translate(0px,0px)}70.83%{transform:scale(0.275,1.042) translate(0px,0px)}72.92%{transform:scale(0.424,1.037) translate(0px,0px)}75.00%{transform:scale(0.556,1.031) translate(0px,0px)}77.08%{transform:scale(0.668,1.025) translate(0px,0px)}79.17%{transform:scale(0.762,1.019) translate(0px,0px)}81.25%{transform:scale(0.837,1.014) translate(0px,0px)}83.33%{transform:scale(0.894,1.009) translate(0px,0px)}85.42%{transform:scale(0.935,1.006) translate(0px,0px)}87.50%{transform:scale(0.964,1.003) translate(0px,0px)}89.58%{transform:scale(0.982,1.002) translate(0px,0px)}91.67%{transform:scale(0.992,1.001) translate(0px,0px)}93.75%{transform:scale(0.998,1.000) translate(0px,0px)}95.83%{transform:scale(0.999,1.000) translate(0px,0px)}97.92%{transform:scale(1.000,1.000) translate(0px,0px)}100.00%{transform:scale(1.000,1.000) translate(0px,0px)}}
+  @keyframes ckrim{0.00%{stroke-dashoffset:-0.0}4.17%{stroke-dashoffset:-4.5}8.33%{stroke-dashoffset:-17.6}12.50%{stroke-dashoffset:-38.3}16.67%{stroke-dashoffset:-66.1}20.83%{stroke-dashoffset:-100.0}25.00%{stroke-dashoffset:-139.4}29.17%{stroke-dashoffset:-183.4}33.33%{stroke-dashoffset:-231.3}37.50%{stroke-dashoffset:-282.2}41.67%{stroke-dashoffset:-335.5}45.83%{stroke-dashoffset:-390.4}50.00%{stroke-dashoffset:-446.0}54.17%{stroke-dashoffset:-501.6}58.33%{stroke-dashoffset:-556.5}62.50%{stroke-dashoffset:-609.8}66.67%{stroke-dashoffset:-660.7}70.83%{stroke-dashoffset:-708.6}75.00%{stroke-dashoffset:-752.6}79.17%{stroke-dashoffset:-792.0}83.33%{stroke-dashoffset:-825.9}87.50%{stroke-dashoffset:-853.7}91.67%{stroke-dashoffset:-874.4}95.83%{stroke-dashoffset:-887.5}100.00%{stroke-dashoffset:-892.0}}
   .hint{font-family:var(--body);font-weight:700;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);pointer-events:none;transition:opacity .5s ease;margin-top:2px}
   .hint.gone{opacity:0}
   @media(prefers-reduced-motion:reduce){.hero .copy>*{opacity:1}.tilt{transition:none}}
@@ -337,43 +353,44 @@
     <div class="stage" id="stage">
       <div class="tilt" id="tilt">
         <div class="cakebox" id="cakebox">
-          <svg class="ck-cake" viewBox="0 -130 500 580" id="cake" role="img" aria-label="a slice of cake being cut">
-          <ellipse class="ck-sh" cx="245" cy="372" rx="218" ry="58" fill="#33212B" opacity=".13"></ellipse>
+          <svg class="ck-cake ck-f0" id="cake" viewBox="0 -130 500 580" role="img" aria-label="a slice of cake being cut">
+          <ellipse cx="245" cy="376" rx="236" ry="66" fill="#33212B" opacity=".035"></ellipse><ellipse cx="245" cy="374" rx="226" ry="61" fill="#33212B" opacity=".045"></ellipse><ellipse cx="245" cy="372" rx="214" ry="56" fill="#33212B" opacity=".06"></ellipse>
           <ellipse class="ck-pl" cx="245" cy="352" rx="232" ry="70" fill="#FFFFFF" stroke="#E4DBC9"></ellipse>
           <ellipse class="ck-pl" cx="245" cy="350" rx="176" ry="50" fill="none" stroke="#EFE7D7"></ellipse>
+          <ellipse class="ck-rim" cx="245" cy="351" rx="204" ry="60" fill="none" stroke="#0F6E56"></ellipse>
           <g class="ck-pc">
-          <ellipse class="ck-sh2" cx="338" cy="330" rx="62" ry="13" fill="#33212B" opacity=".18"></ellipse>
-          <polygon points="254,136.4 295,202 295,215 254,149.4" fill="#FFFFFF"></polygon>
-          <polygon points="254,149.4 295,215 295,254 254,188.4" fill="#F8DDA8"></polygon>
-          <polygon points="254,188.4 295,254 295,268 254,202.4" fill="#F58CCB"></polygon>
-          <polygon points="254,202.4 295,268 295,306 254,240.4" fill="#F8DDA8"></polygon>
-          <polygon points="254,240.4 295,306 295,320 254,254.4" fill="#F58CCB"></polygon>
-          <polygon points="254,254.4 295,320 295,342 254,276.4" fill="#F8DDA8"></polygon>
-          <ellipse cx="266.3" cy="186.1" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
-          <ellipse cx="282.7" cy="222.3" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
-          <ellipse cx="274.5" cy="253.2" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
-          <ellipse cx="264.2" cy="280.8" rx="2.2" ry="1.5" fill="#EBC27E"></ellipse>
-          <polygon points="295,202 392,168 392,181 295,215" fill="#FFFFFF"></polygon>
-          <polygon points="295,215 392,181 392,220 295,254" fill="#F8DDA8"></polygon>
-          <polygon points="295,254 392,220 392,234 295,268" fill="#F58CCB"></polygon>
-          <polygon points="295,268 392,234 392,272 295,306" fill="#F8DDA8"></polygon>
-          <polygon points="295,306 392,272 392,286 295,320" fill="#F58CCB"></polygon>
-          <polygon points="295,320 392,286 392,308 295,342" fill="#F8DDA8"></polygon>
-          <ellipse cx="314.4" cy="223.2" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
-          <ellipse cx="348.4" cy="219.3" rx="2.6" ry="1.8" fill="#EBC27E"></ellipse>
-          <ellipse cx="374.5" cy="204.1" rx="2.2" ry="1.5" fill="#EBC27E"></ellipse>
-          <ellipse cx="328.9" cy="276.1" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
-          <ellipse cx="362.9" cy="260.2" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
-          <ellipse cx="343.5" cy="315" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
+          <ellipse cx="338" cy="330" rx="68" ry="15" fill="#33212B" opacity=".06"></ellipse><ellipse cx="338" cy="330" rx="58" ry="11" fill="#33212B" opacity=".09"></ellipse>
+          <polygon class="ck-top" points="254,136.4 295,202 295,215 254,149.4" fill="#FFFFFF"></polygon>
+          <polygon class="ck-sp" points="254,149.4 295,215 295,254 254,188.4" fill="#F8DDA8"></polygon>
+          <polygon class="ck-fl" points="254,188.4 295,254 295,268 254,202.4" fill="#F58CCB"></polygon>
+          <polygon class="ck-sp2" points="254,202.4 295,268 295,306 254,240.4" fill="#F8DDA8"></polygon>
+          <polygon class="ck-fl" points="254,240.4 295,306 295,320 254,254.4" fill="#F58CCB"></polygon>
+          <polygon class="ck-bs" points="254,254.4 295,320 295,342 254,276.4" fill="#F8DDA8"></polygon>
+          <ellipse class="ck-po" cx="266.3" cy="186.1" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="282.7" cy="222.3" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="274.5" cy="253.2" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="264.2" cy="280.8" rx="2.2" ry="1.5" fill="#EBC27E"></ellipse>
+          <polygon class="ck-top" points="295,202 392,168 392,181 295,215" fill="#FFFFFF"></polygon>
+          <polygon class="ck-sp" points="295,215 392,181 392,220 295,254" fill="#F8DDA8"></polygon>
+          <polygon class="ck-fl" points="295,254 392,220 392,234 295,268" fill="#F58CCB"></polygon>
+          <polygon class="ck-sp2" points="295,268 392,234 392,272 295,306" fill="#F8DDA8"></polygon>
+          <polygon class="ck-fl" points="295,306 392,272 392,286 295,320" fill="#F58CCB"></polygon>
+          <polygon class="ck-bs" points="295,320 392,286 392,308 295,342" fill="#F8DDA8"></polygon>
+          <ellipse class="ck-po" cx="314.4" cy="223.2" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="348.4" cy="219.3" rx="2.6" ry="1.8" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="374.5" cy="204.1" rx="2.2" ry="1.5" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="328.9" cy="276.1" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="362.9" cy="260.2" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="343.5" cy="315" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
           <polygon points="295,202 392,168 392,308 295,342" fill="#33212B" opacity="0.07"></polygon>
-          <path d="M295,202 L392,168 Q320.3,138.4 254,136.4 Z" fill="#FFFFFF"></path>
+          <path class="ck-top" d="M295,202 L392,168 Q320.3,138.4 254,136.4 Z" fill="#FFFFFF"></path>
           <path class="ck-o" d="M295,202 L392,168 Q320.3,138.4 254,136.4" fill="none"></path>
           <path class="ck-o" d="M392,168 L392,308 L295,342 L254,276.4 L254,136.4" fill="none"></path>
           <path class="ck-o ck-st" d="M254,136.4 L295,202" fill="none"></path>
           <path class="ck-o ck-sv" d="M295,202 L295,342" fill="none"></path>
           <g class="ck-flag"><path class="ck-t" d="M345,174 L345,104" fill="none"></path>
-          <rect class="ck-t" x="345" y="88" width="92" height="28" rx="5" fill="#0F6E56"></rect>
-          <text class="ck-ft" x="391" y="107">45% saved</text></g>
+          <rect class="ck-t" x="345" y="88" width="102" height="28" rx="5" fill="#0F6E56"></rect>
+          <text class="ck-ft ck-t0" x="396" y="107">45% saved</text><text class="ck-ft ck-t1" x="396" y="107">54% routed</text><text class="ck-ft ck-t2" x="396" y="107">$0 repeats</text><text class="ck-ft ck-t3" x="396" y="107">92% accurate</text></g>
           </g>
           <g class="ck-kn"><g class="ck-bob">
           <path class="ck-o" d="M318,166 L318,224 L348,272 Q360,290 360,270 L360,236 Q360,232 357,228 Z" fill="#B4674A"></path>
@@ -383,28 +400,28 @@
           <path class="ck-h" d="M268,96 L308,160" stroke="#FAFBFC"></path>
           <path class="ck-o" d="M311,148 L324,169 L324,236 L311,227 Z" fill="#C9CED4"></path>
           </g></g>
-          <g>
-          <ellipse class="ck-sh2" cx="196" cy="356" rx="122" ry="20" fill="#33212B" opacity=".2"></ellipse>
-          <path class="ck-o" d="M70,190 L70,302 Q70,331 97,338 L210,372 L210,232 Z" fill="#F27CC4"></path>
-          <path d="M76,312 Q78,327 99,332 L204,362 L204,340 L99,310 Q80,305 76,290 Z" fill="#E062AF" opacity=".55"></path>
-          <path class="ck-h" d="M86,262 L86,296" stroke="#FBB9E2"></path>
-          <polygon points="210,232 296.2,201.6 296.2,214.6 210,245" fill="#FFFFFF"></polygon>
-          <polygon points="210,245 296.2,214.6 296.2,253.6 210,284" fill="#F8DDA8"></polygon>
-          <polygon points="210,284 296.2,253.6 296.2,267.6 210,298" fill="#F58CCB"></polygon>
-          <polygon points="210,298 296.2,267.6 296.2,305.6 210,336" fill="#F8DDA8"></polygon>
-          <polygon points="210,336 296.2,305.6 296.2,319.6 210,350" fill="#F58CCB"></polygon>
-          <polygon points="210,350 296.2,319.6 296.2,341.6 210,372" fill="#F8DDA8"></polygon>
-          <ellipse cx="227.2" cy="255.9" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
-          <ellipse cx="261.7" cy="251.8" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
-          <ellipse cx="283.3" cy="232.2" rx="2.2" ry="1.5" fill="#EBC27E"></ellipse>
-          <ellipse cx="244.5" cy="303.8" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
-          <ellipse cx="274.6" cy="299.2" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
-          <ellipse cx="235.9" cy="352.9" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
+          <g class="ck-lf">
+          <ellipse cx="196" cy="356" rx="132" ry="23" fill="#33212B" opacity=".06"></ellipse><ellipse cx="196" cy="356" rx="120" ry="18" fill="#33212B" opacity=".1"></ellipse>
+          <path class="ck-o ck-sd" d="M70,190 L70,302 Q70,331 97,338 L210,372 L210,232 Z" fill="#F27CC4"></path>
+          <path class="ck-ss" d="M76,312 Q78,327 99,332 L204,362 L204,340 L99,310 Q80,305 76,290 Z" fill="#E062AF" opacity=".55"></path>
+          <path class="ck-h ck-shi" d="M86,262 L86,296" stroke="#FBB9E2"></path>
+          <polygon class="ck-top" points="210,232 296.2,201.6 296.2,214.6 210,245" fill="#FFFFFF"></polygon>
+          <polygon class="ck-sp" points="210,245 296.2,214.6 296.2,253.6 210,284" fill="#F8DDA8"></polygon>
+          <polygon class="ck-fl" points="210,284 296.2,253.6 296.2,267.6 210,298" fill="#F58CCB"></polygon>
+          <polygon class="ck-sp2" points="210,298 296.2,267.6 296.2,305.6 210,336" fill="#F8DDA8"></polygon>
+          <polygon class="ck-fl" points="210,336 296.2,305.6 296.2,319.6 210,350" fill="#F58CCB"></polygon>
+          <polygon class="ck-bs" points="210,350 296.2,319.6 296.2,341.6 210,372" fill="#F8DDA8"></polygon>
+          <ellipse class="ck-po" cx="227.2" cy="255.9" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="261.7" cy="251.8" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="283.3" cy="232.2" rx="2.2" ry="1.5" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="244.5" cy="303.8" rx="3" ry="2.1" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="274.6" cy="299.2" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
+          <ellipse class="ck-po" cx="235.9" cy="352.9" rx="2.4" ry="1.7" fill="#EBC27E"></ellipse>
           <polygon points="210,232 296.2,201.6 296.2,341.6 210,372" fill="#33212B" opacity="0.07"></polygon>
           <path class="ck-o" d="M295,202 L210,232 L210,372 L295,342" fill="none"></path>
-          <path class="ck-o" d="M70,190 L210,232 L210,258 Q210,270 199,268 Q190,266 190,254 L190,250 Q189,240 180,240 Q171,240 170,250 L170,278 Q170,290 159,290 Q148,290 148,278 L148,236 Q147,226 138,226 Q129,226 128,236 L128,250 Q128,260 118,260 Q108,260 108,250 L108,222 Q107,213 99,213 Q91,213 90,221 L90,232 Q90,241 80,241 Q70,241 70,232 Z" fill="#FFFFFF"></path>
-          <path d="M70,190 L210,232 L296.2,201.6 L255.2,136.4 Q156.3,133.5 70,190 Z" fill="#FFFFFF"></path>
-          <path class="ck-h" d="M92,192 L206,221 L250,206" stroke="#EFE6F2"></path>
+          <path class="ck-o ck-top" d="M70,190 L210,232 L210,258 Q210,270 199,268 Q190,266 190,254 L190,250 Q189,240 180,240 Q171,240 170,250 L170,278 Q170,290 159,290 Q148,290 148,278 L148,236 Q147,226 138,226 Q129,226 128,236 L128,250 Q128,260 118,260 Q108,260 108,250 L108,222 Q107,213 99,213 Q91,213 90,221 L90,232 Q90,241 80,241 Q70,241 70,232 Z" fill="#FFFFFF"></path>
+          <path class="ck-top" d="M70,190 L210,232 L296.2,201.6 L255.2,136.4 Q156.3,133.5 70,190 Z" fill="#FFFFFF"></path>
+          <path class="ck-h ck-thi" d="M92,192 L206,221 L250,206" stroke="#EFE6F2"></path>
           <path class="ck-o" d="M295,202 L210,232 L70,190 Q156.3,133.5 254,136.4" fill="none"></path>
           <path class="ck-o ck-st" d="M254,136.4 L295,202" fill="none"></path>
           <path class="ck-o ck-sv" d="M295,202 L295,342" fill="none"></path>
@@ -415,11 +432,11 @@
           <path d="M163,150 Q170,170 196,169 Q214,167 222,150 Q212,160 192,160 Q174,160 163,150 Z" fill="#B81E38" opacity=".7"></path>
           <ellipse cx="175" cy="123" rx="9" ry="6" transform="rotate(-35 175 123)" fill="#FF9AA8"></ellipse>
           </g>
-          <rect class="ck-cr ck-c1" x="288" y="330" width="10" height="8" rx="3" fill="#F8DDA8"></rect>
-          <rect class="ck-cr ck-c2" x="292" y="326" width="8" height="7" rx="3" fill="#F58CCB"></rect>
-          <rect class="ck-cr ck-c3" x="296" y="332" width="9" height="7" rx="3" fill="#F8DDA8"></rect>
-          <rect class="ck-cr ck-c4" x="290" y="334" width="7" height="6" rx="2.5" fill="#F8DDA8"></rect>
-          <rect class="ck-cr ck-c5" x="294" y="328" width="6" height="5" rx="2" fill="#F58CCB"></rect>
+          <rect class="ck-cr ck-c1 ck-sp" x="288" y="330" width="10" height="8" rx="3" fill="#F8DDA8"></rect>
+          <rect class="ck-cr ck-c2 ck-fl" x="292" y="326" width="8" height="7" rx="3" fill="#F58CCB"></rect>
+          <rect class="ck-cr ck-c3 ck-sp" x="296" y="332" width="9" height="7" rx="3" fill="#F8DDA8"></rect>
+          <rect class="ck-cr ck-c4 ck-sp" x="290" y="334" width="7" height="6" rx="2.5" fill="#F8DDA8"></rect>
+          <rect class="ck-cr ck-c5 ck-fl" x="294" y="328" width="6" height="5" rx="2" fill="#F58CCB"></rect>
           </svg>
         </div>
         <div class="hint" id="hint">click to cut</div>
@@ -746,21 +763,34 @@ Logged in as <span class="ph">(your-github-username)</span></pre>
       tx=((e.clientX-r.left)/r.width-0.5)*14; ty=((e.clientY-r.top)/r.height-0.5)*10; kick();});
     stage.addEventListener('mouseleave',function(){tx=0;ty=0;kick();});
   }
-  var busy=false;
-  function on(c){ cake.classList.add(c); }
-  function off(c){ cake.classList.remove(c); }
+  /* four flavours: 0 strawberry, 1 cheesecake, 2 chocolate, 3 ice cream.
+     the flag text for each flavour lives in the SVG and is picked by the ck-f class. */
+  var S={f:0,k:'',seam:false,cr:false,out:false,spin:false,fresh:false}, busy=false;
+  function render(){
+    cake.setAttribute('class','ck-cake ck-f'+S.f+(S.k?' '+S.k:'')+(S.seam?' is-seam':'')+(S.cr?' is-crumbs':'')+
+      (S.out?' is-out':'')+(S.spin?' is-spin is-khide':'')+(S.fresh?' is-kshow':''));
+  }
+  function set(o){ for(var key in o){ S[key]=o[key]; } render(); }
+  function next(){ set({f:(S.f+1)%4,out:false,seam:false,cr:false}); }
   function cut(){
     if(busy) return; busy=true;
     if(hint) hint.classList.add('gone');
-    on('is-up');
-    setTimeout(function(){ off('is-up'); on('is-down'); on('is-seam'); }, 220);
-    setTimeout(function(){ on('is-crumbs'); }, 470);
-    setTimeout(function(){ on('is-out'); }, 620);
-    setTimeout(function(){ off('is-down'); }, 1250);
-    setTimeout(function(){ off('is-out'); }, 4300);
-    setTimeout(function(){ off('is-seam'); off('is-crumbs'); }, 4850);
-    setTimeout(function(){ busy=false; }, 5100);
+    set({k:'is-up',fresh:false});
+    setTimeout(function(){ set({k:'is-down',seam:true}); }, 220);
+    setTimeout(function(){ set({cr:true}); }, 470);
+    setTimeout(function(){ set({out:true}); }, 620);
+    setTimeout(function(){ set({k:''}); }, 1250);
+    if(reduce){
+      setTimeout(next, 2600);
+      setTimeout(function(){ busy=false; }, 2700);
+    } else {
+      setTimeout(function(){ set({spin:true,cr:false}); }, 1500);
+      setTimeout(next, 1957);
+      setTimeout(function(){ set({spin:false,fresh:true}); }, 2940);
+      setTimeout(function(){ busy=false; }, 3000);
+    }
   }
+  render();
   tilt.addEventListener('click', cut);
   if(!reduce){ setTimeout(cut, 900); setInterval(function(){ if(!busy) cut(); }, 7500); }
 })();
