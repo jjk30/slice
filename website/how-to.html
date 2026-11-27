@@ -7,13 +7,13 @@
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=Inter:wght@400;450;500&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   :root{
     --ink:#1C1815; --paper:#FBF8F1; --paper2:#FFFDF8; --edge:#EFE7D7;
     --green:#0F6E56; --green-deep:#0B5A46; --red:#C24A44;
     --muted:#736A5D; --faint:#A79C8B; --dot:#CFC5B2; --rule:#E4DBC9;
-    --display:'Bricolage Grotesque',sans-serif; --body:'Inter',sans-serif; --mono:'JetBrains Mono',monospace;
+    --display:'Plus Jakarta Sans',system-ui,sans-serif; --body:'Plus Jakarta Sans',system-ui,sans-serif; --mono:'JetBrains Mono',monospace;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html{scroll-behavior:smooth}
@@ -31,13 +31,13 @@
   .nav{display:flex;align-items:center;justify-content:space-between;height:70px}
   .brand{display:flex;align-items:center;gap:9px}
   .brand .mark{width:28px;height:28px;object-fit:contain;display:block}
-  .brand b{font-family:var(--display);font-weight:700;font-size:20px}
+  .brand b{font-family:var(--display);font-weight:800;font-size:20px;letter-spacing:-.03em}
 
   /* page head */
   .lede-h{padding:34px 0 10px}
-  .lede-h h1{font-family:var(--display);font-weight:700;font-size:clamp(30px,5.4vw,46px);line-height:1.02;letter-spacing:-.03em;max-width:18ch}
+  .lede-h h1{font-family:var(--display);font-weight:800;font-size:clamp(30px,5.4vw,46px);line-height:1.02;letter-spacing:-.04em;max-width:18ch}
   .lede-h p{font-size:16.5px;color:var(--muted);max-width:36em;margin:16px 0 0;line-height:1.55}
-  .h-mark{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--green);margin-bottom:14px}
+  .h-mark{font-family:var(--body);font-weight:700;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--green);margin-bottom:14px}
 
   /* full-width three-column grid: sticky step rail pinned far left, content
      centered in the middle column, the empty right column balancing the rail so
@@ -49,15 +49,15 @@
   .steps ol{list-style:none;margin:0;padding:0}
   .steps li{border-top:1px solid var(--rule)}
   .steps li:last-child{border-bottom:1px solid var(--rule)}
-  .steps a{display:block;font-family:var(--mono);font-size:13.5px;color:var(--muted);padding:10px 14px 10px 0;border-left:2px solid transparent;transition:color .14s ease,background .14s ease,border-color .14s ease}
-  .steps a .n{color:var(--green);margin-right:10px}
+  .steps a{display:block;font-family:var(--body);font-size:13.5px;color:var(--muted);padding:10px 14px 10px 0;border-left:2px solid transparent;transition:color .14s ease,background .14s ease,border-color .14s ease}
+  .steps a .n{color:var(--green);margin-right:10px;display:inline-block;min-width:20px}
   .steps a:hover{color:var(--ink);background:#fff}
   .steps a.active{color:var(--ink);background:#fff;border-left-color:var(--green)}
 
   /* sections */
   .block{padding:48px 0;border-top:1px solid var(--rule);scroll-margin-top:16px}
-  .block h2{font-family:var(--display);font-weight:700;font-size:clamp(24px,4vw,32px);letter-spacing:-.025em;line-height:1.06;margin-bottom:8px;display:flex;align-items:baseline;gap:14px}
-  .block h2 .no{font-family:var(--mono);font-weight:700;font-size:.9em;color:var(--green);letter-spacing:.02em}
+  .block h2{font-family:var(--display);font-weight:800;font-size:clamp(24px,4vw,32px);letter-spacing:-.035em;line-height:1.06;margin-bottom:8px;display:flex;align-items:baseline;gap:14px}
+  .block h2 .no{font-family:var(--body);font-weight:700;font-size:.9em;color:var(--green);letter-spacing:.02em}
   .block .say{font-size:16px;color:var(--muted);line-height:1.6;max-width:38em;margin-bottom:22px}
   .block h3{font-family:var(--display);font-weight:600;font-size:19px;letter-spacing:-.012em;margin:26px 0 6px}
   .block p{font-size:16px;color:var(--muted);line-height:1.6;max-width:667px;margin:10px 0 0}
@@ -67,19 +67,19 @@
   .block .term{margin-top:14px}
   /* screenshots under the command blocks, one per row, each with a short label above it */
   .shot{margin:18px 0 0}
-  .shot .lab{font-family:var(--mono);font-size:13.5px;color:var(--muted);line-height:1.6;margin-bottom:6px}
+  .shot .lab{font-family:var(--body);font-size:13.5px;color:var(--muted);line-height:1.6;margin-bottom:6px}
   .shot img{display:block;max-width:100%;height:auto;border:1px solid var(--rule);border-radius:12px}
-  .shot figcaption{font-family:var(--mono);font-size:13.5px;color:var(--muted);margin-top:8px;line-height:1.6}
+  .shot figcaption{font-family:var(--body);font-size:13.5px;color:var(--muted);margin-top:8px;line-height:1.6}
   .block ol,.block ul{margin:12px 0 0 22px;font-size:16px;color:var(--muted);line-height:1.6;max-width:667px}
   .block li{margin:6px 0}
   .block ul.tight li{margin:3px 0}
   .tiles{border-top:1.5px dashed var(--rule);margin-top:14px}
   .tile{display:flex;gap:14px;padding:12px 0;border-bottom:1px solid var(--rule);font-size:14.5px;line-height:1.55}
-  .tile .k{font-family:var(--mono);font-weight:700;font-size:12.5px;color:var(--ink);min-width:170px;padding-top:2px;letter-spacing:.01em}
+  .tile .k{font-family:var(--body);font-weight:700;font-size:12.5px;color:var(--ink);min-width:170px;padding-top:2px;letter-spacing:.01em}
   .tile .v{color:var(--muted)}
-  .conn-note{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:18px;line-height:1.7}
+  .conn-note{font-family:var(--body);font-size:12.5px;color:var(--muted);margin-top:18px;line-height:1.7}
   .conn-note b{color:var(--ink);font-weight:500}
-  .fill{display:grid;gap:5px;margin-top:10px;padding:12px 14px;background:var(--paper2);border:1px solid var(--edge);border-radius:10px;font-family:var(--mono);font-size:14px;color:var(--muted);line-height:1.7}
+  .fill{display:grid;gap:5px;margin-top:10px;padding:12px 14px;background:var(--paper2);border:1px solid var(--edge);border-radius:10px;font-family:var(--body);font-size:14px;color:var(--muted);line-height:1.7}
   .fill b{color:var(--ink);font-weight:500}
   .fill[hidden]{display:none}
   .fill code{font-family:var(--mono);font-size:13.5px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
@@ -124,15 +124,15 @@
 
   /* final + footer */
   .final{padding:56px 0 30px;text-align:center;border-top:1px solid var(--rule)}
-  .final h2{font-family:var(--display);font-weight:700;font-size:clamp(26px,4.6vw,38px);letter-spacing:-.03em;line-height:1.02;margin-bottom:12px}
+  .final h2{font-family:var(--display);font-weight:800;font-size:clamp(26px,4.6vw,38px);letter-spacing:-.035em;line-height:1.02;margin-bottom:12px}
   .final p{font-size:16px;color:var(--muted);max-width:28em;margin:0 auto 24px;line-height:1.55}
   .final p code{font-family:var(--mono);font-size:12.5px;background:var(--edge);padding:1px 6px;border-radius:5px;color:var(--ink)}
   .act{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:26px 0 4px;justify-content:center}
-  .btn{font-family:var(--body);font-weight:500;font-size:15.5px;border:none;cursor:pointer;border-radius:11px;background:var(--green);color:#fff;padding:13px 26px;display:inline-flex;align-items:center;gap:9px;transition:transform .14s ease,background .14s ease}
+  .btn{font-family:var(--body);font-weight:600;font-size:15.5px;border:none;cursor:pointer;border-radius:11px;background:var(--green);color:#fff;padding:13px 26px;display:inline-flex;align-items:center;gap:9px;transition:transform .14s ease,background .14s ease}
   .btn:hover{transform:translateY(-1px);background:var(--green-deep)}
   .btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-  .note{text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:2px}
-  footer{border-top:1px solid var(--rule);padding:26px 0 54px;display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .note{text-align:center;font-family:var(--body);font-size:11.5px;color:var(--faint);margin-top:2px}
+  footer{border-top:1px solid var(--rule);padding:26px 0 54px;display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:10px;font-family:var(--body);font-size:12.5px;color:var(--muted)}
   footer a:hover{color:var(--ink)}
 
   /* narrow (under 1240px): single column, content back to its centered 720px
